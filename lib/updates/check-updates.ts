@@ -125,19 +125,18 @@ export async function checkForUpdates(currentVersion: string): Promise<CheckUpda
           'Erst nach grünen Checks und Review in den stabilen Studio-Branch übernehmen',
         ];
       } else {
-        updateMethod = 'git-pull';
+        updateMethod = 'manual';
         autoSyncUrl = `https://github.com/${vercelGitRepoOwner}/${vercelGitRepoSlug}`;
         steps = [
           '<strong class="text-yellow-300">Dieses Repository ist kein Fork.</strong> Für einfachere Updates sollte Novum langfristig einen sauberen Fork der offiziellen Basis pflegen.',
           '',
-          '<strong class="text-current">Aktualisierung per Terminal:</strong>',
-          'Terminal im Projektordner öffnen',
+          '<strong class="text-current">Aktualisierung nur über einen Upgrade-Branch:</strong>',
+          'Aktuellen Studio-Patchstand committen oder eindeutig sichern',
+          'Upgrade-Branch erstellen, zum Beispiel <code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">update/ycode-0.18.0</code>',
           `Upstream-Remote ergänzen, falls noch nicht vorhanden:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git remote add upstream https://github.com/${UPSTREAM_REPO}.git</code>`,
-          `Aktuelle Änderungen holen:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git fetch upstream</code>`,
-          `Update einspielen:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git merge upstream/main</code>`,
-          `Änderungen zu Novum GitHub pushen:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git push origin main</code>`,
-          'Vercel deployed die aktualisierte Version automatisch',
-          'Diese Seite nach dem Deployment neu laden, damit aktuelle Migrationen angewendet werden',
+          `Upstream holen und nur im Upgrade-Branch testen:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git fetch upstream && git merge upstream/main</code>`,
+          'Typecheck, Build, Fetch-Guard, Import-Skript-Checks, Browser-Smoke, Preview/Publish-Smoke und Migrationsstatus ausführen',
+          'Erst nach grünen Checks, Review und bewusster Freigabe in den stabilen Studio-Branch übernehmen',
         ];
       }
     } else {

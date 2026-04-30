@@ -44,6 +44,10 @@ function isSafeProjectLookupValue(value: string): boolean {
   return /^[a-z0-9][a-z0-9.-]{0,252}[a-z0-9]$/i.test(value);
 }
 
+function getCurrentSiteKey(): string {
+  return process.env.STUDIO_YCODE_SITE_KEY || 'default';
+}
+
 export async function requireNovumProjectRole(
   request: NextRequest,
   allowedRoles: NovumRole[]
@@ -358,6 +362,8 @@ async function getProjectBySlug(client: any, slug: string): Promise<NovumProject
     .from('novum_projects')
     .select('id, slug')
     .eq('slug', slug)
+    .eq('status', 'active')
+    .eq('ycode_site_key', getCurrentSiteKey())
     .maybeSingle();
 
   if (error || !data) return null;
@@ -371,6 +377,8 @@ async function getProjectByDomainOrSlug(client: any, value: string): Promise<Nov
     .from('novum_projects')
     .select('id, slug')
     .eq('slug', value)
+    .eq('status', 'active')
+    .eq('ycode_site_key', getCurrentSiteKey())
     .maybeSingle();
 
   if (bySlug.error) return null;
@@ -380,6 +388,8 @@ async function getProjectByDomainOrSlug(client: any, value: string): Promise<Nov
     .from('novum_projects')
     .select('id, slug')
     .eq('primary_domain', value)
+    .eq('status', 'active')
+    .eq('ycode_site_key', getCurrentSiteKey())
     .maybeSingle();
 
   if (byDomain.error || !byDomain.data) return null;
@@ -389,11 +399,19 @@ async function getProjectByDomainOrSlug(client: any, value: string): Promise<Nov
 async function getSingleProjectByMembership(client: any, actorUserId: string): Promise<NovumProject | null> {
   const { data, error } = await client
     .from('novum_project_memberships')
-    .select('project:novum_projects(id, slug)')
+    .select('project:novum_projects(id, slug, status, ycode_site_key)')
     .eq('user_id', actorUserId);
 
-  if (error || !Array.isArray(data) || data.length !== 1) return null;
-  const project = Array.isArray(data[0].project) ? data[0].project[0] : data[0].project;
+  if (error || !Array.isArray(data)) return null;
+  const matchingMemberships = data.filter((membership: any) => {
+    const project = Array.isArray(membership.project) ? membership.project[0] : membership.project;
+    return project?.status === 'active' && project?.ycode_site_key === getCurrentSiteKey();
+  });
+  if (matchingMemberships.length !== 1) return null;
+
+  const project = Array.isArray(matchingMemberships[0].project)
+    ? matchingMemberships[0].project[0]
+    : matchingMemberships[0].project;
   return project?.id && project?.slug ? project : null;
 }
 
