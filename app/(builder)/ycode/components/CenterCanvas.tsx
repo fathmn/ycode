@@ -2649,13 +2649,13 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
       </div>
 
-      {/* Preview panel - fixed overlay covering sidebars + canvas below the main header.
+      {/* Preview panel - scoped to the center canvas so sidebars stay usable.
           Always rendered so the iframe stays mounted (no reload on toggle). */}
       <div
         className="flex flex-col bg-neutral-50 dark:bg-neutral-950"
         style={{
-          position: 'fixed',
-          top: '3.5rem', // h-14 header height
+          position: 'absolute',
+          top: 0,
           left: 0,
           right: 0,
           bottom: 0,
