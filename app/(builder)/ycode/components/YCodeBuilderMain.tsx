@@ -1,5 +1,6 @@
 'use client';
 
+import { novumFetch } from '@/lib/api';
 /**
  * Ycode Builder Main Component
  *
@@ -231,7 +232,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
   useEffect(() => {
     const checkSupabaseConfig = async () => {
       try {
-        const response = await fetch('/ycode/api/setup/status');
+        const response = await novumFetch('/ycode/api/setup/status');
         const data = await response.json();
 
         if (!data.is_configured) {
@@ -1750,12 +1751,12 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
   // Show loading screen while checking Supabase config
   if (supabaseConfigured === null) {
-    return <BuilderLoading message="Checking configuration..." />;
+    return <BuilderLoading message="Konfiguration wird geprüft..." />;
   }
 
   // Show loading screen while checking authentication
   if (!authInitialized) {
-    return <BuilderLoading message="Checking authentication..." />;
+    return <BuilderLoading message="Anmeldung wird geprüft..." />;
   }
 
   // Show login form if not authenticated
@@ -1763,35 +1764,15 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-neutral-950 py-10">
 
-        <svg
-          className="size-5 fill-current absolute bottom-10"
-          viewBox="0 0 24 24"
-          version="1.1" xmlns="http://www.w3.org/2000/svg"
-        >
-          <g
-            id="Symbols" stroke="none"
-            strokeWidth="1" fill="none"
-            fillRule="evenodd"
-          >
-            <g id="Sidebar" transform="translate(-30.000000, -30.000000)">
-              <g id="Ycode">
-                <g transform="translate(30.000000, 30.000000)">
-                  <rect
-                    id="Rectangle" x="0"
-                    y="0" width="24"
-                    height="24"
-                  />
-                  <path
-                    id="CurrentFill" d="M11.4241533,0 L11.4241533,5.85877951 L6.024,8.978 L12.6155735,12.7868008 L10.951,13.749 L23.0465401,6.75101349 L23.0465401,12.6152717 L3.39516096,23.9856666 L3.3703726,24 L3.34318129,23.9827156 L0.96,22.4713365 L0.96,16.7616508 L3.36417551,18.1393242 L7.476,15.76 L0.96,11.9090099 L0.96,6.05375516 L11.4241533,0 Z"
-                    className="fill-current"
-                  />
-                </g>
-              </g>
-            </g>
-          </g>
-        </svg>
+        <div className="absolute bottom-10 text-[11px] font-medium tracking-[0.18em] text-white/45 uppercase">
+          studio.novum partners
+        </div>
 
         <div className="w-full max-w-sm animate-in fade-in slide-in-from-bottom-1 duration-700" style={{ animationFillMode: 'both' }}>
+          <div className="mb-8 flex flex-col items-center gap-1 text-center">
+            <Label className="text-white" size="sm">studio.novum partners</Label>
+            <p className="text-xs text-white/50">Kundenlogin für Website-Projekte</p>
+          </div>
 
           <form onSubmit={handleLogin} className="flex flex-col gap-6">
 
@@ -1803,7 +1784,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
             <Field>
               <Label htmlFor="email">
-                Email
+                E-Mail
               </Label>
               <Input
                 type="email"
@@ -1818,7 +1799,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
             <Field>
               <Label htmlFor="password">
-                Password
+                Passwort
               </Label>
               <Input
                 type="password"
@@ -1837,15 +1818,15 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
               size="sm"
               disabled={isLoggingIn}
             >
-              {isLoggingIn ? <Spinner /> : 'Sign In'}
+              {isLoggingIn ? <Spinner /> : 'Einloggen'}
             </Button>
           </form>
 
           <div className="mt-4 text-center">
             <p className="text-xs text-white/50">
-              First time here?{' '}
+              Setup noch nicht abgeschlossen?{' '}
               <Link href="/ycode/welcome" className="text-white/80">
-                Complete setup
+                Setup starten
               </Link>
             </p>
           </div>
@@ -1862,7 +1843,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
   // Wait for builder data to be preloaded (BLOCKING) - prevents race conditions
   if (!builderDataPreloaded) {
-    return <BuilderLoading message="Loading builder data..." />;
+    return <BuilderLoading message="Studio-Daten werden geladen..." />;
   }
 
   // Authenticated - show builder (only after migrations AND data preload complete)

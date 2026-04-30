@@ -2,6 +2,7 @@
  * Layer utilities for rendering and manipulation
  */
 
+import { novumFetch } from '@/lib/api';
 import { Layer, FieldVariable, CollectionVariable, CollectionItemWithValues, CollectionField, Component, ComponentVariable, Breakpoint, LayerVariables, DesignColorVariable, BoundColorStop } from '@/types';
 import { generateId } from '@/lib/utils';
 import { iconExists, IconProps } from '@/components/ui/icon';
@@ -2661,7 +2662,7 @@ export async function createComponentViaApi(
   layers: Layer[]
 ): Promise<Component | null> {
   try {
-    const response = await fetch('/ycode/api/components', {
+    const response = await novumFetch('/ycode/api/components', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

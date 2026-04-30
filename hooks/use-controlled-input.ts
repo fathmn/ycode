@@ -46,6 +46,7 @@ export function useControlledInput(
   useEffect(() => {
     const valueToSet = externalValue || '';
     const transformedValue = transform ? transform(valueToSet) : valueToSet;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync from external editor state intentionally
     setLocalValue(transformedValue);
   }, [externalValue, transform]);
 

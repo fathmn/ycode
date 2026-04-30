@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { setSettings } from '@/lib/repositories/settingsRepository';
 import { clearAllCache } from '@/lib/services/cacheService';
+import { recordNovumCustomCodeMutation } from '@/lib/novum-platform';
+
+const CUSTOM_CODE_SETTING_KEYS = new Set(['custom_code_head', 'custom_code_body']);
 
 /**
  * PUT /ycode/api/settings/batch
@@ -24,6 +27,20 @@ export async function PUT(request: NextRequest) {
     const count = await setSettings(settings);
 
     await clearAllCache();
+
+    for (const [key, value] of Object.entries(settings)) {
+      if (!CUSTOM_CODE_SETTING_KEYS.has(key)) continue;
+
+      await recordNovumCustomCodeMutation(request, {
+        scope: 'global',
+        targetId: key,
+        content: typeof value === 'string' ? value : JSON.stringify(value ?? ''),
+        metadata: {
+          route: '/ycode/api/settings/batch',
+          settingKey: key,
+        },
+      });
+    }
 
     return NextResponse.json({
       data: { count },

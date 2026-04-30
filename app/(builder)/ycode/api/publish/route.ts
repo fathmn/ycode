@@ -14,6 +14,7 @@ import { getItemsByCollectionId } from '@/lib/repositories/collectionItemReposit
 import { publishAssets, getUnpublishedAssets, hardDeleteSoftDeletedAssets } from '@/lib/repositories/assetRepository';
 import { publishAssetFolders, getUnpublishedAssetFolders, hardDeleteSoftDeletedAssetFolders } from '@/lib/repositories/assetFolderRepository';
 import { publishFonts } from '@/lib/repositories/fontRepository';
+import { verifyNovumPublishGate, writeNovumAuditLog } from '@/lib/novum-platform';
 import type { Setting, PublishStats, PublishTableStats } from '@/types';
 
 // Disable caching for this route
@@ -110,6 +111,9 @@ export async function POST(request: NextRequest) {
       layerStyleIds,
       publishLocales = true,
     } = body;
+
+    const novumGate = await verifyNovumPublishGate(request);
+    if (!novumGate.ok) return novumGate.response;
 
     const publishedAt = new Date().toISOString();
 
@@ -443,6 +447,23 @@ export async function POST(request: NextRequest) {
       result.changes.assets +
       result.changes.locales +
       result.changes.translations;
+
+    await writeNovumAuditLog({
+      request,
+      action: 'site.publish',
+      entityType: 'site',
+      entityId: novumGate.context.project.slug,
+      metadata: {
+        publishAll: isPublishingAll,
+        changes: result.changes,
+        totalPublished,
+        durationMs: stats.totalDurationMs,
+        projectSlug: novumGate.context.project.slug,
+        actorRole: novumGate.context.role,
+        draftHash: novumGate.draftHash,
+        customCode: novumGate.customCode,
+      },
+    });
 
     return noCache({
       data: result,

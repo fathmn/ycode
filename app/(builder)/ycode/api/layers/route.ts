@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLayersByPageId, upsertDraftLayers } from '@/lib/repositories/pageLayersRepository';
 import { noCache } from '@/lib/api-response';
+import { recordNovumCustomCodeMutation } from '@/lib/novum-platform';
 import type { Layer } from '@/types';
 
 // Disable caching for this route
@@ -78,6 +79,20 @@ export async function PUT(request: NextRequest) {
     }
 
     const draft = await upsertDraftLayers(pageId, layers as Layer[]);
+    const htmlEmbedCode = collectHtmlEmbedCode(layers as Layer[]);
+
+    if (htmlEmbedCode.length > 0) {
+      await recordNovumCustomCodeMutation(request, {
+        scope: 'embed',
+        targetId: pageId,
+        content: htmlEmbedCode.join('\n---\n'),
+        metadata: {
+          route: '/ycode/api/layers',
+          pageId,
+          snippets: htmlEmbedCode.length,
+        },
+      });
+    }
 
     return noCache({
       data: draft,
@@ -90,4 +105,25 @@ export async function PUT(request: NextRequest) {
       500
     );
   }
+}
+
+function collectHtmlEmbedCode(layers: Layer[]): string[] {
+  const snippets: string[] = [];
+
+  const walk = (layer: Layer) => {
+    const code = layer.name === 'htmlEmbed' ? layer.settings?.htmlEmbed?.code : null;
+    if (typeof code === 'string' && code.trim()) {
+      snippets.push(code);
+    }
+
+    for (const child of layer.children || []) {
+      walk(child as Layer);
+    }
+  };
+
+  for (const layer of layers) {
+    walk(layer);
+  }
+
+  return snippets;
 }

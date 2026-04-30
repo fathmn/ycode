@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { getPageById, updatePage, deletePage } from '@/lib/repositories/pageRepository';
 import { deleteTranslationsInBulk } from '@/lib/repositories/translationRepository';
 import { noCache } from '@/lib/api-response';
+import { recordNovumCustomCodeMutation } from '@/lib/novum-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -97,6 +98,19 @@ export async function PUT(
 
     // Pass all updates to the repository (it will handle further validation)
     const page = await updatePage(id, body);
+
+    if (body.settings?.custom_code) {
+      await recordNovumCustomCodeMutation(request, {
+        scope: 'page',
+        targetId: id,
+        content: JSON.stringify(body.settings.custom_code),
+        metadata: {
+          route: '/ycode/api/pages/[id]',
+          pageId: id,
+          fields: Object.keys(body.settings.custom_code),
+        },
+      });
+    }
 
     return noCache({
       data: page,

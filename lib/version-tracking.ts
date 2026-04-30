@@ -5,6 +5,7 @@
  * Used by client stores to record and track versions for undo/redo.
  */
 
+import { novumFetch } from '@/lib/api';
 import type { VersionEntityType, CreateVersionData, Layer, VersionMetadata } from '@/types';
 import { createPatch, createInversePatch, isPatchEmpty, doesPatchChangeState, generatePatchDescription, JsonPatch } from '@/lib/version-utils';
 import { generatePageLayersHash, generateComponentContentHash, generateLayerStyleContentHash } from '@/lib/hash-utils';
@@ -267,7 +268,7 @@ export async function recordVersionViaApi(
   };
 
   try {
-    const response = await fetch('/ycode/api/versions', {
+    const response = await novumFetch('/ycode/api/versions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(versionData),

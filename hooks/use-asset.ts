@@ -4,7 +4,7 @@
  * Provides a simple interface for components to get asset details by ID
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useAssetsStore } from '@/stores/useAssetsStore';
 import type { Asset } from '@/types';
 
@@ -14,7 +14,6 @@ import type { Asset } from '@/types';
  * Automatically loads assets store if not already loaded
  */
 export function useAsset(assetId: string | null | undefined): Asset | null {
-  const [asset, setAsset] = useState<Asset | null>(null);
   const { getAsset, loadAssets, isLoaded } = useAssetsStore();
 
   useEffect(() => {
@@ -24,14 +23,12 @@ export function useAsset(assetId: string | null | undefined): Asset | null {
     }
   }, [isLoaded, loadAssets]);
 
-  useEffect(() => {
+  const asset = useMemo(() => {
     if (!assetId) {
-      setAsset(null);
-      return;
+      return null;
     }
 
-    const foundAsset = getAsset(assetId);
-    setAsset(foundAsset);
+    return getAsset(assetId);
   }, [assetId, getAsset]);
 
   return asset;
@@ -42,7 +39,6 @@ export function useAsset(assetId: string | null | undefined): Asset | null {
  * Returns an array of assets (nulls for not found)
  */
 export function useAssets(assetIds: (string | null | undefined)[]): (Asset | null)[] {
-  const [assets, setAssets] = useState<(Asset | null)[]>([]);
   const { getAsset, loadAssets, isLoaded } = useAssetsStore();
 
   useEffect(() => {
@@ -52,10 +48,10 @@ export function useAssets(assetIds: (string | null | undefined)[]): (Asset | nul
     }
   }, [isLoaded, loadAssets]);
 
-  useEffect(() => {
-    const foundAssets = assetIds.map(id => id ? getAsset(id) : null);
-    setAssets(foundAssets);
-  }, [assetIds, getAsset]);
+  const assets = useMemo(
+    () => assetIds.map((id) => (id ? getAsset(id) : null)),
+    [assetIds, getAsset],
+  );
 
   return assets;
 }

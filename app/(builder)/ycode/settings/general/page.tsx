@@ -1,5 +1,7 @@
 'use client';
 
+import { novumFetch } from '@/lib/api';
+
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
@@ -112,7 +114,7 @@ export default function GeneralSettingsPage() {
     // Fetch missing assets
     Promise.all(
       idsToFetch.map((id) =>
-        fetch(`/ycode/api/assets/${id}`)
+        novumFetch(`/ycode/api/assets/${id}`)
           .then((res) => (res.ok ? res.json() : null))
           .then((result) => result?.data as Asset | null)
           .catch(() => null)
@@ -253,7 +255,7 @@ export default function GeneralSettingsPage() {
     try {
       setIsResetting(true);
 
-      const response = await fetch('/ycode/api/devtools/reset-db', {
+      const response = await novumFetch('/ycode/api/devtools/reset-db', {
         method: 'POST',
       });
 

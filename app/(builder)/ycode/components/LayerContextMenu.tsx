@@ -1,5 +1,6 @@
 'use client';
 
+import { novumFetch } from '@/lib/api';
 /**
  * Layer Context Menu Component
  *
@@ -557,7 +558,7 @@ export default function LayerContextMenu({
       }
 
       // Call API to save layout
-      const response = await fetch('/ycode/api/layouts', {
+      const response = await novumFetch('/ycode/api/layouts', {
         method: 'POST',
         body: formData,
       });

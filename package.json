@@ -30,6 +30,8 @@
     "cache:clear": "rm -rf .next",
     "lint": "eslint .",
     "lint:fix": "eslint --fix .",
+    "studio:fetch-guard": "node scripts/check-studio-fetch-guard.mjs",
+    "novum:fetch-guard": "npm run studio:fetch-guard",
     "type-check": "tsc --noEmit",
     "migrate:make": "NODE_NO_WARNINGS=1 knex migrate:make --knexfile knexfile.ts -x ts",
     "migrate:latest": "NODE_NO_WARNINGS=1 knex migrate:latest --knexfile knexfile.ts",

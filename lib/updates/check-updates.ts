@@ -1,5 +1,5 @@
 /**
- * Check for Ycode updates from the official repository.
+ * Check for upstream updates from the official repository.
  * Extracted for reuse and to allow cloud overlay to return "no update" in hosted deployments.
  */
 
@@ -41,7 +41,7 @@ function compareVersions(a: string, b: string): number {
 }
 
 /**
- * Check for updates from the official Ycode repository
+ * Check for updates from the official upstream repository
  */
 export async function checkForUpdates(currentVersion: string): Promise<CheckUpdatesResult> {
   try {
@@ -60,7 +60,7 @@ export async function checkForUpdates(currentVersion: string): Promise<CheckUpda
       return {
         available: false,
         currentVersion,
-        message: 'Unable to check for updates',
+        message: 'Updates konnten nicht geprüft werden',
       };
     }
 
@@ -114,40 +114,41 @@ export async function checkForUpdates(currentVersion: string): Promise<CheckUpda
       vercelGitRepoSlug
     ) {
       if (isFork) {
-        updateMethod = 'github-sync';
+        updateMethod = 'manual';
         autoSyncUrl = `https://github.com/${vercelGitRepoOwner}/${vercelGitRepoSlug}`;
         steps = [
-          `Go to <a href="https://github.com/${vercelGitRepoOwner}/${vercelGitRepoSlug}" target="_blank" class="underline font-semibold">your GitHub repository</a>`,
-          'Click the <strong class="text-white">"Sync fork"</strong> button (above the file list)',
-          'Click <strong class="text-white">"Update branch"</strong>',
-          'Vercel will automatically redeploy with the latest changes',
-          '⚠️ Please reload this page (Ycode builder) after deployment to apply the latest migrations',
+          `<a href="https://github.com/${vercelGitRepoOwner}/${vercelGitRepoSlug}" target="_blank" class="underline font-semibold">Studio GitHub-Fork</a> öffnen`,
+          'Aktuellen Studio-Patchstand committen oder eindeutig sichern',
+          'Eigenen Upgrade-Branch erstellen, zum Beispiel <code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">update/ycode-0.18.0</code>',
+          `Upstream holen und nur im Upgrade-Branch testen:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git fetch upstream && git merge upstream/main</code>`,
+          'Typecheck, Build, Fetch-Guard, Import-Skript-Checks, Browser-Smoke, Preview/Publish-Smoke und Migrationsstatus ausführen',
+          'Erst nach grünen Checks und Review in den stabilen Studio-Branch übernehmen',
         ];
       } else {
         updateMethod = 'git-pull';
         autoSyncUrl = `https://github.com/${vercelGitRepoOwner}/${vercelGitRepoSlug}`;
         steps = [
-          '⚠️ <strong class="text-yellow-300">Your repo is not a fork.</strong> For easier one-click updates in the future, consider forking the official repo first.',
+          '<strong class="text-yellow-300">Dieses Repository ist kein Fork.</strong> Für einfachere Updates sollte Novum langfristig einen sauberen Fork der offiziellen Basis pflegen.',
           '',
-          '<strong class="text-white">To update now:</strong>',
-          'Open terminal in your project directory',
-          `Add upstream remote (first time only):<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git remote add upstream https://github.com/${UPSTREAM_REPO}.git</code>`,
-          `Fetch latest changes:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git fetch upstream</code>`,
-          `Merge updates:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git merge upstream/main</code>`,
-          `Push to your repo:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git push origin main</code>`,
-          'Vercel will automatically redeploy',
-          '⚠️ Please reload this page (Ycode builder) after deployment to apply the latest migrations',
+          '<strong class="text-current">Aktualisierung per Terminal:</strong>',
+          'Terminal im Projektordner öffnen',
+          `Upstream-Remote ergänzen, falls noch nicht vorhanden:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git remote add upstream https://github.com/${UPSTREAM_REPO}.git</code>`,
+          `Aktuelle Änderungen holen:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git fetch upstream</code>`,
+          `Update einspielen:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git merge upstream/main</code>`,
+          `Änderungen zu Novum GitHub pushen:<br/><code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">git push origin main</code>`,
+          'Vercel deployed die aktualisierte Version automatisch',
+          'Diese Seite nach dem Deployment neu laden, damit aktuelle Migrationen angewendet werden',
         ];
       }
     } else {
-      updateMethod = 'github-sync';
+      updateMethod = 'manual';
       autoSyncUrl = `https://github.com/${UPSTREAM_REPO}`;
       steps = [
-        'Go to your forked GitHub repository',
-        'Click the <span class="!font-semibold">"Sync fork"</span> button',
-        'Click <span class="!font-semibold">"Update branch"</span>',
-        'Your deployment will automatically redeploy with the latest changes',
-        'Please reload builder after deployment to apply the latest migrations',
+        'Update-Hinweis als Signal behandeln, nicht als Freigabe zum Blind-Update',
+        'Aktuellen Studio-Patchstand committen oder eindeutig sichern',
+        'Upgrade nur in einem eigenen Branch testen, zum Beispiel <code class="bg-blue-800 px-2 py-1 rounded text-xs font-mono">update/ycode-0.18.0</code>',
+        'Konflikte bewusst in Branding, Auth/Projektzugriff, Preview/Publish, Audit/Backup und Import-Adaptern lösen',
+        'Erst nach vollständigen Checks und Review übernehmen',
       ];
     }
 
@@ -169,7 +170,7 @@ export async function checkForUpdates(currentVersion: string): Promise<CheckUpda
     return {
       available: false,
       currentVersion,
-      error: 'Failed to check for updates',
+      error: 'Updates konnten nicht geprüft werden',
     };
   }
 }

@@ -1,6 +1,5 @@
 import type { Knex } from 'knex';
 import path from 'path';
-import { credentials } from './lib/credentials.ts';
 import { parseSupabaseConfig } from './lib/supabase-config-parser.ts';
 import type { SupabaseConfig } from './types/index.ts';
 
@@ -16,10 +15,15 @@ import type { SupabaseConfig } from './types/index.ts';
  * Uses environment variables on Vercel, file-based storage locally
  */
 async function getSupabaseConnectionParams() {
-  const config = await credentials.get<SupabaseConfig>('supabase_config');
+  const config: SupabaseConfig = {
+    anonKey: process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '',
+    serviceRoleKey: process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+    connectionUrl: process.env.SUPABASE_CONNECTION_URL || '',
+    dbPassword: process.env.SUPABASE_DB_PASSWORD || '',
+  };
 
   if (!config?.connectionUrl || !config?.dbPassword) {
-    throw new Error('Supabase not configured. Please run setup first.');
+    throw new Error('SUPABASE_* environment variables are not configured. Please run setup first.');
   }
 
   const connectionParams = parseSupabaseConfig(config);

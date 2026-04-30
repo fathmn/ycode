@@ -144,7 +144,9 @@ const customRulesConfig = defineConfig([
   {
     name: 'project/next-env-overrides',
     files: ['next-env.d.ts'],
-    rules: {},
+    rules: {
+      quotes: 'off',
+    },
   },
 ]);
 

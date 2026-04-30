@@ -1,5 +1,7 @@
 'use client';
 
+import { novumFetch } from '@/lib/api';
+
 import { useState, useEffect } from 'react';
 import { marked } from 'marked';
 import { Badge } from '@/components/ui/badge';
@@ -54,7 +56,7 @@ marked.setOptions({
 
 function formatDate(dateString: string): string {
   const date = new Date(dateString);
-  return date.toLocaleDateString('en-US', {
+  return date.toLocaleDateString('de-DE', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -76,23 +78,23 @@ export default function UpdatesSettingsPage() {
   const checkForUpdates = async () => {
     setLoading(true);
     try {
-      const response = await fetch('/ycode/api/updates/check');
+      const response = await novumFetch('/ycode/api/updates/check');
       if (response.ok) {
         const data = await response.json();
         setUpdateInfo(data);
       } else {
         setUpdateInfo({
           available: false,
-          currentVersion: 'Unknown',
-          error: 'Failed to check for updates',
+          currentVersion: 'Unbekannt',
+          error: 'Updates konnten nicht geprüft werden',
         });
       }
     } catch (error) {
       console.error('Failed to check for updates:', error);
       setUpdateInfo({
         available: false,
-        currentVersion: 'Unknown',
-        error: 'Failed to check for updates',
+        currentVersion: 'Unbekannt',
+        error: 'Updates konnten nicht geprüft werden',
       });
     } finally {
       setLoading(false);
@@ -103,7 +105,7 @@ export default function UpdatesSettingsPage() {
     setReleasesLoading(true);
     setReleasesError(null);
     try {
-      const response = await fetch('/ycode/api/updates/releases');
+      const response = await novumFetch('/ycode/api/updates/releases');
       if (response.ok) {
         const data: ReleasesResponse = await response.json();
         setReleases(data.releases || []);
@@ -111,11 +113,11 @@ export default function UpdatesSettingsPage() {
           setReleasesError(data.error);
         }
       } else {
-        setReleasesError(`Failed to fetch releases: ${response.status}`);
+        setReleasesError(`Releases konnten nicht geladen werden: ${response.status}`);
       }
     } catch (error) {
       console.error('Failed to fetch releases:', error);
-      setReleasesError('Failed to fetch releases');
+      setReleasesError('Releases konnten nicht geladen werden');
     } finally {
       setReleasesLoading(false);
     }
@@ -129,13 +131,13 @@ export default function UpdatesSettingsPage() {
           <span className="text-base font-medium">Updates</span>
         </header>
 
-        {/* Version Status Block */}
+        {/* Versionsstatus */}
         <div className="grid grid-cols-3 gap-10 bg-secondary/20 p-8 rounded-lg">
 
           <div>
-            <FieldLegend>Version status</FieldLegend>
+            <FieldLegend>Versionsstatus</FieldLegend>
             <FieldDescription>
-              Check if your Ycode installation is up to date with the latest release.
+              Prüft, ob studio.novum partners auf dem aktuellen Stand der Open-Source-Basis ist.
             </FieldDescription>
           </div>
 
@@ -156,11 +158,11 @@ export default function UpdatesSettingsPage() {
                   className="mt-4"
                   onClick={checkForUpdates}
                 >
-                  Try again
+                  Erneut prüfen
                 </Button>
               </div>
             ) : updateInfo?.available ? (
-              // Update available state
+              // Update verfügbar
               <div className="flex flex-col gap-4">
 
                 <div className="flex items-center gap-4">
@@ -168,8 +170,8 @@ export default function UpdatesSettingsPage() {
                     {updateInfo.latestVersion}
                   </div>
                   <div>
-                    <Label>Update available</Label>
-                    <Label variant="muted">Current version {updateInfo?.currentVersion}</Label>
+                    <Label>Update verfügbar</Label>
+                    <Label variant="muted">Aktuelle Version {updateInfo?.currentVersion}</Label>
                   </div>
                 </div>
 
@@ -178,7 +180,7 @@ export default function UpdatesSettingsPage() {
                 {updateInfo.updateInstructions && (
                   <div className="space-y-4">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">How to update</span>
+                      <span className="text-sm font-medium">So wird aktualisiert</span>
                     </div>
 
                     <ol className="flex flex-col gap-3 text-sm text-muted-foreground">
@@ -206,9 +208,7 @@ export default function UpdatesSettingsPage() {
                             >
                               <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
                             </svg>
-                            {updateInfo.updateInstructions.method === 'github-sync'
-                              ? 'Sync Fork on GitHub'
-                              : 'View on GitHub'}
+                            Upgrade-Check öffnen
                           </a>
                         </Button>
                       )}
@@ -218,7 +218,7 @@ export default function UpdatesSettingsPage() {
               </div>
 
             ) : (
-              // Up to date state
+              // Aktueller Stand
               <div className="flex flex-col gap-4">
 
                 <div className="flex items-center gap-4">
@@ -226,7 +226,7 @@ export default function UpdatesSettingsPage() {
                     <Icon name="check" className="size-6 text-green-400" />
                   </div>
                   <div>
-                    <Label>You&apos;re up to date</Label>
+                    <Label>Alles aktuell</Label>
                     <Label variant="muted">Version {updateInfo?.currentVersion}</Label>
                   </div>
                 </div>
@@ -249,7 +249,7 @@ export default function UpdatesSettingsPage() {
                       >
                         <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
                       </svg>
-                      View on GitHub
+                      Auf GitHub öffnen
                     </a>
                   </Button>
                   <Button
@@ -257,7 +257,7 @@ export default function UpdatesSettingsPage() {
                     variant="ghost"
                     onClick={checkForUpdates}
                   >
-                    Check again
+                    Erneut prüfen
                   </Button>
                 </div>
 
@@ -267,13 +267,13 @@ export default function UpdatesSettingsPage() {
 
         </div>
 
-        {/* Release History Block */}
+        {/* Release-Historie */}
         <div className="grid grid-cols-3 gap-10 bg-secondary/20 p-8 rounded-lg mt-6">
 
           <div>
-            <FieldLegend>Release history</FieldLegend>
+            <FieldLegend>Release-Historie</FieldLegend>
             <FieldDescription>
-              View all releases and their changelogs.
+              Zeigt alle verfügbaren Releases und deren Änderungsprotokolle.
             </FieldDescription>
           </div>
 
@@ -288,7 +288,7 @@ export default function UpdatesSettingsPage() {
               </Empty>
             ) : releases.length === 0 ? (
               <Empty className="bg-input">
-                <EmptyTitle>No releases found</EmptyTitle>
+                <EmptyTitle>Keine Releases gefunden</EmptyTitle>
               </Empty>
             ) : (
               <ul className="divide-y divide-border">
@@ -335,18 +335,18 @@ export default function UpdatesSettingsPage() {
                               {release.isCurrent && (
                                 <div className="flex items-center gap-2">
                                   <div className="size-1 bg-secondary rounded-full" />
-                                  <Label variant="muted">Current</Label>
+                                  <Label variant="muted">Aktuell</Label>
                                 </div>
                               )}
                               {index === 0 && !release.isCurrent && (
                                 <div className="flex items-center gap-2">
                                   <div className="size-1 bg-secondary rounded-full" />
-                                  <Label variant="muted">Newest</Label>
+                                  <Label variant="muted">Neueste Version</Label>
                                 </div>
                               )}
                             </div>
                             {release.isPrerelease && (
-                              <Badge variant="outline" className="text-xs">Pre-release</Badge>
+                              <Badge variant="outline" className="text-xs">Vorabversion</Badge>
                             )}
                             {release.body && (
                               <div

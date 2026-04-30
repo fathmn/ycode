@@ -1,5 +1,6 @@
 'use client';
 
+import { novumFetch } from '@/lib/api';
 /**
  * Form Settings Component
  *
@@ -35,7 +36,7 @@ export default function FormSettings({ layer, onLayerUpdate }: FormSettingsProps
   useEffect(() => {
     const checkEmailSettings = async () => {
       try {
-        const response = await fetch('/ycode/api/settings/email');
+        const response = await novumFetch('/ycode/api/settings/email');
         if (response.ok) {
           const result = await response.json();
           const mode = result.data?.mode;

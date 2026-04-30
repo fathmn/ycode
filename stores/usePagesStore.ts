@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import type { Layer, Page, PageLayers, PageFolder, PageItemDuplicateResult, CollectionItemWithValues } from '../types';
-import { pagesApi, pageLayersApi, foldersApi } from '../lib/api';
+import { pagesApi, pageLayersApi, foldersApi, novumFetch } from '../lib/api';
 import { getLayerFromTemplate, getBlockName } from '../lib/templates/blocks';
 import { cloneDeep } from 'lodash';
 import {
@@ -515,7 +515,7 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
   publishPage: async (pageId) => {
     set({ isLoading: true, error: null });
     try {
-      const response = await fetch('/ycode/api/publish', {
+      const response = await novumFetch('/ycode/api/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pageIds: [pageId] }),
@@ -1947,7 +1947,7 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
     // Start API call in background (don't await immediately)
     (async () => {
       try {
-        const response = await fetch(`/ycode/api/pages/${pageId}/duplicate`, {
+        const response = await novumFetch(`/ycode/api/pages/${pageId}/duplicate`, {
           method: 'POST',
         });
 
@@ -1970,8 +1970,8 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
         // (The backend increments the order of siblings when duplicating)
         try {
           const [pagesResponse, foldersResponse] = await Promise.all([
-            fetch('/ycode/api/pages'),
-            fetch('/ycode/api/folders')
+            novumFetch('/ycode/api/pages'),
+            novumFetch('/ycode/api/folders')
           ]);
 
           const pagesData = await pagesResponse.json();
@@ -2508,7 +2508,7 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
     // Start API call in background (don't await immediately)
     (async () => {
       try {
-        const response = await fetch(`/ycode/api/folders/${folderId}/duplicate`, {
+        const response = await novumFetch(`/ycode/api/folders/${folderId}/duplicate`, {
           method: 'POST',
         });
 
@@ -2533,8 +2533,8 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
         try {
           // Fetch fresh data from database
           const [pagesResponse, foldersResponse] = await Promise.all([
-            fetch('/ycode/api/pages'),
-            fetch('/ycode/api/folders')
+            novumFetch('/ycode/api/pages'),
+            novumFetch('/ycode/api/folders')
           ]);
 
           const pagesData = await pagesResponse.json();
@@ -3005,7 +3005,7 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
 
     try {
       // Fetch fresh collection item data
-      const response = await fetch(`/ycode/api/pages/${pageId}/collection-item?itemId=${currentItem.id}`);
+      const response = await novumFetch(`/ycode/api/pages/${pageId}/collection-item?itemId=${currentItem.id}`);
       const result = await response.json();
 
       if (result.data) {

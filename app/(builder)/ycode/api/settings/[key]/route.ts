@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSettingByKey, setSetting } from '@/lib/repositories/settingsRepository';
 import { clearAllCache } from '@/lib/services/cacheService';
+import { recordNovumCustomCodeMutation } from '@/lib/novum-platform';
+
+const CUSTOM_CODE_SETTING_KEYS = new Set(['custom_code_head', 'custom_code_body']);
 
 /**
  * GET /ycode/api/settings/[key]
@@ -56,6 +59,18 @@ export async function PUT(
     await setSetting(key, value);
 
     await clearAllCache();
+
+    if (CUSTOM_CODE_SETTING_KEYS.has(key)) {
+      await recordNovumCustomCodeMutation(request, {
+        scope: 'global',
+        targetId: key,
+        content: typeof value === 'string' ? value : JSON.stringify(value ?? ''),
+        metadata: {
+          route: '/ycode/api/settings/[key]',
+          settingKey: key,
+        },
+      });
+    }
 
     return NextResponse.json({
       data: { key, value },

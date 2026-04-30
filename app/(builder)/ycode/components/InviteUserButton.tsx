@@ -1,5 +1,6 @@
 'use client';
 
+import { novumFetch } from '@/lib/api';
 /**
  * Invite User Button Component
  *
@@ -56,7 +57,7 @@ export const InviteUserButton: React.FC<InviteUserButtonProps> = ({
       setError(null);
       setSuccess(null);
 
-      const response = await fetch('/ycode/api/auth/invite', {
+      const response = await novumFetch('/ycode/api/auth/invite', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

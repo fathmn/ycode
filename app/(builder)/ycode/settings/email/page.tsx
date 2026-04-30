@@ -1,5 +1,7 @@
 'use client';
 
+import { novumFetch } from '@/lib/api';
+
 import { useState, useEffect, useRef } from 'react';
 import {
   FieldDescription,
@@ -69,7 +71,7 @@ export default function EmailSettingsPage() {
       try {
         setIsLoading(true);
         setError(null);
-        const response = await fetch('/ycode/api/settings/email');
+        const response = await novumFetch('/ycode/api/settings/email');
         if (response.ok) {
           const result = await response.json();
           if (result.data) {
@@ -146,7 +148,7 @@ export default function EmailSettingsPage() {
         enabled: selectedMode === 'custom',
       };
 
-      const response = await fetch('/ycode/api/settings/email', {
+      const response = await novumFetch('/ycode/api/settings/email', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ value: savePayload }),
@@ -174,7 +176,7 @@ export default function EmailSettingsPage() {
       setError(null);
       setTestResult(null);
 
-      const response = await fetch('/ycode/api/settings/email/test', {
+      const response = await novumFetch('/ycode/api/settings/email/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),

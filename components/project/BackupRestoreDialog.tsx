@@ -1,5 +1,7 @@
 'use client';
 
+import { novumFetch } from '@/lib/api';
+
 import React, { useState, useRef } from 'react';
 import {
   Dialog,
@@ -70,7 +72,7 @@ export function BackupRestoreDialog({
     setLoading(true);
 
     try {
-      const response = await fetch('/ycode/api/project/export', {
+      const response = await novumFetch('/ycode/api/project/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -122,7 +124,7 @@ export function BackupRestoreDialog({
         formData.append('password', restorePassword);
       }
 
-      const response = await fetch('/ycode/api/project/import', {
+      const response = await novumFetch('/ycode/api/project/import', {
         method: 'POST',
         body: formData,
       });

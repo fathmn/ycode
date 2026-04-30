@@ -1,5 +1,6 @@
 'use client';
 
+import { novumFetch } from '@/lib/api';
 import { useRef, useEffect, useState, useMemo } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useEditorUrl } from '@/hooks/use-editor-url';
@@ -31,6 +32,7 @@ import type { Page } from '@/types';
 import type { User } from '@supabase/supabase-js';
 import ActiveUsersInHeader from './ActiveUsersInHeader';
 import InviteUserButton from './InviteUserButton';
+import StudioProjectSelector from './StudioProjectSelector';
 import PublishPopover from './PublishPopover';
 import { Label } from '@/components/ui/label';
 import Icon from '@/components/ui/icon';
@@ -147,7 +149,7 @@ export default function HeaderBar({
   useEffect(() => {
     const checkForUpdates = async () => {
       try {
-        const response = await fetch('/ycode/api/updates/check');
+        const response = await novumFetch('/ycode/api/updates/check');
         if (response.ok) {
           const data = await response.json();
           setHasUpdate(data.available === true);
@@ -316,35 +318,10 @@ export default function HeaderBar({
             <Button
               variant="secondary" size="sm"
               className="size-8!"
+              aria-label="studio.novum partners Menu"
+              title="studio.novum partners"
             >
-              <div className="dark:text-white text-secondary-foreground">
-                <svg
-                  className="size-3.5 fill-current" viewBox="0 0 24 24"
-                  version="1.1" xmlns="http://www.w3.org/2000/svg"
-                >
-                  <g
-                    id="Symbols" stroke="none"
-                    strokeWidth="1" fill="none"
-                    fillRule="evenodd"
-                  >
-                    <g id="Sidebar" transform="translate(-30.000000, -30.000000)">
-                      <g id="Ycode">
-                        <g transform="translate(30.000000, 30.000000)">
-                          <rect
-                            id="Rectangle" x="0"
-                            y="0" width="24"
-                            height="24"
-                          />
-                          <path
-                            id="CurrentFill" d="M11.4241533,0 L11.4241533,5.85877951 L6.024,8.978 L12.6155735,12.7868008 L10.951,13.749 L23.0465401,6.75101349 L23.0465401,12.6152717 L3.39516096,23.9856666 L3.3703726,24 L3.34318129,23.9827156 L0.96,22.4713365 L0.96,16.7616508 L3.36417551,18.1393242 L7.476,15.76 L0.96,11.9090099 L0.96,6.05375516 L11.4241533,0 Z"
-                            className="fill-current"
-                          />
-                        </g>
-                      </g>
-                    </g>
-                  </g>
-                </svg>
-              </div>
+              <span className="text-[11px] font-semibold tracking-normal">np</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
@@ -361,19 +338,19 @@ export default function HeaderBar({
             <DropdownMenuItem
               onClick={() => router.push('/ycode/settings/general')}
             >
-              Settings
+              Einstellungen
             </DropdownMenuItem>
 
             <DropdownMenuItem
               onClick={() => openFileManager()}
             >
-              File manager
+              Dateien
             </DropdownMenuItem>
 
             <DropdownMenuItem
               onClick={() => router.push('/ycode/integrations/apps')}
             >
-              Integrations
+              Integrationen
             </DropdownMenuItem>
 
             <DropdownMenuItem
@@ -386,7 +363,7 @@ export default function HeaderBar({
 
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
-                Theme
+                Darstellung
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 <DropdownMenuRadioGroup value={theme} onValueChange={(value) => setTheme(value as 'system' | 'light' | 'dark')}>
@@ -394,10 +371,10 @@ export default function HeaderBar({
                     System
                   </DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="light">
-                    Light
+                    Hell
                   </DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="dark">
-                    Dark
+                    Dunkel
                   </DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>
@@ -406,7 +383,7 @@ export default function HeaderBar({
             <DropdownMenuItem
               onClick={() => setKeyboardShortcutsOpen(true)}
             >
-              Keyboard shortcuts
+              Tastaturkürzel
             </DropdownMenuItem>
 
             <DropdownMenuSeparator />
@@ -414,7 +391,7 @@ export default function HeaderBar({
             <DropdownMenuItem
               onClick={() => router.push('/ycode/profile')}
             >
-              My profile
+              Mein Profil
             </DropdownMenuItem>
 
             <DropdownMenuItem
@@ -422,7 +399,7 @@ export default function HeaderBar({
                 await signOut();
               }}
             >
-              Sign out
+              Abmelden
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -486,7 +463,7 @@ export default function HeaderBar({
             }}
           >
             <Icon name="form" />
-            Forms
+            Formulare
           </Button>
         </div>
       </div>
@@ -523,7 +500,7 @@ export default function HeaderBar({
                 <DropdownMenuItem
                   onClick={() => router.push('/ycode/localization')}
                 >
-                  Manage locales
+                  Sprachen verwalten
                 </DropdownMenuItem>
               </>
             )}
@@ -567,6 +544,8 @@ export default function HeaderBar({
 
       {/* Right: User & Actions */}
       <div className="flex items-center justify-end gap-2">
+        <StudioProjectSelector />
+
         {/* Active Users */}
         <ActiveUsersInHeader />
 
@@ -577,19 +556,19 @@ export default function HeaderBar({
         <div className="flex items-center justify-end w-16 text-xs text-zinc-500 dark:text-white/50">
           {isSaving ? (
             <>
-              <span>Saving</span>
+              <span>Speichert</span>
             </>
           ) : hasUnsavedChanges ? (
             <>
-              <span>Unsaved</span>
+              <span>Offen</span>
             </>
           ) : lastSaved ? (
             <>
-              <span>Saved</span>
+              <span>Gespeichert</span>
             </>
           ) : (
             <>
-              <span>Ready</span>
+              <span>Bereit</span>
             </>
           )}
         </div>

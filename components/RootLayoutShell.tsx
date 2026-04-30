@@ -10,8 +10,8 @@ const inter = Inter({
 });
 
 export const defaultMetadata: Metadata = {
-  title: 'Ycode - Visual Website Builder',
-  description: 'Self-hosted visual website builder',
+  title: 'studio.novum partners',
+  description: 'Kundenstudio für Websites von novum partners',
 };
 
 interface RootLayoutShellProps {
@@ -21,7 +21,7 @@ interface RootLayoutShellProps {
 
 export default function RootLayoutShell({ children, headElements }: RootLayoutShellProps) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="de" suppressHydrationWarning>
       <head>
         {headElements}
       </head>

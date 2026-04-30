@@ -2176,6 +2176,16 @@ const LayerItem: React.FC<{
         e.preventDefault();
 
         const form = e.currentTarget;
+        form.querySelectorAll('[data-studio-import-system-value][name]').forEach((el) => {
+          const input = el as HTMLInputElement | HTMLTextAreaElement;
+          const systemValue = input.getAttribute('data-studio-import-system-value');
+          if (systemValue === 'submission-timestamp-ms') {
+            input.value = String(Date.now());
+          } else if (systemValue === 'honeypot-empty' && !input.value) {
+            input.value = '';
+          }
+        });
+
         const formData = new FormData(form);
         const payload: Record<string, any> = {};
 
@@ -2235,6 +2245,34 @@ const LayerItem: React.FC<{
           const checkbox = cb as HTMLInputElement;
           if (checkbox.name && !(checkbox.name in payload)) {
             payload[checkbox.name] = 'false';
+          }
+        });
+
+        form.querySelectorAll('[data-studio-import-field-name][data-studio-import-payload-type]').forEach((el) => {
+          const field = el as HTMLElement;
+          const fieldName = field.getAttribute('data-studio-import-field-name');
+          const payloadType = field.getAttribute('data-studio-import-payload-type');
+          if (!fieldName || !payloadType || !(fieldName in payload)) return;
+
+          const value = payload[fieldName];
+          if (payloadType === 'boolean') {
+            payload[fieldName] = value === true || value === 'true' || value === 'on' || value === '1';
+          } else if (payloadType === 'number') {
+            const nextValue = Array.isArray(value) ? value[0] : value;
+            const numberValue = Number(nextValue);
+            payload[fieldName] = Number.isFinite(numberValue) ? numberValue : null;
+          } else if (payloadType === 'stringArray') {
+            if (Array.isArray(value)) {
+              payload[fieldName] = value.map(String).filter((item) => item !== 'false');
+            } else if (value === 'false' || value === false || value == null) {
+              payload[fieldName] = [];
+            } else {
+              payload[fieldName] = [String(value)];
+            }
+          } else if (Array.isArray(value)) {
+            payload[fieldName] = value.map(String);
+          } else if (value != null) {
+            payload[fieldName] = String(value);
           }
         });
 

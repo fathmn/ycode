@@ -92,7 +92,7 @@ function resolveTemplateRefs(obj: any): any {
     if (Object.keys(overrides).length > 0) {
       const resolvedOverrides: any = {};
       for (const key in overrides) {
-        if (overrides.hasOwnProperty(key)) {
+        if (Object.hasOwn(overrides, key)) {
           // Resolve any __ref in override values (especially important for children arrays)
           resolvedOverrides[key] = resolveTemplateRefs(overrides[key]);
         }
@@ -112,7 +112,7 @@ function resolveTemplateRefs(obj: any): any {
   if (obj && typeof obj === 'object') {
     const resolved: any = {};
     for (const key in obj) {
-      if (obj.hasOwnProperty(key)) {
+      if (Object.hasOwn(obj, key)) {
         resolved[key] = resolveTemplateRefs(obj[key]);
       }
     }

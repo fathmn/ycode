@@ -5,6 +5,7 @@ import { cleanupOrphanedStorageFiles } from '@/lib/storage-utils';
 import { syncCSS } from '@/lib/services/settingsService';
 import { clearAllCache } from '@/lib/services/cacheService';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
+import { requireNovumProjectRole, writeNovumAuditLog } from '@/lib/novum-platform';
 import type { PublishStats, PublishTableStats } from '@/types';
 
 export const dynamic = 'force-dynamic';
@@ -86,6 +87,14 @@ export async function POST(_request: NextRequest) {
   const stats = createEmptyStats();
 
   try {
+    const novumRole = await requireNovumProjectRole(_request, [
+      'novum_admin',
+      'novum_developer',
+      'customer_owner',
+      'customer_editor',
+    ]);
+    if (!novumRole.ok) return novumRole.response;
+
     // Guard: only allow revert if site has been published before
     const publishedAt = await getSettingByKey('published_at');
     if (!publishedAt) {
@@ -315,6 +324,21 @@ export async function POST(_request: NextRequest) {
       result.changes.components + result.changes.layerStyles +
       result.changes.assetFolders + result.changes.assets + result.changes.fonts +
       result.changes.locales + result.changes.translations;
+
+    await writeNovumAuditLog({
+      request: _request,
+      action: 'site.revert',
+      entityType: 'site',
+      entityId: novumRole.context.project.slug,
+      metadata: {
+        changes: result.changes,
+        cleaned: result.cleaned,
+        totalReverted,
+        durationMs: stats.totalDurationMs,
+        projectSlug: novumRole.context.project.slug,
+        actorRole: novumRole.context.role,
+      },
+    });
 
     return noCache({
       data: result,

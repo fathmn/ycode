@@ -5,6 +5,7 @@
  */
 
 import type { ApiResponse, SupabaseConfig } from '@/types';
+import { novumFetch } from '@/lib/api';
 
 /**
  * Check if setup is complete
@@ -12,7 +13,7 @@ import type { ApiResponse, SupabaseConfig } from '@/types';
 export async function checkSetupStatus(): Promise<{
   is_configured: boolean;
 }> {
-  const response = await fetch('/ycode/api/setup/status');
+  const response = await novumFetch('/ycode/api/setup/status');
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -27,7 +28,7 @@ export async function checkSetupStatus(): Promise<{
 export async function connectSupabase(
   config: SupabaseConfig
 ): Promise<ApiResponse<void>> {
-  const response = await fetch('/ycode/api/setup/connect', {
+  const response = await novumFetch('/ycode/api/setup/connect', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -45,7 +46,7 @@ export async function connectSupabase(
  * Run Supabase migrations (checks and runs if needed)
  */
 export async function runMigrations(): Promise<ApiResponse<void>> {
-  const response = await fetch('/ycode/api/setup/migrate', {
+  const response = await novumFetch('/ycode/api/setup/migrate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
   });
@@ -60,7 +61,7 @@ export async function checkEmailConfirmDisabled(): Promise<{
   autoconfirm: boolean;
   error?: string;
 }> {
-  const response = await fetch('/ycode/api/setup/check-email-confirm');
+  const response = await novumFetch('/ycode/api/setup/check-email-confirm');
   const data = await response.json();
 
   if (!response.ok) {

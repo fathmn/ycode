@@ -1,5 +1,7 @@
 'use client';
 
+import { novumFetch } from '@/lib/api';
+
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -23,7 +25,7 @@ export default function ResetDatabasePage() {
       setLoading(true);
       setError(null);
 
-      const response = await fetch('/ycode/api/devtools/reset-db', {
+      const response = await novumFetch('/ycode/api/devtools/reset-db', {
         method: 'POST',
       });
 

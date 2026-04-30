@@ -25,11 +25,11 @@ interface PublishPreviewCounts {
 
 /** Breakdown row config for rendering */
 const BREAKDOWN_ITEMS: { key: keyof Omit<PublishPreviewCounts, 'total'>; label: string; icon: Parameters<typeof Icon>[0]['name'] }[] = [
-  { key: 'pages', label: 'Pages', icon: 'page' },
-  { key: 'components', label: 'Components', icon: 'component' },
-  { key: 'collections', label: 'Collections', icon: 'database' },
-  { key: 'collectionItems', label: 'Collection items', icon: 'database' },
-  { key: 'layerStyles', label: 'Layer styles', icon: 'cube' },
+  { key: 'pages', label: 'Seiten', icon: 'page' },
+  { key: 'components', label: 'Komponenten', icon: 'component' },
+  { key: 'collections', label: 'CMS-Collections', icon: 'database' },
+  { key: 'collectionItems', label: 'CMS-Einträge', icon: 'database' },
+  { key: 'layerStyles', label: 'Layer-Styles', icon: 'cube' },
   { key: 'assets', label: 'Assets', icon: 'image' },
 ];
 
@@ -56,6 +56,8 @@ export default function PublishPopover({
   const [publishSuccess, setPublishSuccess] = useState(false);
   const [isReverting, setIsReverting] = useState(false);
   const [isRevertDialogOpen, setIsRevertDialogOpen] = useState(false);
+  const [isApprovingPreview, setIsApprovingPreview] = useState(false);
+  const [previewApprovedAt, setPreviewApprovedAt] = useState<string | null>(null);
 
   const { getSettingByKey, updateSetting } = useSettingsStore();
   const publishedAt = getSettingByKey('published_at');
@@ -95,9 +97,9 @@ export default function PublishPopover({
         updateSetting('published_at', result.data.published_at_setting.value);
       }
 
-      toast.success('Website published successfully', {
+      toast.success('Website wurde live geschaltet', {
         action: {
-          label: 'Open',
+          label: 'Öffnen',
           onClick: () => window.open(baseUrl + publishedUrl, '_blank'),
         },
       });
@@ -115,6 +117,26 @@ export default function PublishPopover({
     }
   }, [baseUrl, publishedUrl, onPublishSuccess, setIsPublishing, updateSetting]);
 
+  const handleApprovePreview = useCallback(async () => {
+    try {
+      setIsApprovingPreview(true);
+
+      const result = await publishApi.approvePreview('/ycode/preview');
+
+      if (result.error) {
+        throw new Error(result.error);
+      }
+
+      setPreviewApprovedAt(result.data?.created_at || new Date().toISOString());
+      toast.success('Vorschau für Live-Schaltung freigegeben');
+    } catch (error) {
+      console.error('Failed to approve preview:', error);
+      toast.error(error instanceof Error ? error.message : 'Vorschau konnte nicht freigegeben werden');
+    } finally {
+      setIsApprovingPreview(false);
+    }
+  }, []);
+
   const handleRevertConfirm = useCallback(async () => {
     try {
       setIsReverting(true);
@@ -125,13 +147,13 @@ export default function PublishPopover({
         throw new Error(result.error);
       }
 
-      toast.success('Revert successful, builder is reloading...');
+      toast.success('Rollback erfolgreich, Studio wird neu geladen...');
 
       // Full reload to refresh all editor stores with reverted data
       window.location.reload();
     } catch (error) {
       console.error('Failed to revert:', error);
-      toast.error('Failed to revert changes');
+      toast.error('Rollback konnte nicht ausgeführt werden');
       setIsReverting(false);
       setIsRevertDialogOpen(false);
     }
@@ -141,7 +163,7 @@ export default function PublishPopover({
     <>
     <Popover open={isOpen} onOpenChange={setIsOpen}>
       <PopoverTrigger asChild>
-        <Button size="sm" disabled={isDisabled}>Publish</Button>
+        <Button size="sm" disabled={isDisabled}>Live schalten</Button>
       </PopoverTrigger>
 
       <PopoverContent className="mr-4 mt-0.5 w-64">
@@ -156,8 +178,47 @@ export default function PublishPopover({
             </a>
           </Label>
           <span className="text-popover-foreground text-[10px]">
-            {publishedAt ? `Published ${formatRelativeTime(publishedAt, false)}` : 'Never published'}
+            {publishedAt ? `Live ${formatRelativeTime(publishedAt, false)}` : 'Noch nicht live geschaltet'}
           </span>
+        </div>
+
+        <hr className="my-3" />
+
+        <div className="flex flex-col gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            className="w-full"
+            onClick={() => window.open('/ycode/preview', '_blank')}
+          >
+            Vorschau öffnen
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            className="w-full"
+            onClick={handleApprovePreview}
+            disabled={isApprovingPreview || isPublishing}
+          >
+            {isApprovingPreview ? (
+              <>
+                <Spinner />
+                Wird freigegeben...
+              </>
+            ) : previewApprovedAt ? (
+              <>
+                <Icon name="check" />
+                Vorschau freigegeben
+              </>
+            ) : (
+              'Vorschau freigeben'
+            )}
+          </Button>
+          {previewApprovedAt && (
+            <span className="text-[10px] text-muted-foreground">
+              Freigegeben {formatRelativeTime(previewApprovedAt, false)}
+            </span>
+          )}
         </div>
 
         <hr className="my-3" />
@@ -173,7 +234,7 @@ export default function PublishPopover({
           ) : publishSuccess ? (
             <Icon name="check" />
           ) : (
-            publishedAt ? 'Update' : 'Publish'
+            publishedAt ? 'Aktualisieren' : 'Live schalten'
           )}
         </Button>
 
@@ -182,7 +243,7 @@ export default function PublishPopover({
         {isLoadingCount ? (
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Spinner className="size-3" />
-            Calculating changes...
+            Änderungen werden berechnet...
           </div>
         ) : changeCounts ? (
           changeCounts.total > 0 ? (
@@ -195,7 +256,7 @@ export default function PublishPopover({
                       className="size-2.5 transition-transform group-data-[state=open]:rotate-90"
                     />
                   </div>
-                  {changeCounts.total} {changeCounts.total === 1 ? 'Change' : 'Changes'}
+                  {changeCounts.total} {changeCounts.total === 1 ? 'Änderung' : 'Änderungen'}
                 </CollapsibleTrigger>
                 {publishedAt && (
                   <Button
@@ -204,7 +265,7 @@ export default function PublishPopover({
                     onClick={() => setIsRevertDialogOpen(true)}
                     disabled={isReverting || isPublishing}
                   >
-                    Revert
+                    Rollback
                   </Button>
                 )}
               </div>
@@ -227,7 +288,7 @@ export default function PublishPopover({
               </CollapsibleContent>
             </Collapsible>
           ) : (
-            <span className="text-xs text-muted-foreground">Everything is up to date</span>
+            <span className="text-xs text-muted-foreground">Alles ist aktuell</span>
           )
         ) : null}
       </PopoverContent>
@@ -243,13 +304,13 @@ export default function PublishPopover({
         onEscapeKeyDown={(e) => { if (isReverting) e.preventDefault(); }}
       >
         <DialogHeader>
-          <DialogTitle>Revert to published version</DialogTitle>
+          <DialogTitle>Auf Live-Version zurücksetzen</DialogTitle>
         </DialogHeader>
 
         <div className="flex flex-col gap-2">
           <DialogDescription>
-            All unpublished changes will be discarded and replaced with the last
-            published version. The builder will reload after this operation.
+            Alle unveröffentlichten Änderungen werden verworfen und durch die letzte
+            Live-Version ersetzt. Das Studio lädt danach neu.
           </DialogDescription>
         </div>
 
@@ -260,7 +321,7 @@ export default function PublishPopover({
             onClick={() => setIsRevertDialogOpen(false)}
             disabled={isReverting}
           >
-            Cancel
+            Abbrechen
           </Button>
           <Button
             variant="destructive"
@@ -268,7 +329,7 @@ export default function PublishPopover({
             onClick={handleRevertConfirm}
             disabled={isReverting}
           >
-            {isReverting ? <><Spinner /> Reverting...</> : 'Revert'}
+            {isReverting ? <><Spinner /> Rollback läuft...</> : 'Rollback'}
           </Button>
         </DialogFooter>
       </DialogContent>

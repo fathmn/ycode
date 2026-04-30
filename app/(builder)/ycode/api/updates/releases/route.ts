@@ -51,7 +51,7 @@ export async function GET() {
       return noCache({
         releases: [],
         currentVersion: CURRENT_VERSION,
-        error: 'Unable to fetch releases',
+        error: 'Releases konnten nicht geladen werden',
       });
     }
 
@@ -83,7 +83,7 @@ export async function GET() {
     return noCache({
       releases: [],
       currentVersion: CURRENT_VERSION,
-      error: 'Failed to fetch releases',
+      error: 'Releases konnten nicht geladen werden',
     });
   }
 }
