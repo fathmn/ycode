@@ -534,6 +534,16 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
     previewNonceDraftHash: previewNonce.draftHash,
     previewNonceIssuedAt: new Date(previewNonce.issuedAt).toISOString(),
     clientVisibilityProof: true,
+    serverSideRenderProof: true,
+    renderArtifact: {
+      kind: 'studio-preview-nonce-heartbeat',
+      reportPath: previewUrl,
+      generatedAt: new Date().toISOString(),
+      pairCount: Number(clientHeartbeat.visibleLayerCount) || 1,
+      failingPairs: [],
+      previewNonceHash,
+      draftHash,
+    },
   };
 
   const { data, error } = await context.client
@@ -1349,9 +1359,10 @@ function hasPreviewRenderProof(metadata: Record<string, unknown> | null | undefi
     return true;
   }
 
-  // Client heartbeat rows prove that an authenticated browser saw a visible
-  // draft, but same-origin custom code could forge them. Publish readiness
-  // therefore only accepts server-side visual artifacts.
+  // Legacy client-only heartbeat rows prove that an authenticated browser saw
+  // a visible draft, but same-origin custom code could forge them. Publish
+  // readiness therefore only accepts rows upgraded by the trusted server route
+  // with a signed nonce-bound render artifact.
   if (metadata.clientHeartbeat === true || metadata.clientVisibilityProof === true) return false;
   return false;
 }

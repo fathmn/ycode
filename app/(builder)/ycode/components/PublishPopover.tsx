@@ -99,7 +99,7 @@ export default function PublishPopover({
   const livePublishBlocked = publishReadiness?.livePublishAvailable !== true;
   const livePublishBlockerMessage = publishReadiness?.blockerMessage
     || 'Live-Schaltung ist blockiert, bis projektgebundenes Publishing verfügbar ist.';
-  const previewApproved = publishReadiness?.previewApproved === true || previewApprovedAt !== null;
+  const previewApproved = publishReadiness?.previewApproved === true;
 
   // Load changes count when popover opens
   useEffect(() => {
@@ -135,7 +135,7 @@ export default function PublishPopover({
     }
   }, [selectedProjectSlug, isOpen]);
 
-  const loadPublishReadiness = async () => {
+  const loadPublishReadiness = async (): Promise<PublishReadiness | null> => {
     const response = await publishApi.getReadiness();
     if (response.data) {
       setPublishReadiness(response.data);
@@ -147,6 +147,7 @@ export default function PublishPopover({
       } else {
         loadChangesCount(response.data);
       }
+      return response.data;
     } else {
       setPublishReadiness({
         livePublishAvailable: false,
@@ -154,6 +155,8 @@ export default function PublishPopover({
         blockerMessage: response.error || 'Publish-Bereitschaft konnte nicht geprüft werden',
       });
       setChangeCounts(null);
+      setPreviewApprovedAt(null);
+      return null;
     }
   };
 
@@ -219,11 +222,18 @@ export default function PublishPopover({
         throw new Error(result.error);
       }
 
-      setPreviewApprovedAt(result.data?.created_at || new Date().toISOString());
-      await loadPublishReadiness();
-      toast.success('Vorschau für Live-Schaltung freigegeben');
+      const readiness = await loadPublishReadiness();
+      if (readiness?.previewApproved === true) {
+        setPreviewApprovedAt(result.data?.created_at || new Date().toISOString());
+        toast.success('Vorschau für Live-Schaltung freigegeben');
+      } else {
+        setPreviewApprovedAt(null);
+        toast.error(readiness?.blockerMessage || 'Vorschau konnte nicht für den aktuellen Entwurf freigegeben werden');
+      }
     } catch (error) {
       console.error('Failed to approve preview:', error);
+      setPreviewApprovedAt(null);
+      await loadPublishReadiness();
       toast.error(error instanceof Error ? error.message : 'Vorschau konnte nicht freigegeben werden');
     } finally {
       setIsApprovingPreview(false);
