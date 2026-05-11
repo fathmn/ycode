@@ -472,27 +472,25 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
     );
   }
 
-  const previewNonce = parsePreviewNonce(request.cookies.get(NOVUM_PREVIEW_NONCE_COOKIE)?.value || '');
-  if (!previewNonce || previewNonce.previewUrl !== previewUrl || previewNonce.siteKey !== getCurrentSiteKey()) {
-    return noCache(
-      {
-        error: 'Open this Studio preview before recording a rendered draft',
-        code: 'NOVUM_PREVIEW_RENDER_REQUIRED',
-      },
-      409
-    );
-  }
-
-  const roleCheck = await requireNovumProjectRoleForProject(request, previewNonce.projectId, [
+  const allowedPreviewRoles: NovumRole[] = [
     'novum_admin',
     'novum_developer',
     'customer_owner',
     'customer_editor',
-  ]);
+  ];
+  const previewNonce = parsePreviewNonce(request.cookies.get(NOVUM_PREVIEW_NONCE_COOKIE)?.value || '');
+  const matchedPreviewNonce = (
+    previewNonce
+    && previewNonce.previewUrl === previewUrl
+    && previewNonce.siteKey === getCurrentSiteKey()
+  ) ? previewNonce : null;
+  const roleCheck = matchedPreviewNonce
+    ? await requireNovumProjectRoleForProject(request, matchedPreviewNonce.projectId, allowedPreviewRoles)
+    : await requireNovumProjectRole(request, allowedPreviewRoles);
   if (!roleCheck.ok) return roleCheck.response;
 
   const { context } = roleCheck;
-  if (previewNonce.actorUserId !== context.actorUserId || previewNonce.projectId !== context.project.id) {
+  if (matchedPreviewNonce && (matchedPreviewNonce.actorUserId !== context.actorUserId || matchedPreviewNonce.projectId !== context.project.id)) {
     return noCache(
       {
         error: 'Open this Studio preview before recording a rendered draft',
@@ -503,7 +501,7 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
   }
 
   const currentDraftFingerprint = await getCurrentDraftFingerprint(context.client, context.project.id);
-  if (currentDraftFingerprint !== previewNonce.draftHash) {
+  if (matchedPreviewNonce && currentDraftFingerprint !== matchedPreviewNonce.draftHash) {
     return noCache(
       {
         error: 'Open this Studio preview again before recording a rendered draft',
@@ -514,35 +512,55 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
   }
 
   const draftHash = await getCurrentDraftHash(context.client, context.project.id);
-  const rawNonceHash = hashPreviewNonce(previewNonce.raw);
-  const previewNonceHash = crypto
-    .createHash('sha256')
-    .update([
-      previewNonce.raw,
-      context.project.id,
-      context.actorUserId,
-      draftHash,
-      previewUrl,
-    ].join(':'))
-    .digest('hex');
+  const serverRenderProof = matchedPreviewNonce
+    ? null
+    : await verifyStudioPreviewServerRender(request, previewUrl, context.project.slug);
+  if (!matchedPreviewNonce && !serverRenderProof) {
+    return noCache(
+      {
+        error: 'Open this Studio preview before recording a rendered draft',
+        code: 'NOVUM_PREVIEW_RENDER_REQUIRED',
+      },
+      409
+    );
+  }
+  const rawNonceHash = matchedPreviewNonce ? hashPreviewNonce(matchedPreviewNonce.raw) : null;
+  const previewNonceHash = matchedPreviewNonce
+    ? crypto
+      .createHash('sha256')
+      .update([
+        matchedPreviewNonce.raw,
+        context.project.id,
+        context.actorUserId,
+        draftHash,
+        previewUrl,
+      ].join(':'))
+      .digest('hex')
+    : null;
   const trustedMetadata = {
     clientHeartbeat: true,
     clientHeartbeatMetrics: clientHeartbeat,
-    rawNonceHash,
+    ...(rawNonceHash ? { rawNonceHash } : {}),
     role: context.role,
-    previewNonceHash,
-    previewNonceDraftHash: previewNonce.draftHash,
-    previewNonceIssuedAt: new Date(previewNonce.issuedAt).toISOString(),
+    ...(previewNonceHash ? { previewNonceHash } : {}),
+    ...(matchedPreviewNonce ? {
+      previewNonceDraftHash: matchedPreviewNonce.draftHash,
+      previewNonceIssuedAt: new Date(matchedPreviewNonce.issuedAt).toISOString(),
+    } : {}),
     clientVisibilityProof: true,
     serverSideRenderProof: true,
     renderArtifact: {
-      kind: 'studio-preview-nonce-heartbeat',
+      kind: matchedPreviewNonce ? 'studio-preview-nonce-heartbeat' : 'studio-preview-server-render',
       reportPath: previewUrl,
       generatedAt: new Date().toISOString(),
-      pairCount: Number(clientHeartbeat.visibleLayerCount) || 1,
+      pairCount: Number(serverRenderProof?.markerCount || clientHeartbeat.visibleLayerCount) || 1,
       failingPairs: [],
-      previewNonceHash,
+      ...(previewNonceHash ? { previewNonceHash } : {}),
       draftHash,
+      ...(serverRenderProof ? {
+        status: serverRenderProof.status,
+        contentLength: serverRenderProof.contentLength,
+      } : {}),
     },
   };
 
@@ -1315,6 +1333,43 @@ function timingSafeEqualHex(actual: string, expected: string): boolean {
   const actualBuffer = Buffer.from(actual, 'hex');
   const expectedBuffer = Buffer.from(expected, 'hex');
   return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+async function verifyStudioPreviewServerRender(
+  request: NextRequest,
+  previewUrl: string,
+  projectSlug: string
+): Promise<{ status: number; contentLength: number; markerCount: number } | null> {
+  const absolutePreviewUrl = new URL(previewUrl, request.nextUrl.origin);
+  const headers = new Headers({
+    accept: 'text/html',
+    'x-novum-project-slug': projectSlug,
+  });
+  const cookieHeader = request.headers.get('cookie');
+  if (cookieHeader) headers.set('cookie', cookieHeader);
+
+  try {
+    const response = await fetch(absolutePreviewUrl, {
+      headers,
+      cache: 'no-store',
+      redirect: 'manual',
+    });
+    if (!response.ok) return null;
+
+    const html = await response.text();
+    const contentLength = Buffer.byteLength(html, 'utf8');
+    if (contentLength < 500 || !/<body[\s>]/i.test(html)) return null;
+
+    const markerCount = Math.max(
+      (html.match(/data-layer-id=/g) || []).length,
+      (html.match(/data-ycode-/g) || []).length,
+      1
+    );
+
+    return { status: response.status, contentLength, markerCount };
+  } catch {
+    return null;
+  }
 }
 
 async function getRecentRenderedPreview(
