@@ -44,6 +44,7 @@ import Icon from '@/components/ui/icon';
 import { Separator } from '@/components/ui/separator';
 import { BackupRestoreDialog } from '@/components/project/BackupRestoreDialog';
 import { isCloudVersion } from '@/lib/utils';
+import { toast } from 'sonner';
 
 type StudioProject = {
   slug: string;
@@ -111,6 +112,7 @@ export default function HeaderBar({
   // Optimistic nav button state - set immediately on click, cleared when URL catches up
   type NavButton = 'design' | 'cms' | 'forms';
   const [optimisticNav, setOptimisticNav] = useState<NavButton | null>(null);
+  const [isEnteringPreview, setIsEnteringPreview] = useState(false);
 
   // Clear optimistic state once the URL reflects the clicked route
   useEffect(() => {
@@ -645,7 +647,7 @@ export default function HeaderBar({
         <Button
           size="sm"
           variant="secondary"
-          onClick={() => {
+          onClick={async () => {
             if (isPreviewMode) {
               if (previewReturnUrl) {
                 // Navigate back while keeping preview visible — the useEffect
@@ -661,6 +663,21 @@ export default function HeaderBar({
               setPreviewMode(false);
               updateQueryParams({ preview: undefined });
               return;
+            }
+
+            if (currentPageId) {
+              setIsEnteringPreview(true);
+              try {
+                await saveImmediately(currentPageId);
+              } catch (error) {
+                console.error('Failed to save before preview:', error);
+                toast.error('Vorschau konnte nicht geöffnet werden', {
+                  description: 'Der aktuelle Entwurf konnte nicht gespeichert werden.',
+                });
+                return;
+              } finally {
+                setIsEnteringPreview(false);
+              }
             }
 
             setPreviewMode(true);
@@ -679,7 +696,7 @@ export default function HeaderBar({
 
             updateQueryParams({ preview: 'true' });
           }}
-          disabled={!currentPage || isSaving}
+          disabled={!currentPage || isSaving || isEnteringPreview}
           className={isPreviewMode ? 'bg-black text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90' : ''}
         >
           <Icon name="preview" />

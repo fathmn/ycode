@@ -1818,23 +1818,35 @@ const CenterCanvas = React.memo(function CenterCanvas({
     return withSelectedProjectPreviewParam(`/ycode/preview${path === '/' ? '' : path}`, selectedProjectSlug);
   }, [currentPage, folders, currentPageCollectionItemId, collectionItemsFromStore, collectionFieldsFromStore, selectedLocale, localeTranslations, selectedProjectSlug]);
 
+  const withPreviewRefreshParam = useCallback((url: string) => {
+    const next = new URL(url, window.location.origin);
+    next.searchParams.set('_studioPreviewRefresh', Date.now().toString());
+    return `${next.pathname}${next.search}${next.hash}`;
+  }, []);
+
   // Keep the preview iframe mounted and only change its src when the actual
   // preview URL changes. Switching Studio toolbar tabs or leaving/re-entering
-  // preview should not force a browser reload; explicit URL changes still load
-  // fresh SSR preview output.
+  // preview should not force a browser reload; clicking preview explicitly
+  // requests fresh SSR preview output after the current draft was saved.
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewFrameSrc, setPreviewFrameSrc] = useState('');
+  const prevPreviewModeForFrame = useRef(false);
   useEffect(() => {
     if (!previewUrl) {
       setIsPreviewLoading(false);
+      prevPreviewModeForFrame.current = isPreviewMode;
       return;
     }
 
-    if (previewFrameSrc === previewUrl) return;
+    const enteredPreview = isPreviewMode && !prevPreviewModeForFrame.current;
+    prevPreviewModeForFrame.current = isPreviewMode;
+    const nextFrameSrc = enteredPreview ? withPreviewRefreshParam(previewUrl) : previewUrl;
+
+    if (previewFrameSrc === nextFrameSrc) return;
 
     setIsPreviewLoading(true);
-    setPreviewFrameSrc(previewUrl);
-  }, [previewFrameSrc, previewUrl]);
+    setPreviewFrameSrc(nextFrameSrc);
+  }, [isPreviewMode, previewFrameSrc, previewUrl, withPreviewRefreshParam]);
 
   useEffect(() => {
     if (isPreviewMode) return;
