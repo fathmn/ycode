@@ -15,10 +15,20 @@ export const CANVAS_BORDER = 20;
 export const CANVAS_PADDING = CANVAS_BORDER * 2;
 
 const VIEWPORT_HEIGHT_UNITS = ['vh', 'svh', 'dvh', 'lvh'] as const;
+const CANVAS_CSS_VERSION = '0.2.1.9';
 
 const VIEWPORT_HEIGHT_PATTERN = new RegExp(
   `^(min-h|max-h|h)-\\[(\\d+(?:\\.\\d+)?)(${VIEWPORT_HEIGHT_UNITS.join('|')})\\]$`
 );
+
+// Editor viewport overrides intentionally support raw viewport lengths only,
+// e.g. `100svh`, `80vh`, `100dvh`. Composite expressions such as
+// `calc(100svh - 72px)` must be normalized by the importer before annotation,
+// otherwise the editor leaves them source-truthful instead of guessing.
+const VIEWPORT_LENGTH_PATTERN = new RegExp(
+  `^(\\d+(?:\\.\\d+)?)(${VIEWPORT_HEIGHT_UNITS.join('|')})$`
+);
+const VIEWPORT_OVERRIDE_ATTR = 'data-ycode-viewport-override-id';
 
 const NAMED_VIEWPORT_UTILITIES = new Set([
   'h-screen', 'min-h-screen', 'max-h-screen',
@@ -35,6 +45,17 @@ function getCssProp(prefix: string): string {
 
 function escapeSelector(cls: string): string {
   return cls.replace(/([[\](){}.:!#%^&*+?<>~=|@/\\])/g, '\\$1');
+}
+
+function escapeAttributeValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function viewportLengthToPixels(value: string | null, referenceHeight: number): number | null {
+  if (!value) return null;
+  const match = value.trim().match(VIEWPORT_LENGTH_PATTERN);
+  if (!match) return null;
+  return (parseFloat(match[1]) / 100) * referenceHeight;
 }
 
 /**
@@ -55,6 +76,24 @@ export function updateViewportOverrides(doc: Document, referenceHeight: number):
 
   const rules: string[] = [];
   const seen = new Set<string>();
+  const usedViewportOverrideIds = new Set<string>();
+  let nextViewportOverrideId = 0;
+
+  doc.querySelectorAll<HTMLElement>(`[${VIEWPORT_OVERRIDE_ATTR}]`).forEach((el) => {
+    const overrideId = el.getAttribute(VIEWPORT_OVERRIDE_ATTR);
+    if (overrideId) usedViewportOverrideIds.add(overrideId);
+  });
+
+  const allocateViewportOverrideId = (): string => {
+    let candidate = `v${nextViewportOverrideId}`;
+    while (usedViewportOverrideIds.has(candidate)) {
+      nextViewportOverrideId += 1;
+      candidate = `v${nextViewportOverrideId}`;
+    }
+    usedViewportOverrideIds.add(candidate);
+    nextViewportOverrideId += 1;
+    return candidate;
+  };
 
   doc.querySelectorAll('[class]').forEach(el => {
     const classes = (el.getAttribute('class') || '').split(/\s+/);
@@ -80,6 +119,44 @@ export function updateViewportOverrides(doc: Document, referenceHeight: number):
         const prop = getCssProp(prefix);
         rules.push(`.${escapeSelector(cls)}{${prop}:${pixels}px !important}`);
       }
+    }
+  });
+
+  // Studio-imported layers can carry source-truthful viewport heights as
+  // inline styles, e.g. style="min-height:100svh". Inline styles outrank the
+  // class-based overrides above, so the importer annotates such layers with
+  // semantic data attributes. The editor canvas can then map the source
+  // viewport unit to the editor's reference viewport height without changing
+  // published/live rendering.
+  doc.querySelectorAll<HTMLElement>('[data-studio-height-mode="viewport"]').forEach((el) => {
+    const sourceMinHeight = el.getAttribute('data-studio-source-min-height');
+    const sourceHeight = el.getAttribute('data-studio-source-height');
+    const sourceMaxHeight = el.getAttribute('data-studio-source-max-height');
+    const attrRules: Array<[string, string, number | null]> = [
+      ['data-studio-source-min-height', 'min-height', viewportLengthToPixels(sourceMinHeight, referenceHeight)],
+      ['data-studio-source-height', 'height', viewportLengthToPixels(sourceHeight, referenceHeight)],
+      ['data-studio-source-max-height', 'max-height', viewportLengthToPixels(sourceMaxHeight, referenceHeight)],
+    ];
+
+    const matchedProps: string[] = [];
+    for (const [attr, prop, pixels] of attrRules) {
+      if (pixels === null) continue;
+      const sourceValue = el.getAttribute(attr);
+      if (!sourceValue) continue;
+      if (el.style.getPropertyValue(prop).trim() !== sourceValue) continue;
+      matchedProps.push(prop);
+      let overrideId = el.getAttribute(VIEWPORT_OVERRIDE_ATTR);
+      if (!overrideId) {
+        overrideId = allocateViewportOverrideId();
+        el.setAttribute(VIEWPORT_OVERRIDE_ATTR, overrideId);
+      }
+      const selector = `[${VIEWPORT_OVERRIDE_ATTR}="${escapeAttributeValue(overrideId)}"]`;
+      if (seen.has(`${selector}:${prop}`)) continue;
+      seen.add(`${selector}:${prop}`);
+      rules.push(`${selector}{${prop}:${pixels}px !important}`);
+    }
+    if (matchedProps.length === 0) {
+      el.removeAttribute(VIEWPORT_OVERRIDE_ATTR);
     }
   });
 
@@ -162,7 +239,7 @@ export function getCanvasIframeHtml(mountId: string = 'canvas-mount'): string {
       background-size: 16px 16px !important;
     }
   </style>
-  <link rel="stylesheet" href="/canvas.css?v=0.2.1.1">
+  <link rel="stylesheet" href="/canvas.css?v=${CANVAS_CSS_VERSION}">
   <style id="ycode-viewport-overrides">
     /* Dynamically populated: overrides vh/svh/dvh/lvh with fixed px values */
   </style>

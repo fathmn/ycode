@@ -59,6 +59,7 @@ import RichTextEditorSheet from './RichTextEditorSheet';
 import { buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page-utils';
 import { getTranslationValue } from '@/lib/localisation-utils';
 import { cn } from '@/lib/utils';
+import { STUDIO_PROJECT_SELECTION_EVENT, getSelectedStudioProjectSlug } from '@/lib/api';
 import { getCollectionVariable, canDeleteLayer, findLayerById, findParentCollectionLayer, canLayerHaveLink, updateLayerProps, removeRichTextSublayer, isRichTextLayer, getLayerCmsFieldBinding } from '@/lib/layer-utils';
 import { CANVAS_BORDER, CANVAS_PADDING, updateViewportOverrides } from '@/lib/canvas-utils';
 import { BREAKPOINTS } from '@/lib/breakpoint-utils';
@@ -104,6 +105,33 @@ interface CenterCanvasProps {
   onExitComponentEditMode?: () => void;
   liveLayerUpdates?: UseLiveLayerUpdatesReturn | null;
   liveComponentUpdates?: UseLiveComponentUpdatesReturn | null;
+}
+
+function withSelectedProjectPreviewParam(previewPath: string, projectSlug: string | null): string {
+  if (!previewPath.startsWith('/ycode/preview')) return previewPath;
+  if (!projectSlug) return '';
+  const url = new URL(previewPath, 'http://studio.local');
+  if (!url.searchParams.has('project')) {
+    url.searchParams.set('project', projectSlug);
+  }
+  return `${url.pathname}${url.search}`;
+}
+
+function getSelectedPreviewProjectSlug(): string | null {
+  if (typeof window === 'undefined') return null;
+  const selected = getSelectedStudioProjectSlug();
+  if (selected) return selected;
+  const projectParam = new URLSearchParams(window.location.search).get('project');
+  return projectParam && projectParam.trim() ? projectParam.trim() : null;
+}
+
+function buildLayerOrderSignature(layers: Layer[]): string {
+  return layers.map((layer) => {
+    const childSignature = layer.children?.length
+      ? `(${buildLayerOrderSignature(layer.children)})`
+      : '';
+    return `${layer.id}${childSignature}`;
+  }).join('|');
 }
 
 // Viewport widths are derived from BREAKPOINTS to avoid sitting on exact
@@ -633,6 +661,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const hoveredLayerId = useEditorStore((state) => state.hoveredLayerId);
   const setHoveredLayerId = useEditorStore((state) => state.setHoveredLayerId);
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
+  const [selectedProjectSlug, setSelectedProjectSlug] = useState<string | null>(() => getSelectedPreviewProjectSlug());
   const activeSidebarTab = useEditorStore((state) => state.activeSidebarTab);
   const activeInteractionTriggerLayerId = useEditorStore((state) => state.activeInteractionTriggerLayerId);
   const richTextSheetLayerId = useEditorStore((state) => state.richTextSheetLayerId);
@@ -643,6 +672,27 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const elementPicker = useEditorStore((state) => state.elementPicker);
   const stopElementPicker = useEditorStore((state) => state.stopElementPicker);
   const assets = useAssetsStore((state) => state.assets);
+  const { urlState, navigateToLayers, navigateToPage, navigateToPageEdit, updateQueryParams } = useEditorUrl();
+
+  useEffect(() => {
+    const updateSelectedProject = () => setSelectedProjectSlug(getSelectedPreviewProjectSlug());
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === 'studio:selected-project-slug' || event.key === 'novum:selected-project-slug') {
+        updateSelectedProject();
+      }
+    };
+    window.addEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
+    window.addEventListener('storage', handleStorage);
+    updateSelectedProject();
+    return () => {
+      window.removeEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    setSelectedProjectSlug(getSelectedPreviewProjectSlug());
+  }, [urlState]);
 
   // Note: Canvas drag-and-drop state is handled by useCanvasDropDetection hook
   // and CanvasDropIndicatorOverlay component (they subscribe to store directly)
@@ -709,7 +759,6 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const referencedItems = useCollectionLayerStore((state) => state.referencedItems);
   const fetchReferencedCollectionItems = useCollectionLayerStore((state) => state.fetchReferencedCollectionItems);
 
-  const { urlState, navigateToLayers, navigateToPage, navigateToPageEdit, updateQueryParams } = useEditorUrl();
   const components = useComponentsStore((state) => state.components);
   const componentDrafts = useComponentsStore((state) => state.componentDrafts);
   const [collectionItems, setCollectionItems] = useState<Array<{ id: string; label: string }>>([]);
@@ -741,7 +790,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
   // Parse viewport width
   const viewportWidth = useMemo(() => {
-    return parseInt(viewportSizes[viewportMode].width);
+    return parseInt((viewportSizes[viewportMode] || viewportSizes.desktop).width);
   }, [viewportMode]);
 
   // Calculate default iframe height to fill canvas — track current container height
@@ -801,7 +850,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
   });
 
   // Independent zoom for the preview (second useZoom instance, active only in preview mode)
-  const previewContentWidth = parseInt(viewportSizes[viewportMode].width);
+  const previewContentWidth = parseInt((viewportSizes[viewportMode] || viewportSizes.desktop).width);
   const {
     zoom: previewZoom,
     zoomMode: previewZoomMode,
@@ -820,6 +869,33 @@ const CenterCanvas = React.memo(function CenterCanvas({
     shortcutsEnabled: isPreviewMode,
     iframeRef,
   });
+
+  const [previewViewportHeight, setPreviewViewportHeight] = useState(0);
+
+  useEffect(() => {
+    if (!isPreviewMode) return;
+    const container = previewContainerRef.current;
+    if (!container) return;
+
+    const updatePreviewViewportHeight = () => {
+      setPreviewViewportHeight(Math.max(0, container.clientHeight - (CANVAS_BORDER * 2)));
+    };
+
+    updatePreviewViewportHeight();
+    const resizeObserver = new ResizeObserver(updatePreviewViewportHeight);
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, [isPreviewMode]);
+
+  const previewFrameHeight = useMemo(() => {
+    const viewportHeight = previewViewportHeight || defaultCanvasHeight;
+    const zoomScale = previewZoom > 0 ? previewZoom / 100 : 1;
+    return Math.max(320, viewportHeight / zoomScale);
+  }, [defaultCanvasHeight, previewViewportHeight, previewZoom]);
+  const previewCanvasHeight = useMemo(() => (
+    Math.max(previewContentHeight || 0, previewFrameHeight)
+  ), [previewContentHeight, previewFrameHeight]);
 
   // Calculate final iframe height — always stretch so the scaled canvas fills the
   // visible viewport at any zoom level. When the actual content is taller than the
@@ -846,9 +922,9 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
       const wrapper = iframe.parentElement as HTMLElement | null;
       const containerEl = previewContainerRef.current;
-      const refHeight = containerEl
+      const refHeight = iframe.clientHeight || (containerEl
         ? containerEl.clientHeight - CANVAS_PADDING
-        : 0;
+        : 0);
 
       if (refHeight > 0) {
         updateViewportOverrides(doc, refHeight);
@@ -872,9 +948,9 @@ const CenterCanvas = React.memo(function CenterCanvas({
           if (!wrapper) return;
 
           const freshContainerEl = previewContainerRef.current;
-          const freshRefHeight = freshContainerEl
+          const freshRefHeight = iframe.clientHeight || (freshContainerEl
             ? freshContainerEl.clientHeight - CANVAS_PADDING
-            : refHeight;
+            : refHeight);
 
           if (freshRefHeight <= 0) return;
 
@@ -1091,6 +1167,8 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
     return currentDraft ? currentDraft.layers : [];
   }, [editingComponentId, componentDrafts, currentPageId, currentDraft]);
+
+  const layersOrderKey = useMemo(() => buildLayerOrderSignature(layers), [layers]);
 
   // Check if we're waiting for a draft to load (page selected but no draft yet)
   const isDraftLoading = useMemo(() => {
@@ -1690,7 +1768,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
     // Error pages use special preview route
     if (currentPage.error_page !== null) {
-      return `/ycode/preview/error-pages/${currentPage.error_page}`;
+      return withSelectedProjectPreviewParam(`/ycode/preview/error-pages/${currentPage.error_page}`, selectedProjectSlug);
     }
 
     // Get collection item slug value for dynamic pages (with translation support)
@@ -1737,24 +1815,33 @@ const CenterCanvas = React.memo(function CenterCanvas({
       ? buildLocalizedDynamicPageUrl(currentPage, folders, collectionItemSlug, selectedLocale, localeTranslations)
       : buildLocalizedSlugPath(currentPage, folders, 'page', selectedLocale, localeTranslations);
 
-    return `/ycode/preview${path === '/' ? '' : path}`;
-  }, [currentPage, folders, currentPageCollectionItemId, collectionItemsFromStore, collectionFieldsFromStore, selectedLocale, localeTranslations]);
+    return withSelectedProjectPreviewParam(`/ycode/preview${path === '/' ? '' : path}`, selectedProjectSlug);
+  }, [currentPage, folders, currentPageCollectionItemId, collectionItemsFromStore, collectionFieldsFromStore, selectedLocale, localeTranslations, selectedProjectSlug]);
 
-  // Reload preview iframe every time preview mode opens (covers all change sources:
-  // layer edits, component updates, CMS, layer styles, color variables, etc.)
+  // Keep the preview iframe mounted and only change its src when the actual
+  // preview URL changes. Switching Studio toolbar tabs or leaving/re-entering
+  // preview should not force a browser reload; explicit URL changes still load
+  // fresh SSR preview output.
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewFrameSrc, setPreviewFrameSrc] = useState('');
   useEffect(() => {
-    if (!isPreviewMode || !previewUrl) return;
-    const iframe = iframeRef.current;
-    if (!iframe) return;
-    setIsPreviewLoading(true);
-    iframe.src = previewUrl;
+    if (!previewUrl) {
+      setIsPreviewLoading(false);
+      return;
+    }
 
-    return () => {
-      previewObserverRef.current?.disconnect();
-      previewObserverRef.current = null;
-    };
-  }, [isPreviewMode, previewUrl]);
+    if (previewFrameSrc === previewUrl) return;
+
+    setIsPreviewLoading(true);
+    setPreviewFrameSrc(previewUrl);
+  }, [previewFrameSrc, previewUrl]);
+
+  useEffect(() => {
+    if (isPreviewMode) return;
+    setIsPreviewLoading(false);
+    previewObserverRef.current?.disconnect();
+    previewObserverRef.current = null;
+  }, [isPreviewMode]);
 
   // Autofit when entering preview mode (not on every breakpoint change)
   const prevIsPreviewMode = useRef(false);
@@ -1769,6 +1856,50 @@ const CenterCanvas = React.memo(function CenterCanvas({
     setIsPreviewLoading(false);
     setupPreviewMeasurement();
   }, [setupPreviewMeasurement]);
+
+  useEffect(() => {
+    if (!isPreviewMode || !previewFrameSrc) return;
+
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const markReady = () => {
+      if (cancelled) return;
+      setIsPreviewLoading(false);
+      setupPreviewMeasurement();
+    };
+
+    const fallbackId = setTimeout(() => {
+      markReady();
+    }, 8000);
+
+    const checkReady = () => {
+      if (cancelled) return;
+
+      try {
+        const iframe = iframeRef.current;
+        const doc = iframe?.contentDocument;
+        const frameHref = doc?.location?.href || '';
+
+        if (doc && frameHref !== 'about:blank' && doc.readyState === 'complete') {
+          markReady();
+          return;
+        }
+      } catch {
+        // Cross-origin or transient iframe state: keep waiting for onLoad.
+      }
+
+      timeoutId = setTimeout(checkReady, 100);
+    };
+
+    timeoutId = setTimeout(checkReady, 100);
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      clearTimeout(fallbackId);
+    };
+  }, [isPreviewMode, previewFrameSrc, setupPreviewMeasurement]);
 
   // Load collection items when dynamic page is selected
   useEffect(() => {
@@ -2406,7 +2537,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
                   {layers.length > 0 ? (
                     <>
                       <Canvas
-                        key={`editor-${currentPageId}`}
+                        key={`editor-${currentPageId}-${layersOrderKey}`}
                         layers={layers}
                         components={components}
                         selectedLayerId={selectedLayerId}
@@ -2696,7 +2827,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
           className="flex-1 relative flex items-start overflow-auto"
           style={{ padding: `${CANVAS_BORDER}px` }}
         >
-          {isPreviewLoading && (
+          {isPreviewLoading && !previewFrameSrc && (
             <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-background">
               <Spinner />
             </div>
@@ -2707,20 +2838,44 @@ const CenterCanvas = React.memo(function CenterCanvas({
               zoom: previewZoom / 100,
               width: viewportMode === 'desktop' && previewZoomMode === 'autofit'
                 ? '100%'
-                : viewportSizes[viewportMode].width,
+                : (viewportSizes[viewportMode] || viewportSizes.desktop).width,
               minWidth: viewportMode === 'desktop' && previewZoomMode === 'autofit'
-                ? viewportSizes[viewportMode].width
+                ? (viewportSizes[viewportMode] || viewportSizes.desktop).width
                 : undefined,
-              height: previewContentHeight > 0 ? `${previewContentHeight}px` : '100%',
+              height: `${previewCanvasHeight}px`,
               flexShrink: 0,
               transition: 'none',
             }}
           >
-            {layers.length > 0 && isPreviewMode ? (
+            {isPreviewMode && !previewUrl ? (
+              <div className="w-full h-full flex items-center justify-center p-12">
+                <div className="text-center max-w-md">
+                  <div className="w-20 h-20 bg-linear-to-br from-blue-100 to-blue-50 rounded-2xl mx-auto mb-6 flex items-center justify-center">
+                    <Icon name="layout" className="w-10 h-10 text-blue-500" />
+                  </div>
+                  <h2 className="text-2xl font-bold text-gray-900 mb-3">
+                    Projekt auswählen
+                  </h2>
+                  <p className="text-gray-600">
+                    Wähle ein Studio-Projekt aus, um die Vorschau zu öffnen.
+                  </p>
+                </div>
+              </div>
+            ) : isPreviewMode && previewFrameSrc ? (
+              // The outer wrapper carries the measured page height so the Studio
+              // preview pane has the right scroll extent. The iframe itself must
+              // stay viewport-height: source FadeIn/IntersectionObserver logic
+              // depends on iframe document scrollY changing as the user scrolls.
               <iframe
                 ref={iframeRef}
-                src={previewUrl}
-                className="w-full h-full border-0"
+                src={previewFrameSrc}
+                className="w-full border-0"
+                style={{
+                  display: 'block',
+                  height: `${previewFrameHeight}px`,
+                  position: 'sticky',
+                  top: 0,
+                }}
                 title="Preview"
                 tabIndex={-1}
                 onLoad={handlePreviewLoad}

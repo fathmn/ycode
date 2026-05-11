@@ -12,6 +12,96 @@ import { buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page
 import { isAssetFieldType, isVirtualAssetField } from '@/lib/collection-field-utils';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
 
+const PREVIEW_ROUTE_PREFIX = '/ycode/preview';
+
+const RESERVED_PREVIEW_PATH_PREFIXES = ['/ycode', '/api', '/_next'];
+const STATIC_ASSET_PATH_RE = /\.(?:avif|bmp|css|csv|eot|gif|ico|jpeg|jpg|js|json|map|mp3|mp4|otf|pdf|png|svg|ttf|txt|webm|webp|woff|woff2|xml|zip)(?:[?#].*)?$/i;
+const SAFE_HREF_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+
+function containsControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const charCode = value.charCodeAt(index);
+    if (charCode <= 31 || charCode === 127) return true;
+  }
+  return false;
+}
+
+function isSafeHrefProtocol(href: string): boolean {
+  const value = href.trim();
+  if (!value || containsControlCharacter(value)) return false;
+  if (value.startsWith('/') || value.startsWith('#')) return true;
+
+  const schemeMatch = value.match(/^([a-z][a-z0-9+.-]*):/i);
+  if (!schemeMatch) return true;
+
+  const protocol = `${schemeMatch[1].toLowerCase()}:`;
+  return SAFE_HREF_PROTOCOLS.has(protocol);
+}
+
+export function sanitizeHrefForAttribute(href: string | null | undefined): string | null {
+  if (typeof href !== 'string') return null;
+  const value = href.trim();
+  if (!isSafeHrefProtocol(value)) return null;
+  return value || null;
+}
+
+export function shouldPrefixPreviewHref(href: string): boolean {
+  if (!sanitizeHrefForAttribute(href) || !href.startsWith('/') || href.startsWith('//')) return false;
+  const path = href.split(/[?#]/)[0];
+  if (RESERVED_PREVIEW_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) return false;
+  if (STATIC_ASSET_PATH_RE.test(href)) return false;
+  return true;
+}
+
+export function prefixPreviewHref(href: string, previewProjectParam?: string | null): string {
+  const explicitProject = typeof previewProjectParam === 'string' && previewProjectParam.trim()
+    ? previewProjectParam.trim()
+    : null;
+  const appendProjectParam = (value: string, project: string): string => {
+    try {
+      const target = new URL(value, 'http://ycode.local');
+      target.searchParams.set('project', project);
+      return `${target.pathname}${target.search}${target.hash}`;
+    } catch {
+      return value;
+    }
+  };
+
+  if (href === PREVIEW_ROUTE_PREFIX || href.startsWith(`${PREVIEW_ROUTE_PREFIX}/`)) {
+    if (explicitProject) return appendProjectParam(href, explicitProject);
+    if (typeof window === 'undefined') return href;
+    try {
+      const current = new URL(window.location.href);
+      const project = current.searchParams.get('project');
+      return project ? appendProjectParam(href, project) : href;
+    } catch {
+      return href;
+    }
+  }
+
+  if (!shouldPrefixPreviewHref(href)) {
+    return href;
+  }
+
+  const prefixed = `${PREVIEW_ROUTE_PREFIX}${href === '/' ? '' : href}`;
+  if (explicitProject) {
+    return appendProjectParam(prefixed, explicitProject);
+  }
+  if (typeof window === 'undefined') return prefixed;
+
+  try {
+    const current = new URL(window.location.href);
+    if (current.pathname !== PREVIEW_ROUTE_PREFIX && !current.pathname.startsWith(`${PREVIEW_ROUTE_PREFIX}/`)) {
+      return prefixed;
+    }
+    const project = current.searchParams.get('project');
+    if (!project) return prefixed;
+    return appendProjectParam(prefixed, project);
+  } catch {
+    return prefixed;
+  }
+}
+
 // ============================================================================
 // LinkSettings Validation
 // ============================================================================
@@ -268,6 +358,8 @@ export interface LinkResolutionContext {
    * for any render whose root is a dynamic collection page.
    */
   pageCollectionSortedItemIds?: string[];
+  /** Active Studio project slug/domain from /ycode/preview?project=... */
+  previewProjectParam?: string | null;
 }
 
 /**
@@ -387,10 +479,11 @@ export function resolveCollectionLinkValue(
   linkValue: CollectionLinkValue,
   context: LinkResolutionContext
 ): string | null {
-  const { pages, folders, collectionItemSlugs, isPreview, locale, translations } = context;
+  const { pages, folders, collectionItemSlugs, isPreview, locale, translations, previewProjectParam } = context;
 
   if (linkValue.type === 'url') {
-    return linkValue.url || null;
+    const href = sanitizeHrefForAttribute(linkValue.url || null);
+    return href && isPreview ? prefixPreviewHref(href, previewProjectParam) : href;
   }
 
   if (linkValue.type === 'page') {
@@ -410,9 +503,8 @@ export function resolveCollectionLinkValue(
       href = buildLocalizedSlugPath(page, folders, 'page', locale, translations || undefined);
     }
 
-    // Prefix with /ycode/preview in preview mode
     if (isPreview && href) {
-      href = `/ycode/preview${href}`;
+      href = prefixPreviewHref(href, previewProjectParam);
     }
 
     // Append anchor if present
@@ -514,6 +606,7 @@ export function generateLinkHref(
                     }
                   }
                 }
+                if (!itemSlug) return null;
                 break;
               }
               default:
@@ -532,9 +625,8 @@ export function generateLinkHref(
             href = buildLocalizedSlugPath(page, folders, 'page', locale, translations || undefined);
           }
 
-          // Prefix with /ycode/preview in preview mode
           if (isPreview && href) {
-            href = `/ycode/preview${href}`;
+            href = prefixPreviewHref(href, context.previewProjectParam);
           }
         }
       }
@@ -595,6 +687,12 @@ export function generateLinkHref(
       // Anchor-only link (same page)
       href = `#${anchorValue}`;
     }
+  }
+
+  href = sanitizeHrefForAttribute(href) || '';
+
+  if (isPreview && href) {
+    href = prefixPreviewHref(href, context.previewProjectParam);
   }
 
   return href || null;

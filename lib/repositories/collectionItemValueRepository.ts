@@ -5,6 +5,7 @@ import { castValue, valueToString } from '../collection-utils';
 import { generateCollectionItemContentHash } from '../hash-utils';
 import { randomUUID } from 'crypto';
 import { deleteTranslationsInBulk, markTranslationsIncomplete } from '@/lib/repositories/translationRepository';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 
 /**
  * Collection Item Value Repository
@@ -85,7 +86,8 @@ export interface UpdateCollectionItemValueData {
  */
 export async function getValuesByItemIds(
   item_ids: string[],
-  is_published: boolean = false
+  is_published: boolean = false,
+  projectId?: string | null
 ): Promise<Record<string, Record<string, any>>> {
   const client = await getSupabaseAdmin();
 
@@ -106,13 +108,15 @@ export async function getValuesByItemIds(
   for (let i = 0; i < item_ids.length; i += CHUNK_SIZE) {
     const chunk = item_ids.slice(i, i + CHUNK_SIZE);
 
-    const { data, error } = await client
+    let query = client
       .from('collection_item_values')
       .select('item_id, field_id, value, collection_fields!inner(type)')
       .in('item_id', chunk)
       .eq('is_published', is_published)
       .is('deleted_at', null)
       .limit(5000);
+    query = (await applyProjectScopeToQuery(query, client, 'collection_item_values', projectId)).query;
+    const { data, error } = await query;
 
     if (error) {
       throw new Error(`Failed to fetch item values: ${error.message}`);
@@ -190,7 +194,8 @@ export async function getValueMapByFieldIds(
  */
 export async function getValuesByItemId(
   item_id: string,
-  is_published: boolean = false
+  is_published: boolean = false,
+  projectId?: string | null
 ): Promise<CollectionItemValue[]> {
   const client = await getSupabaseAdmin();
 
@@ -198,12 +203,14 @@ export async function getValuesByItemId(
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('collection_item_values')
     .select('*')
     .eq('item_id', item_id)
     .eq('is_published', is_published)
     .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'collection_item_values', projectId)).query;
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch item values: ${error.message}`);

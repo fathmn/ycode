@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllFields } from '@/lib/repositories/collectionFieldRepository';
 import { noCache } from '@/lib/api-response';
+import { resolveNovumProjectId } from '@/lib/project-scope';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -12,8 +13,14 @@ export const revalidate = 0;
  */
 export async function GET(request: NextRequest) {
   try {
+    const projectSlug = request.headers.get('x-novum-project-slug');
+    const projectId = projectSlug ? await resolveNovumProjectId(projectSlug) : null;
+    if (!projectSlug || !projectId) {
+      return noCache({ error: 'Invalid project' }, 404);
+    }
+
     // Always get draft fields in the builder
-    const fields = await getAllFields(false);
+    const fields = await getAllFields(false, projectId);
 
     return noCache({ data: fields });
   } catch (error) {

@@ -9,6 +9,7 @@ import type {
   AirtableConnection,
   AirtableFieldMapping,
 } from './types';
+import { novumFetch, studioProjectsApi } from '@/lib/api';
 
 const BASE = '/ycode/api/apps/airtable';
 const JSON_HEADERS = { 'Content-Type': 'application/json' } as const;
@@ -16,7 +17,7 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' } as const;
 import { ToastError } from '@/lib/toast-error';
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await novumFetch(url, init);
   const body = await res.json();
   if (body.error) {
     throw body.detail
@@ -48,12 +49,29 @@ function jsonPut<T>(url: string, payload: unknown): Promise<T> {
 
 let cachedConnections: AirtableConnection[] = [];
 let connectionsFetchPromise: Promise<AirtableConnection[]> | null = null;
+let canFetchConnectionsPromise: Promise<boolean> | null = null;
+
+function canFetchAdminConnections(): Promise<boolean> {
+  if (canFetchConnectionsPromise) return canFetchConnectionsPromise;
+
+  canFetchConnectionsPromise = studioProjectsApi.getAssigned()
+    .then((response) => response.data?.some((project) =>
+      project.role === 'novum_admin' || project.role === 'novum_developer'
+    ) === true)
+    .catch(() => false)
+    .finally(() => {
+      canFetchConnectionsPromise = null;
+    });
+
+  return canFetchConnectionsPromise;
+}
 
 /** Fetch connections once and cache; deduplicates concurrent calls */
 export function fetchCachedConnections(): Promise<AirtableConnection[]> {
   if (connectionsFetchPromise) return connectionsFetchPromise;
 
-  connectionsFetchPromise = jsonFetch<AirtableConnection[]>(`${BASE}/connections`)
+  connectionsFetchPromise = canFetchAdminConnections()
+    .then((canFetch) => canFetch ? jsonFetch<AirtableConnection[]>(`${BASE}/connections`) : [])
     .then((conns) => { cachedConnections = conns; return conns; })
     .catch(() => cachedConnections)
     .finally(() => { connectionsFetchPromise = null; });

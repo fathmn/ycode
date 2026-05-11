@@ -1,29 +1,62 @@
 import PageRenderer from '@/components/PageRenderer';
+import { notFound } from 'next/navigation';
+import { headers } from 'next/headers';
 import { fetchErrorPage } from '@/lib/page-fetcher';
 import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
 import { generatePageMetadata } from '@/lib/generate-page-metadata';
+import { projectLookupFromHost, resolveNovumProjectId, resolveSingleNovumProjectIdForCurrentUser } from '@/lib/project-scope';
+import { canAccessNovumProject } from '@/lib/novum-platform';
 import type { Metadata } from 'next';
 
-async function fetchPreviewDraftCss() {
-  const settings = await getSettingsByKeys(['draft_css']);
+async function fetchPreviewDraftCss(projectId?: string | null) {
+  const settings = await getSettingsByKeys(['draft_css'], projectId);
   return (settings.draft_css as string) || undefined;
 }
 
 interface ErrorPagePreviewProps {
   params: Promise<{ code: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}
+
+function getPreviewProjectParam(searchParams: { [key: string]: string | string[] | undefined }): string | null {
+  const value = searchParams.project;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+async function getPreviewProjectLookup(searchParams: { [key: string]: string | string[] | undefined }): Promise<string | null> {
+  const explicit = getPreviewProjectParam(searchParams);
+  if (explicit) return explicit;
+
+  const requestHeaders = await headers();
+  const explicitHeader = requestHeaders.get('x-novum-project-slug')?.trim();
+  if (explicitHeader) return explicitHeader;
+
+  const host = requestHeaders.get('x-forwarded-host') || requestHeaders.get('host') || '';
+  return projectLookupFromHost(host);
 }
 
 /**
  * Preview route for error pages
  * Accessible at /ycode/preview/error-pages/404, /ycode/preview/error-pages/500, etc.
  */
-export default async function ErrorPagePreview({ params }: ErrorPagePreviewProps) {
+export default async function ErrorPagePreview({ params, searchParams }: ErrorPagePreviewProps) {
   const { code } = await params;
   const errorCode = parseInt(code, 10);
+  const previewProjectParam = await getPreviewProjectLookup(await searchParams);
+  const previewProjectId = previewProjectParam
+    ? await resolveNovumProjectId(previewProjectParam)
+    : await resolveSingleNovumProjectIdForCurrentUser();
+  if (!previewProjectId) {
+    notFound();
+  }
+  if (!(await canAccessNovumProject(previewProjectId))) {
+    notFound();
+  }
+  const ycodeCoreProjectId = previewProjectId;
 
   // Fetch the error page (draft version for preview)
-  const pageData = await fetchErrorPage(errorCode, false);
+  const pageData = await fetchErrorPage(errorCode, false, undefined, ycodeCoreProjectId);
 
   if (!pageData) {
     return (
@@ -44,8 +77,8 @@ export default async function ErrorPagePreview({ params }: ErrorPagePreviewProps
 
   // Fetch draft CSS and color variables
   const [draftCSS, colorVariablesCss] = await Promise.all([
-    fetchPreviewDraftCss(),
-    generateColorVariablesCss(),
+    fetchPreviewDraftCss(ycodeCoreProjectId),
+    generateColorVariablesCss(ycodeCoreProjectId),
   ]);
 
   return (
@@ -58,23 +91,46 @@ export default async function ErrorPagePreview({ params }: ErrorPagePreviewProps
       locale={locale}
       availableLocales={availableLocales}
       isPreview={true}
+      previewProjectParam={previewProjectParam}
+      renderProjectId={ycodeCoreProjectId}
+      customCodeProjectId={previewProjectId}
       translations={translations}
     />
   );
 }
 
 // Generate metadata
-export async function generateMetadata({ params }: ErrorPagePreviewProps): Promise<Metadata> {
+export async function generateMetadata({ params, searchParams }: ErrorPagePreviewProps): Promise<Metadata> {
   const { code } = await params;
   const errorCode = parseInt(code, 10);
+  const previewProjectParam = await getPreviewProjectLookup(await searchParams);
+  const previewProjectId = previewProjectParam
+    ? await resolveNovumProjectId(previewProjectParam)
+    : await resolveSingleNovumProjectIdForCurrentUser();
+  if (!previewProjectId) {
+    return {
+      title: `[Preview] ${errorCode} error page`,
+      description: `Preview of ${errorCode} error page`,
+      robots: { index: false, follow: false },
+    };
+  }
+  if (!(await canAccessNovumProject(previewProjectId))) {
+    return {
+      title: `[Preview] ${errorCode} error page`,
+      description: `Preview of ${errorCode} error page`,
+      robots: { index: false, follow: false },
+    };
+  }
 
   // Fetch error page to get SEO settings
-  const pageData = await fetchErrorPage(errorCode, false);
+  const ycodeCoreProjectId = previewProjectId;
+  const pageData = await fetchErrorPage(errorCode, false, undefined, ycodeCoreProjectId);
 
   if (!pageData) {
     return {
       title: `[Preview] ${errorCode} error page`,
       description: `Preview of ${errorCode} error page`,
+      robots: { index: false, follow: false },
     };
   }
 

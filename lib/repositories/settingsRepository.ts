@@ -5,6 +5,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import type { Setting } from '@/types';
 
 /**
@@ -65,7 +66,7 @@ export async function getSettingByKey(key: string): Promise<any | null> {
  * @param keys - Array of setting keys to fetch
  * @returns Promise resolving to a map of key -> value
  */
-export async function getSettingsByKeys(keys: string[]): Promise<Record<string, any>> {
+export async function getSettingsByKeys(keys: string[], projectId?: string | null): Promise<Record<string, any>> {
   if (keys.length === 0) {
     return {};
   }
@@ -75,10 +76,12 @@ export async function getSettingsByKeys(keys: string[]): Promise<Record<string, 
     throw new Error('Failed to initialize Supabase client');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('settings')
     .select('key, value')
     .in('key', keys);
+  query = (await applyProjectScopeToQuery(query, client, 'settings', projectId)).query;
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch settings: ${error.message}`);

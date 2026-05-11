@@ -13,6 +13,7 @@ import { createBrowserClient } from '@/lib/supabase-browser';
 const API_BASE = '';
 const STUDIO_PROJECT_STORAGE_KEY = 'studio:selected-project-slug';
 const LEGACY_NOVUM_PROJECT_STORAGE_KEY = 'novum:selected-project-slug';
+export const STUDIO_PROJECT_SELECTION_EVENT = 'studio:selected-project-slug-changed';
 
 // Get Supabase auth token
 async function getAuthToken(): Promise<string | null> {
@@ -32,6 +33,7 @@ export function setSelectedStudioProjectSlug(slug: string): void {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(STUDIO_PROJECT_STORAGE_KEY, slug);
   window.localStorage.removeItem(LEGACY_NOVUM_PROJECT_STORAGE_KEY);
+  window.dispatchEvent(new CustomEvent(STUDIO_PROJECT_SELECTION_EVENT, { detail: { slug } }));
 }
 
 export async function studioFetch(input: RequestInfo | URL, options: RequestInit = {}): Promise<Response> {
@@ -113,6 +115,7 @@ export const novumProjectsApi = {
     slug: string;
     name: string;
     primary_domain: string | null;
+    production_url: string | null;
     status: string;
     role: string;
   }>>> {
@@ -244,6 +247,19 @@ export const pageLayersApi = {
 
 // Publish API - Global publishing endpoint
 export const publishApi = {
+  /** Get Novum publish capability from the server-side runtime flags */
+  async getReadiness(): Promise<ApiResponse<{
+    livePublishAvailable: boolean;
+    projectScopedPublishAvailable: boolean;
+    projectScopeRequired: boolean;
+    globalPublishAllowed: boolean;
+    previewApproved: boolean;
+    blockerCode: string | null;
+    blockerMessage: string | null;
+  }>> {
+    return apiRequest('/ycode/api/novum/publish-readiness');
+  },
+
   /** Get counts of unpublished items per entity type */
   async getPreview(): Promise<ApiResponse<{
     pages: number;

@@ -2,6 +2,7 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
 import type { CollectionField, CreateCollectionFieldData, UpdateCollectionFieldData } from '@/types';
 import { randomUUID } from 'crypto';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 
 /**
  * Collection Field Repository
@@ -23,7 +24,8 @@ export interface FieldFilters {
  * @param is_published - Filter for draft (false) or published (true) fields. Defaults to false (draft).
  */
 export async function getAllFields(
-  is_published: boolean = false
+  is_published: boolean = false,
+  projectId?: string | null
 ): Promise<CollectionField[]> {
   const client = await getSupabaseAdmin();
 
@@ -37,7 +39,7 @@ export async function getAllFields(
   let hasMore = true;
 
   while (hasMore) {
-    const { data, error } = await client
+    let query = client
       .from('collection_fields')
       .select('*')
       .eq('is_published', is_published)
@@ -45,6 +47,8 @@ export async function getAllFields(
       .order('collection_id', { ascending: true })
       .order('order', { ascending: true })
       .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+    query = (await applyProjectScopeToQuery(query, client, 'collection_fields', projectId)).query;
+    const { data, error } = await query;
 
     if (error) {
       throw new Error(`Failed to fetch all collection fields: ${error.message}`);
@@ -71,7 +75,8 @@ export async function getAllFields(
 export async function getFieldsByCollectionId(
   collection_id: string,
   is_published: boolean = false,
-  filters?: FieldFilters
+  filters?: FieldFilters,
+  projectId?: string | null
 ): Promise<CollectionField[]> {
   const client = await getSupabaseAdmin();
 
@@ -86,6 +91,7 @@ export async function getFieldsByCollectionId(
     .eq('is_published', is_published)
     .is('deleted_at', null)
     .order('order', { ascending: true });
+  query = (await applyProjectScopeToQuery(query, client, 'collection_fields', projectId)).query;
 
   if (filters?.excludeComputed) {
     query = query.eq('is_computed', false);

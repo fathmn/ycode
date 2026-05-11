@@ -47,7 +47,6 @@ export default function StudioProjectSelector() {
       if (!hasStoredProject && response.data.length > 0) {
         setSelectedStudioProjectSlug(response.data[0].slug);
         setSelectedSlug(response.data[0].slug);
-        window.location.reload();
       }
     };
 

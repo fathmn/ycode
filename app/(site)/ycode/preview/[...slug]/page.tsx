@@ -1,16 +1,19 @@
 import { notFound } from 'next/navigation';
+import { headers } from 'next/headers';
 import type { Metadata } from 'next';
 import { fetchPageByPath, fetchErrorPage } from '@/lib/page-fetcher';
 import PageRenderer from '@/components/PageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
+import { projectLookupFromHost, resolveNovumProjectId, resolveSingleNovumProjectIdForCurrentUser } from '@/lib/project-scope';
+import { canAccessNovumProject } from '@/lib/novum-platform';
 
 import { generatePageMetadata } from '@/lib/generate-page-metadata';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
 
-async function fetchPreviewDraftCss() {
-  const settings = await getSettingsByKeys(['draft_css']);
+async function fetchPreviewDraftCss(projectId?: string | null) {
+  const settings = await getSettingsByKeys(['draft_css'], projectId);
   return (settings.draft_css as string) || undefined;
 }
 
@@ -18,25 +21,68 @@ async function fetchPreviewDraftCss() {
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export default async function Page({ params }: { params: Promise<{ slug: string | string[] }> }) {
+type PreviewSearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
+
+function getPreviewProjectParam(searchParams: { [key: string]: string | string[] | undefined }): string | null {
+  const value = searchParams.project;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+async function getPreviewProjectLookup(searchParams: { [key: string]: string | string[] | undefined }): Promise<string | null> {
+  const explicit = getPreviewProjectParam(searchParams);
+  if (explicit) return explicit;
+
+  const requestHeaders = await headers();
+  const explicitHeader = requestHeaders.get('x-novum-project-slug')?.trim();
+  if (explicitHeader) return explicitHeader;
+
+  const host = requestHeaders.get('x-forwarded-host') || requestHeaders.get('host') || '';
+  return projectLookupFromHost(host);
+}
+
+function buildPreviewRedirectUrl(path: string, previewProjectParam: string | null): string {
+  if (!previewProjectParam) return path;
+  const url = new URL(path, 'http://studio.local');
+  url.searchParams.set('project', previewProjectParam);
+  return `${url.pathname}${url.search}`;
+}
+
+export default async function Page({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string | string[] }>;
+  searchParams: PreviewSearchParams;
+}) {
   // Await params (Next.js 15 requirement)
   const { slug } = await params;
+  const previewProjectParam = await getPreviewProjectLookup(await searchParams);
+  const previewProjectId = previewProjectParam
+    ? await resolveNovumProjectId(previewProjectParam)
+    : await resolveSingleNovumProjectIdForCurrentUser();
+  if (!previewProjectId) {
+    notFound();
+  }
+  if (!(await canAccessNovumProject(previewProjectId))) {
+    notFound();
+  }
+  const ycodeCoreProjectId = previewProjectId;
 
   // Handle catch-all slug (join array into path)
   const slugPath = Array.isArray(slug) ? slug.join('/') : slug;
 
   // Fetch draft page and layers data (no caching)
-  const data = await fetchPageByPath(slugPath, false);
+  const data = await fetchPageByPath(slugPath, false, undefined, undefined, ycodeCoreProjectId);
 
   // Fetch draft CSS and color variables
   const [draftCSS, colorVariablesCss] = await Promise.all([
-    fetchPreviewDraftCss(),
-    generateColorVariablesCss(),
+    fetchPreviewDraftCss(ycodeCoreProjectId),
+    generateColorVariablesCss(ycodeCoreProjectId),
   ]);
 
   // If page not found, try to show custom 404 error page
   if (!data) {
-    const errorPageData = await fetchErrorPage(404, false);
+    const errorPageData = await fetchErrorPage(404, false, undefined, ycodeCoreProjectId);
 
     if (errorPageData) {
       const { page, pageLayers, components } = errorPageData;
@@ -49,6 +95,9 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
           generatedCss={draftCSS}
           colorVariablesCss={colorVariablesCss || undefined}
           isPreview={true}
+          previewProjectParam={previewProjectParam}
+          renderProjectId={ycodeCoreProjectId}
+          customCodeProjectId={previewProjectId}
         />
       );
     }
@@ -60,13 +109,13 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
   const { page, pageLayers, components, collectionItem, collectionFields, pageCollectionSortedItemIds, pageCollectionSortedItemSlugs, locale, availableLocales, translations } = data;
 
   // Check password protection for this page (using all folders for preview)
-  const folders = await fetchFoldersForAuth(false);
+  const folders = await fetchFoldersForAuth(false, ycodeCoreProjectId);
   const authCookie = await parseAuthCookie();
   const protection = getPasswordProtection(page, folders, authCookie);
 
   // If page is protected and not unlocked, show 401 error page
   if (protection.isProtected && !protection.isUnlocked) {
-    const errorPageData = await fetchErrorPage(401, false);
+    const errorPageData = await fetchErrorPage(401, false, undefined, ycodeCoreProjectId);
 
     if (errorPageData) {
       const { page: errorPage, pageLayers: errorPageLayers, components: errorComponents } = errorPageData;
@@ -79,10 +128,13 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
           generatedCss={draftCSS}
           colorVariablesCss={colorVariablesCss || undefined}
           isPreview={true}
+          previewProjectParam={previewProjectParam}
+          renderProjectId={ycodeCoreProjectId}
+          customCodeProjectId={previewProjectId}
           passwordProtection={{
             pageId: protection.protectedBy === 'page' ? protection.protectedById : undefined,
             folderId: protection.protectedBy === 'folder' ? protection.protectedById : undefined,
-            redirectUrl: `/ycode/preview/${slugPath}`,
+            redirectUrl: buildPreviewRedirectUrl(`/ycode/preview/${slugPath}`, previewProjectParam),
             isPublished: false,
           }}
         />
@@ -99,7 +151,7 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
           <PasswordForm
             pageId={protection.protectedBy === 'page' ? protection.protectedById : undefined}
             folderId={protection.protectedBy === 'folder' ? protection.protectedById : undefined}
-            redirectUrl={`/ycode/preview/${slugPath}`}
+            redirectUrl={buildPreviewRedirectUrl(`/ycode/preview/${slugPath}`, previewProjectParam)}
             isPublished={false}
           />
         </div>
@@ -122,29 +174,56 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
       locale={locale}
       availableLocales={availableLocales}
       isPreview={true}
+      previewProjectParam={previewProjectParam}
+      renderProjectId={ycodeCoreProjectId}
+      customCodeProjectId={previewProjectId}
       translations={translations}
     />
   );
 }
 
 // Generate metadata
-export async function generateMetadata({ params }: { params: Promise<{ slug: string | string[] }> }): Promise<Metadata> {
+export async function generateMetadata({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string | string[] }>;
+  searchParams: PreviewSearchParams;
+}): Promise<Metadata> {
   const { slug } = await params;
+  const previewProjectParam = await getPreviewProjectLookup(await searchParams);
+  const previewProjectId = previewProjectParam
+    ? await resolveNovumProjectId(previewProjectParam)
+    : await resolveSingleNovumProjectIdForCurrentUser();
+  if (!previewProjectId) {
+    return {
+      title: 'Preview - Page Not Found',
+      robots: { index: false, follow: false },
+    };
+  }
+  if (!(await canAccessNovumProject(previewProjectId))) {
+    return {
+      title: 'Preview - Page Not Found',
+      robots: { index: false, follow: false },
+    };
+  }
+  const ycodeCoreProjectId = previewProjectId;
 
   // Handle catch-all slug (join array into path)
   const slugPath = Array.isArray(slug) ? slug.join('/') : slug;
 
   // Fetch draft page to get name and SEO settings
-  const data = await fetchPageByPath(slugPath, false);
+  const data = await fetchPageByPath(slugPath, false, undefined, undefined, ycodeCoreProjectId);
 
   if (!data) {
     return {
       title: 'Preview - Page Not Found',
+      robots: { index: false, follow: false },
     };
   }
 
   // Check password protection - don't leak metadata for protected pages
-  const folders = await fetchFoldersForAuth(false);
+  const folders = await fetchFoldersForAuth(false, ycodeCoreProjectId);
   const authCookie = await parseAuthCookie();
   const protection = getPasswordProtection(data.page, folders, authCookie);
 

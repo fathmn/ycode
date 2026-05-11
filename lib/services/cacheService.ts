@@ -1,4 +1,7 @@
 import { revalidateTag, revalidatePath } from 'next/cache';
+import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { buildSlugPath } from '@/lib/page-utils';
+import type { Page, PageFolder } from '@/types';
 
 /**
  * Cache Invalidation Service
@@ -48,6 +51,29 @@ export async function clearAllCache(): Promise<void> {
     // Invalidate Data Cache entries created by public page unstable_cache calls.
     revalidateTag('all-pages', { expire: 0 });
     revalidatePath('/', 'layout');
+
+    const supabase = await getSupabaseAdmin();
+    if (!supabase) return;
+
+    const [{ data: pages }, { data: folders }] = await Promise.all([
+      supabase
+        .from('pages')
+        .select('*')
+        .eq('is_published', true)
+        .is('deleted_at', null),
+      supabase
+        .from('page_folders')
+        .select('*')
+        .eq('is_published', true)
+        .is('deleted_at', null),
+    ]);
+
+    for (const page of (pages || []) as Page[]) {
+      if (page.is_dynamic) continue;
+
+      const pagePath = buildSlugPath(page, (folders || []) as PageFolder[], 'page');
+      revalidatePath(pagePath, 'page');
+    }
   } catch (error) {
     console.error('❌ [Cache] Clear all error:', error);
     throw new Error('Failed to clear all cache');

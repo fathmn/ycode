@@ -3,6 +3,7 @@ import { getTopItemsWithValuesPerCollection, enrichItemsWithStatus } from '@/lib
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import { findStatusFieldId } from '@/lib/collection-field-utils';
 import { noCache } from '@/lib/api-response';
+import { resolveNovumProjectId } from '@/lib/project-scope';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -26,17 +27,23 @@ export async function POST(request: NextRequest) {
       return noCache({ data: { items: {} } });
     }
 
+    const projectSlug = request.headers.get('x-novum-project-slug');
+    const projectId = projectSlug ? await resolveNovumProjectId(projectSlug) : null;
+    if (!projectSlug || !projectId) {
+      return noCache({ error: 'Invalid project' }, 404);
+    }
+
     // Fetch items and fields in parallel
     const [result, ...fieldSets] = await Promise.all([
-      getTopItemsWithValuesPerCollection(collectionIds, false, limit),
-      ...collectionIds.map(id => getFieldsByCollectionId(id, false)),
+      getTopItemsWithValuesPerCollection(collectionIds, false, limit, projectId),
+      ...collectionIds.map(id => getFieldsByCollectionId(id, false, undefined, projectId)),
     ]);
 
     // Enrich each collection's items with computed status values
     await Promise.all(
       collectionIds.map((collectionId, index) => {
         const items = result[collectionId]?.items || [];
-        return enrichItemsWithStatus(items, collectionId, findStatusFieldId(fieldSets[index]));
+        return enrichItemsWithStatus(items, collectionId, findStatusFieldId(fieldSets[index]), projectId);
       })
     );
 

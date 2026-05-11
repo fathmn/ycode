@@ -1,6 +1,11 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import {
+  STUDIO_PROJECT_SELECTION_EVENT,
+  getSelectedStudioProjectSlug,
+  novumFetch,
+  studioProjectsApi,
+} from '@/lib/api';
 import { useRef, useEffect, useState, useMemo } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useEditorUrl } from '@/hooks/use-editor-url';
@@ -39,6 +44,19 @@ import Icon from '@/components/ui/icon';
 import { Separator } from '@/components/ui/separator';
 import { BackupRestoreDialog } from '@/components/project/BackupRestoreDialog';
 import { isCloudVersion } from '@/lib/utils';
+
+type StudioProject = {
+  slug: string;
+  primary_domain: string | null;
+  production_url: string | null;
+};
+
+function publicBaseUrlForProject(project: StudioProject | null, fallbackBaseUrl: string): string {
+  const productionUrl = project?.production_url?.trim();
+  if (!productionUrl) return fallbackBaseUrl;
+  if (/^https?:\/\//i.test(productionUrl)) return productionUrl.replace(/\/+$/, '');
+  return `https://${productionUrl.replace(/\/+$/, '')}`;
+}
 
 interface HeaderBarProps {
   user: User | null;
@@ -137,6 +155,7 @@ export default function HeaderBar({
     return 'dark';
   });
   const [baseUrl, setBaseUrl] = useState<string>('');
+  const [selectedProjectBaseUrl, setSelectedProjectBaseUrl] = useState<string>('');
   const [hasUpdate, setHasUpdate] = useState(false);
   const [showTransferDialog, setShowTransferDialog] = useState(false);
 
@@ -145,20 +164,69 @@ export default function HeaderBar({
     setBaseUrl(window.location.protocol + '//' + window.location.host);
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const resolveProjectBaseUrl = async () => {
+      const fallbackBaseUrl = window.location.protocol + '//' + window.location.host;
+      try {
+        const selectedSlug = getSelectedStudioProjectSlug();
+        const response = await studioProjectsApi.getAssigned();
+        const projects = (response.data || []) as StudioProject[];
+        const selectedProject = selectedSlug
+          ? projects.find((project) => project.slug === selectedSlug) || null
+          : projects[0] || null;
+
+        if (isMounted) {
+          setSelectedProjectBaseUrl(publicBaseUrlForProject(selectedProject, fallbackBaseUrl));
+        }
+      } catch (error) {
+        console.error('Failed to resolve selected project base URL:', error);
+        if (isMounted) setSelectedProjectBaseUrl(fallbackBaseUrl);
+      }
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === 'studio:selected-project-slug' || event.key === 'novum:selected-project-slug') {
+        resolveProjectBaseUrl();
+      }
+    };
+
+    resolveProjectBaseUrl();
+    window.addEventListener(STUDIO_PROJECT_SELECTION_EVENT, resolveProjectBaseUrl);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      isMounted = false;
+      window.removeEventListener(STUDIO_PROJECT_SELECTION_EVENT, resolveProjectBaseUrl);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
   // Check for updates on mount
   useEffect(() => {
+    let isMounted = true;
+
     const checkForUpdates = async () => {
       try {
+        const projectsResponse = await studioProjectsApi.getAssigned();
+        const canCheckUpdates = projectsResponse.data?.some((project) =>
+          project.role === 'novum_admin' || project.role === 'novum_developer'
+        );
+        if (!canCheckUpdates) return;
+
         const response = await novumFetch('/ycode/api/updates/check');
         if (response.ok) {
           const data = await response.json();
-          setHasUpdate(data.available === true);
+          if (isMounted) setHasUpdate(data.available === true);
         }
       } catch (error) {
         console.error('Failed to check for updates:', error);
       }
     };
     checkForUpdates();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Get selected locale (computed from subscribed store values)
@@ -517,10 +585,10 @@ export default function HeaderBar({
           asChild
         >
           <a
-            href={baseUrl + publishedUrl} target="_blank"
+            href={(selectedProjectBaseUrl || baseUrl) + publishedUrl} target="_blank"
             rel="noopener noreferrer"
           >
-            {baseUrl}
+            {selectedProjectBaseUrl || baseUrl}
           </a>
         </Button>
 
@@ -620,7 +688,7 @@ export default function HeaderBar({
         <PublishPopover
           isPublishing={isPublishing}
           setIsPublishing={setIsPublishing}
-          baseUrl={baseUrl}
+          baseUrl={selectedProjectBaseUrl || baseUrl}
           publishedUrl={publishedUrl}
           onPublishSuccess={onPublishSuccess}
         />

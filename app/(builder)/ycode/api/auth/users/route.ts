@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { noCache } from '@/lib/api-response';
+import { requireNovumProjectRole } from '@/lib/novum-platform';
 
 /**
  * GET /ycode/api/auth/users
@@ -9,6 +10,9 @@ import { noCache } from '@/lib/api-response';
  */
 export async function GET(request: NextRequest) {
   try {
+    const roleCheck = await requireNovumProjectRole(request, ['novum_admin', 'novum_developer']);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const client = await getSupabaseAdmin();
 
     if (!client) {
@@ -108,6 +112,9 @@ export async function GET(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
+    const roleCheck = await requireNovumProjectRole(request, ['novum_admin', 'novum_developer']);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { searchParams } = new URL(request.url);
     const userId = searchParams.get('id');
 

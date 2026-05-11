@@ -15,6 +15,14 @@ interface AuthResult {
   client: SupabaseClient;
 }
 
+function isReadOnlyCookieStoreError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const message = error instanceof Error
+    ? error.message
+    : String((error as { message?: unknown }).message || '');
+  return message.includes('Cookies can only be modified');
+}
+
 /**
  * Get the authenticated user and Supabase client from request cookies.
  * Returns null if not authenticated or Supabase is not configured.
@@ -33,9 +41,17 @@ export async function getAuthUser(): Promise<AuthResult | null> {
           return cookieStore.getAll();
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set({ name, value, ...options });
-          });
+          try {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              cookieStore.set({ name, value, ...options });
+            });
+          } catch (error) {
+            if (!isReadOnlyCookieStoreError(error)) {
+              throw error;
+            }
+            // Server components can read auth cookies but cannot persist refreshed
+            // Supabase cookies. Middleware/route handlers handle cookie refreshes.
+          }
         },
       },
     });

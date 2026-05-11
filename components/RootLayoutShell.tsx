@@ -1,13 +1,6 @@
 import React from 'react';
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
 import DarkModeProvider from '@/components/DarkModeProvider';
-
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-  display: 'swap',
-});
 
 export const defaultMetadata: Metadata = {
   title: 'studio.novum partners',
@@ -25,7 +18,7 @@ export default function RootLayoutShell({ children, headElements }: RootLayoutSh
       <head>
         {headElements}
       </head>
-      <body className={`${inter.variable} font-sans antialiased text-xs`} suppressHydrationWarning>
+      <body className="font-sans antialiased text-xs" suppressHydrationWarning>
         <DarkModeProvider>
           {children}
         </DarkModeProvider>

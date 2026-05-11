@@ -2,6 +2,8 @@ import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { NOVUM_PREVIEW_NONCE_COOKIE } from '@/lib/novum-preview-nonce';
+import { projectLookupFromHost } from '@/lib/project-host';
 
 /**
  * Public API routes that skip authentication.
@@ -46,6 +48,23 @@ const PROJECT_SCOPE_TABLES = [
   'page_folders',
 ];
 
+const DRAFT_FINGERPRINT_TABLES = [
+  'page_folders',
+  'pages',
+  'page_layers',
+  'collections',
+  'collection_fields',
+  'collection_items',
+  'collection_item_values',
+  'components',
+  'layer_styles',
+  'asset_folders',
+  'assets',
+  'fonts',
+  'locales',
+  'translations',
+];
+
 let projectIsolationCache: Promise<ProjectIsolationCheck> | null = null;
 
 function isSharedDbProjectScopeRequired(): boolean {
@@ -54,10 +73,17 @@ function isSharedDbProjectScopeRequired(): boolean {
 
 function isMissingColumnError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
-  const err = error as { message?: string; code?: string };
-  if (typeof err.code === 'string' && err.code === 'PGRST106') return true;
-  const message = (err.message || '').toLowerCase();
-  return message.includes('could not find') && message.includes('column');
+  const err = error as { message?: string; code?: string; details?: string; hint?: string };
+  if (err.code === '42703') return true;
+  const message = [err.message, err.details, err.hint].filter(Boolean).join(' ').toLowerCase();
+  return (
+    message.includes('column')
+    && (
+      message.includes('could not find')
+      || message.includes('does not exist')
+      || message.includes('schema cache')
+    )
+  );
 }
 
 async function tableHasColumn(
@@ -66,15 +92,13 @@ async function tableHasColumn(
   column: string
 ): Promise<boolean> {
   const { error } = await client.from(table).select(column).limit(0);
-  return !isMissingColumnError(error);
+  if (!error) return true;
+  if (isMissingColumnError(error)) return false;
+  throw new Error(`Failed to inspect ${table}.${column}: ${error.message || 'unknown database error'}`);
 }
 
 async function tableSupportsProjectIsolation(client: any, table: string): Promise<boolean> {
-  const [hasProjectId, hasTenantId] = await Promise.all([
-    tableHasColumn(client, table, 'project_id'),
-    tableHasColumn(client, table, 'tenant_id'),
-  ]);
-  return hasProjectId || hasTenantId;
+  return tableHasColumn(client, table, 'project_id');
 }
 
 async function checkProjectIsolation(client: any): Promise<ProjectIsolationCheck> {
@@ -98,11 +122,18 @@ async function checkProjectIsolation(client: any): Promise<ProjectIsolationCheck
 
 const AUTH_ONLY_API_EXACT = [
   '/ycode/api/novum/projects', // Project picker must work before a project is selected
+  '/ycode/api/novum/preview-rendered', // The route binds project access to the signed preview nonce.
+];
+
+const BUILDER_ONLY_MUTATION_PREFIXES = [
+  '/ycode/api/publish',
+  '/ycode/api/novum/preview-approval',
 ];
 
 const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
 const READ_ROLES = ['novum_admin', 'novum_developer', 'customer_owner', 'customer_editor', 'customer_viewer'];
 const WRITE_ROLES = ['novum_admin', 'novum_developer', 'customer_owner', 'customer_editor'];
+const PUBLISH_ROLES = ['novum_admin', 'novum_developer', 'customer_owner'];
 const ADMIN_DEVELOPER_ROLES = ['novum_admin', 'novum_developer'];
 
 const ADMIN_DEVELOPER_API_PREFIXES = [
@@ -155,6 +186,10 @@ function getRequiredRoles(pathname: string, method: string): string[] | null {
     return ADMIN_DEVELOPER_ROLES;
   }
 
+  if (pathname.startsWith('/ycode/api/publish') && isMutatingRequest(method)) {
+    return PUBLISH_ROLES;
+  }
+
   if (isMutatingRequest(method)) {
     return WRITE_ROLES;
   }
@@ -180,6 +215,244 @@ function isSafeProjectLookupValue(value: string): boolean {
 
 function getCurrentSiteKey(): string {
   return process.env.STUDIO_YCODE_SITE_KEY || 'default';
+}
+
+function getStudioAppHost(): string {
+  return (process.env.STUDIO_APP_HOST || 'studio.novum-partners.de').toLowerCase();
+}
+
+function normalizeHost(host: string | null): string {
+  return (host || '').split(':')[0].toLowerCase();
+}
+
+function isStudioHost(request: NextRequest): boolean {
+  const host = normalizeHost(
+    request.headers.get('x-forwarded-host')
+      || request.headers.get('host')
+  );
+  return host === getStudioAppHost();
+}
+
+const STUDIO_PUBLIC_ASSET_PATHS = new Set([
+  '/canvas.css',
+  '/swiper-minimal.css',
+  '/y-filled.svg',
+  '/ycode-webclip.png',
+]);
+
+function isReservedStudioPath(pathname: string): boolean {
+  return pathname.startsWith('/ycode')
+    || pathname.startsWith('/_next')
+    || pathname.startsWith('/api')
+    || pathname.startsWith('/a/')
+    || STUDIO_PUBLIC_ASSET_PATHS.has(pathname)
+    || pathname === '/favicon.ico'
+    || pathname === '/icon.svg'
+    || pathname === '/robots.txt'
+    || pathname === '/sitemap.xml'
+    || pathname === '/llms.txt';
+}
+
+function isStudioAppRequest(request: NextRequest, pathname: string): boolean {
+  return isStudioHost(request) && !isReservedStudioPath(pathname);
+}
+
+function studioRobotsResponse(): Response {
+  return new NextResponse('User-agent: *\nDisallow: /\n', {
+    status: 200,
+    headers: {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+    },
+  });
+}
+
+function studioSitemapResponse(): Response {
+  return new NextResponse('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>', {
+    status: 200,
+    headers: {
+      'content-type': 'application/xml; charset=utf-8',
+      'cache-control': 'no-store',
+    },
+  });
+}
+
+function getPreviewNonceSecret(): string | null {
+  return process.env.NOVUM_PREVIEW_NONCE_SECRET
+    || process.env.SUPABASE_SECRET_KEY
+    || process.env.SUPABASE_SERVICE_ROLE_KEY
+    || process.env.SUPABASE_DB_PASSWORD
+    || null;
+}
+
+function encodePreviewUrlForNonce(value: string): string {
+  return encodeURIComponent(value).replace(/\./g, '%2E');
+}
+
+function encodeNoncePart(value: string): string {
+  return encodeURIComponent(value).replace(/\./g, '%2E');
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (typeof value !== 'object') return String(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `"${key}":${stableStringify((value as Record<string, unknown>)[key])}`).join(',')}}`;
+}
+
+async function sha256Hex(value: unknown): Promise<string | null> {
+  if (!globalThis.crypto?.subtle) return null;
+  const digest = await globalThis.crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(typeof value === 'string' ? value : stableStringify(value)),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function selectDraftFingerprintRows(client: any, table: string, projectId: string): Promise<unknown[]> {
+  const hasProjectScope = await tableHasColumn(client, table, 'project_id');
+  if (!hasProjectScope && isSharedDbProjectScopeRequired()) {
+    throw new Error(`Project scope column is required for ${table}`);
+  }
+  let query = client
+    .from(table)
+    .select('*')
+    .eq('is_published', false)
+    .order('id', { ascending: true });
+  if (hasProjectScope) query = query.eq('project_id', projectId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data || []).map((row: Record<string, unknown>) => {
+    const { created_at, updated_at, ...stableRow } = row;
+    return stableRow;
+  });
+}
+
+async function computeDraftFingerprint(client: any, projectId: string): Promise<string | null> {
+  try {
+    const [draftRows, colorVariables, settings] = await Promise.all([
+      Promise.all(DRAFT_FINGERPRINT_TABLES.map(async (table) => [
+        table,
+        await selectDraftFingerprintRows(client, table, projectId),
+      ])),
+      (async () => {
+        const hasProjectScope = await tableHasColumn(client, 'color_variables', 'project_id');
+        if (!hasProjectScope && isSharedDbProjectScopeRequired()) {
+          throw new Error('Project scope column is required for color_variables');
+        }
+        let query = client
+          .from('color_variables')
+          .select('id, name, value, sort_order, updated_at')
+          .order('sort_order', { ascending: true })
+          .order('id', { ascending: true });
+        if (hasProjectScope) query = query.eq('project_id', projectId);
+        const { data, error } = await query;
+        if (error) throw error;
+        return data || [];
+      })(),
+      (async () => {
+        const hasProjectScope = await tableHasColumn(client, 'settings', 'project_id');
+        if (!hasProjectScope && isSharedDbProjectScopeRequired()) {
+          throw new Error('Project scope column is required for settings');
+        }
+        let query = client
+          .from('settings')
+          .select('key, value, updated_at')
+          .neq('key', 'published_at')
+          .order('key', { ascending: true });
+        if (hasProjectScope) query = query.eq('project_id', projectId);
+        const { data, error } = await query;
+        if (error) throw error;
+        return data || [];
+      })(),
+    ]);
+    return sha256Hex({ draftRows: Object.fromEntries(draftRows), colorVariables, settings });
+  } catch {
+    return null;
+  }
+}
+
+async function signPreviewNoncePayload(payload: string): Promise<string | null> {
+  const secret = getPreviewNonceSecret();
+  if (!secret || !globalThis.crypto?.subtle) return null;
+  const key = await globalThis.crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await globalThis.crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
+  return Array.from(new Uint8Array(signature))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function resolvePreviewNonceContext(request: NextRequest): Promise<{
+  actorUserId: string;
+  projectId: string;
+  siteKey: string;
+  draftHash: string;
+} | null> {
+  const config = getSupabaseEnvConfig();
+  if (!config) return null;
+  const fingerprintClient = config.secretKey
+    ? createClient(config.url, config.secretKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
+    : null;
+
+  let response = NextResponse.next({ request });
+  const supabase = createServerClient(config.url, config.anonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+        response = NextResponse.next({ request });
+        cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+      },
+    },
+  });
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const siteKey = getCurrentSiteKey();
+  const projectSlug = resolveRequestedProjectSlug(request);
+  if (projectSlug) {
+    const project = await findProjectBySlugOrDomain(supabase, projectSlug);
+    if (!project) return null;
+    const membershipResult = await supabase
+      .from('novum_project_memberships')
+      .select('project_id')
+      .eq('project_id', project.id)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (membershipResult.error || !membershipResult.data) return null;
+    const draftHash = await computeDraftFingerprint(fingerprintClient || supabase, project.id);
+    if (!draftHash) return null;
+    return { actorUserId: user.id, projectId: project.id, siteKey, draftHash };
+  }
+
+  const membershipResult = await supabase
+    .from('novum_project_memberships')
+    .select('project_id, project:novum_projects(status, ycode_site_key)')
+    .eq('user_id', user.id);
+  if (membershipResult.error) return null;
+
+  const activeSiteMemberships = (membershipResult.data || []).filter((item: any) => {
+    const project = Array.isArray(item.project) ? item.project[0] : item.project;
+    return project?.status === 'active' && project?.ycode_site_key === siteKey;
+  });
+  if (activeSiteMemberships.length !== 1 || !activeSiteMemberships[0].project_id) return null;
+  const draftHash = await computeDraftFingerprint(fingerprintClient || supabase, activeSiteMemberships[0].project_id);
+  if (!draftHash) return null;
+  return { actorUserId: user.id, projectId: activeSiteMemberships[0].project_id, siteKey, draftHash };
 }
 
 async function findProjectBySlugOrDomain(client: any, value: string): Promise<{ id: string } | null> {
@@ -318,12 +591,7 @@ function resolveRequestedProjectSlug(request: NextRequest): string | null {
   if (explicit) return explicit;
 
   const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
-  const hostname = host.split(':')[0];
-  if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
-    return hostname;
-  }
-
-  return null;
+  return projectLookupFromHost(host);
 }
 
 function isPublicApiRoute(pathname: string, method: string): boolean {
@@ -342,6 +610,35 @@ function isPublicApiRoute(pathname: string, method: string): boolean {
   }
 
   return false;
+}
+
+function isBuilderOnlyMutation(pathname: string, method: string): boolean {
+  return MUTATING_METHODS.includes(method) && BUILDER_ONLY_MUTATION_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+}
+
+function hasSameOriginMutationContext(request: NextRequest): boolean {
+  const origin = request.headers.get('origin');
+  if (origin) {
+    try {
+      return new URL(origin).origin === request.nextUrl.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  const fetchSite = request.headers.get('sec-fetch-site');
+  if (fetchSite) {
+    return fetchSite === 'same-origin' || fetchSite === 'none';
+  }
+
+  const referer = request.headers.get('referer');
+  if (!referer) return false;
+  try {
+    const url = new URL(referer, request.url);
+    return url.origin === request.nextUrl.origin;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -500,6 +797,22 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  if (isStudioHost(request) && pathname === '/robots.txt') {
+    return studioRobotsResponse();
+  }
+
+  if (isStudioHost(request) && pathname === '/sitemap.xml') {
+    return studioSitemapResponse();
+  }
+
+  if (isStudioAppRequest(request, pathname)) {
+    const rewriteUrl = request.nextUrl.clone();
+    rewriteUrl.pathname = '/ycode';
+    const response = NextResponse.rewrite(rewriteUrl);
+    response.headers.set('x-pathname', '/ycode');
+    return response;
+  }
+
   // MCP endpoint uses its own token-based authentication — skip session auth.
   // Cloud overlay proxies MUST also exempt this path to avoid login redirects.
   if (pathname.startsWith('/ycode/mcp/')) {
@@ -513,10 +826,19 @@ export async function proxy(request: NextRequest) {
     const authResponse = await verifyApiAuth(request);
     if (authResponse) {
       if (pathname.startsWith('/ycode/preview')) {
-        return NextResponse.redirect(new URL('/ycode', request.url));
+        const redirect = NextResponse.redirect(new URL('/ycode', request.url));
+        redirect.cookies.set(NOVUM_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
+        return redirect;
       }
       return authResponse;
     }
+  }
+
+  if (isBuilderOnlyMutation(pathname, request.method) && !hasSameOriginMutationContext(request)) {
+    return NextResponse.json(
+      { error: 'This Studio action must be initiated from the same origin.' },
+      { status: 403 }
+    );
   }
 
   const isPublicPage = !pathname.startsWith('/ycode')
@@ -540,6 +862,35 @@ export async function proxy(request: NextRequest) {
 
   // Add pathname header for layout to determine dark mode
   response.headers.set('x-pathname', pathname);
+
+  if (pathname.startsWith('/ycode/preview') && request.method === 'GET') {
+    const nonceContext = await resolvePreviewNonceContext(request);
+    const noncePayload = [
+      Date.now(),
+      crypto.randomUUID(),
+      encodeNoncePart(nonceContext?.siteKey || ''),
+      encodeNoncePart(nonceContext?.actorUserId || ''),
+      encodeNoncePart(nonceContext?.projectId || ''),
+      encodeNoncePart(nonceContext?.draftHash || ''),
+      encodePreviewUrlForNonce(`${pathname}${request.nextUrl.search}`),
+    ].join('.');
+    const nonceSignature = await signPreviewNoncePayload(noncePayload);
+    if (nonceContext && nonceSignature) {
+      response.cookies.set(
+        NOVUM_PREVIEW_NONCE_COOKIE,
+        `${noncePayload}.${nonceSignature}`,
+        {
+          httpOnly: true,
+          sameSite: 'lax',
+          secure: process.env.NODE_ENV === 'production',
+          path: '/ycode',
+          maxAge: 30 * 60,
+        }
+      );
+    } else {
+      response.cookies.set(NOVUM_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
+    }
+  }
 
   // Cache-Control for public pages is configured centrally via next.config.ts headers().
 

@@ -24,6 +24,26 @@
   outline-offset: -2px;
 }
 
+[data-studio-import-id] h1,
+[data-studio-import-id] h2,
+[data-studio-import-id] h3,
+[data-studio-import-id] h4,
+[data-studio-import-global] h1,
+[data-studio-import-global] h2,
+[data-studio-import-global] h3,
+[data-studio-import-global] h4 {
+  overflow-wrap: normal;
+  word-break: keep-all;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  hyphenate-limit-chars: 7 4 3;
+}
+
+[data-studio-import-id] p,
+[data-studio-import-global] p {
+  overflow-wrap: anywhere;
+}
+
 .ycode-editing {
   outline: 1px solid #0b7efd !important;
   outline-offset: -1px;
@@ -70,6 +90,895 @@
   height: 100%;
   display: block;
   fill: currentColor;
+}
+
+@media (max-width: 1023px) {
+  [data-studio-responsive~="stack-grid"] {
+    grid-template-columns: 1fr !important;
+    gap: clamp(20px, 5vw, 48px) !important;
+  }
+
+  [data-studio-responsive~="stack-cards"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-studio-responsive~="stack-flex"] {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+  }
+
+  [data-studio-responsive~="icons-grid"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* `stack-grid-md` matches the source's custom `md` breakpoint at 810px (see
+   --breakpoint-md in hr-interim-solutions-studio/app/globals.css). Sections
+   like Welcome, Services-Intro, SupportServices, UseCases and Process switch
+   to the multi-column layout starting from 810px. Without this rule a
+   tablet at 834px would still be stacked because of the wider 1023px
+   default. */
+@media (max-width: 809px) {
+  [data-studio-responsive~="stack-grid-md"] {
+    grid-template-columns: 1fr !important;
+    gap: clamp(20px, 5vw, 48px) !important;
+  }
+
+  [data-studio-responsive~="stack-cards-md"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  [data-studio-responsive~="stack-flex-md"] {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+  }
+}
+
+/* `stack-grid-mobile-only` matches Tailwind's `md` breakpoint (768px) used by
+   sources that stay two-column on tablet and only stack on phone (e.g. the
+   /mandate stripes). Without this rule the default `stack-grid` would force
+   tablet to stack as well. */
+@media (max-width: 767px) {
+  [data-studio-responsive~="stack-grid-mobile-only"] {
+    grid-template-columns: 1fr !important;
+    gap: clamp(20px, 5vw, 48px) !important;
+  }
+}
+
+@scope ([data-studio-runtime-profile="hr-interim-solutions"]) {
+/* `data-studio-header-visibility` matches the source's --breakpoint-md=810px.
+   Stock Tailwind `md:` would resolve to 768px and leave a 768-809px gap where
+   the desktop nav/CTA shows while the source still renders the mobile drawer.
+   These rules anchor header visibility at exactly 810px in both editor canvas
+   and published runtime. */
+[data-ycode-editor-breakpoint="desktop"] [data-studio-header-visibility="mobile"] {
+  display: none !important;
+}
+[data-ycode-editor-breakpoint="desktop"] [data-studio-header-visibility="desktop"] {
+  display: inline-flex !important;
+}
+[data-ycode-editor-breakpoint="tablet"] [data-studio-header-visibility="mobile"],
+[data-ycode-editor-breakpoint="mobile"] [data-studio-header-visibility="mobile"] {
+  display: inline-flex !important;
+}
+[data-ycode-editor-breakpoint="tablet"] [data-studio-header-visibility="mobile"][data-studio-mobile-drawer],
+[data-ycode-editor-breakpoint="mobile"] [data-studio-header-visibility="mobile"][data-studio-mobile-drawer] {
+  display: flex !important;
+}
+[data-ycode-editor-breakpoint="tablet"] [data-studio-header-visibility="desktop"],
+[data-ycode-editor-breakpoint="mobile"] [data-studio-header-visibility="desktop"] {
+  display: none !important;
+}
+[data-studio-header-visibility="mobile"] {
+  display: inline-flex;
+}
+[data-studio-header-visibility="desktop"] {
+  display: none !important;
+}
+[data-studio-header-visibility="mobile"][data-studio-mobile-drawer] {
+  display: flex;
+}
+@media (min-width: 810px) {
+  [data-studio-header-visibility="mobile"] {
+    display: none !important;
+  }
+  [data-studio-header-visibility="desktop"] {
+    display: inline-flex !important;
+  }
+}
+
+[data-studio-site-header][data-studio-header-scrolled="true"] {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  border-bottom-color: rgba(8, 8, 8, 0.10) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+[data-studio-site-header][data-studio-header-scrolled="false"],
+[data-studio-site-header]:not([data-studio-header-scrolled]) {
+  background-color: transparent !important;
+  border-bottom-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+[data-studio-site-header][data-studio-mobile-drawer-open="true"] {
+  background-color: transparent !important;
+  border-bottom-color: rgba(255, 255, 255, 0.15) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+[data-studio-site-header][data-surface="dark"] [data-studio-header-nav-link] {
+  color: #ffffff !important;
+}
+
+[data-studio-site-header][data-surface="light"] [data-studio-header-nav-link] {
+  color: #080808 !important;
+}
+
+[data-studio-header-nav-link] {
+  position: relative;
+  opacity: 0.85;
+  transition: opacity 250ms ease;
+}
+
+[data-studio-header-nav-link]::after {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -6px;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-studio-header-nav-link]:hover,
+[data-studio-header-nav-link]:focus-visible,
+[data-studio-header-nav-link][aria-current="page"] {
+  opacity: 1 !important;
+}
+
+[data-studio-header-nav-link]:hover::after,
+[data-studio-header-nav-link]:focus-visible::after,
+[data-studio-header-nav-link][aria-current="page"]::after {
+  transform: scaleX(1);
+}
+
+[data-studio-header-logo][data-studio-brand-logo="dark"] {
+  filter: none !important;
+}
+
+[data-studio-header-logo][data-studio-brand-logo="light"] {
+  filter: brightness(0) saturate(100%) !important;
+}
+
+[data-studio-site-header][data-surface="dark"] [data-studio-header-cta] {
+  background-color: #ffffff !important;
+  color: #080808 !important;
+}
+
+[data-studio-site-header][data-surface="light"] [data-studio-header-cta] {
+  background-color: #080808 !important;
+  color: #ffffff !important;
+}
+
+.cta-underline {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 56px;
+  padding-bottom: 14px;
+  transition: gap 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cta-underline::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.55;
+  transform: scaleX(0.55);
+  transform-origin: left center;
+  transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1), opacity 400ms ease-out;
+  pointer-events: none;
+}
+
+.cta-underline:hover,
+.cta-underline:focus-visible {
+  gap: 24px;
+}
+
+.cta-underline:hover::after,
+.cta-underline:focus-visible::after {
+  transform: scaleX(1);
+  opacity: 1;
+}
+
+.cta-underline .cta-arrow {
+  transition: transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cta-underline:hover .cta-arrow,
+.cta-underline:focus-visible .cta-arrow {
+  transform: translateX(4px);
+}
+
+[data-studio-cta-underline] {
+  --studio-cta-gap: 56px;
+  position: relative;
+  transition: gap 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-studio-cta-underline]::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: currentColor;
+  opacity: 0.55;
+  transform: scaleX(0.55);
+  transform-origin: left center;
+  transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1), opacity 400ms ease-out;
+}
+
+[data-studio-cta-underline]:hover,
+[data-studio-cta-underline]:focus-visible {
+  --studio-cta-gap: 24px;
+}
+
+[data-studio-cta-underline]:hover::before,
+[data-studio-cta-underline]:focus-visible::before {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+[data-studio-cta-underline]::after {
+  position: static;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: auto;
+  height: auto;
+  background: transparent;
+  opacity: 1;
+  transform-origin: center;
+  transition: transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-studio-cta-underline]:hover::after,
+[data-studio-cta-underline]:focus-visible::after {
+  transform: translateX(4px) translateY(-1px);
+}
+
+[data-studio-mobile-drawer][aria-hidden="true"]:not(.studio-mobile-drawer--open) {
+  opacity: 0;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  transform: translateY(-12px);
+}
+
+[data-studio-mobile-drawer][aria-hidden="false"],
+[data-studio-mobile-drawer].studio-mobile-drawer--open,
+[data-studio-mobile-drawer].studio-mobile-drawer--closing {
+  opacity: 1;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  transform: translateY(0);
+  display: flex !important;
+  background-color: #080808 !important;
+  color: #ffffff !important;
+}
+
+[data-studio-mobile-drawer-link] {
+  opacity: 0;
+  transform: translateY(24px);
+}
+
+[data-studio-mobile-drawer][aria-hidden="false"] [data-studio-mobile-drawer-link],
+[data-studio-mobile-drawer].studio-mobile-drawer--open [data-studio-mobile-drawer-link] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Editor-canvas only: imported source drawer links use `clamp(48px,12vw,80px)`.
+   In Ycode's scaled canvas, `vw` can refer to the builder window rather than
+   the simulated phone canvas. Use the canvas body's container width for the
+   same source formula without changing published runtime. */
+body {
+  container-type: inline-size;
+}
+
+body [data-studio-mobile-drawer-link] {
+  font-size: clamp(48px, 12cqw, 80px) !important;
+}
+
+/* Source `--section-y: 60px` mobile and `--section-y-md: 100px` >=810px.
+   Importer always emits `padding: 60px 0` and relies on this rule to scale
+   to the source padding above the 810px breakpoint. */
+[data-studio-section-pad] {
+  padding-top: 60px !important;
+  padding-bottom: 60px !important;
+}
+
+@media (min-width: 810px) {
+  [data-studio-section-pad] {
+    padding-top: 100px !important;
+    padding-bottom: 100px !important;
+  }
+}
+
+/* Service-detail-row md gap+py mirrors source `md:gap-16 md:py-20`.
+   Mobile keeps gap-8/py-14 from inline styles. The mobile-specific rule
+   keeps the inline gap-32 stable instead of letting `stack-grid-md`'s
+   `clamp(20px,5vw,48px)` override it, AND clears the inline 12-col spans
+   on the children so the row stacks cleanly under 810px. */
+@media (max-width: 809px) {
+  [data-studio-service-detail-row-md] {
+    gap: 32px !important;
+  }
+
+  [data-studio-service-detail-row-md] > * {
+    grid-column: auto !important;
+  }
+
+  /* Home Services intro grid: same mobile-stack treatment. Source:
+     mt-12 grid grid-cols-1 gap-12 md:grid-cols-12 → mobile 1-col gap-12. */
+  [data-studio-home-services-intro-grid] {
+    grid-template-columns: 1fr !important;
+    gap: 48px !important;
+  }
+
+  [data-studio-home-services-intro-grid] > * {
+    grid-column: auto !important;
+    grid-column-start: auto !important;
+  }
+
+  /* Home Services rows: same. Source: grid grid-cols-1 items-center gap-6
+     border-t border-white/15 py-10 md:grid-cols-12 md:gap-10 md:py-14.
+     Mobile: 1-col gap-6 (=24px) py-10 (=40px). Desktop overrides via
+     [data-studio-home-services-row]@media (min-width:810px). */
+  [data-studio-home-services-row] {
+    grid-template-columns: 1fr !important;
+    gap: 24px !important;
+  }
+
+  [data-studio-home-services-row] > * {
+    grid-column: auto !important;
+  }
+
+  /* Mobile arrow column should appear at the end of the stack, not as a
+     full row above body — but Tailwind source actually orders arrow last
+     so the natural DOM order works. We just keep arrow column display flex
+     justify-content end, which collapses to `flex-start` on stack. Reset
+     justify-content to start so the mobile arrow sits left-aligned with
+     the rest of the column-stack content. */
+  [data-studio-home-services-arrow-col] {
+    justify-content: flex-start !important;
+  }
+}
+
+@media (min-width: 810px) {
+  /* Source: mt-16 (=64px) on intro grid at >=810px (mt-12 mobile). */
+  [data-studio-home-services-intro-grid] {
+    margin-top: 64px !important;
+    gap: 48px !important;
+  }
+
+  /* Source: md:py-14 (=56px) replaces mobile py-10 (=40px). */
+  [data-studio-home-services-row] {
+    padding-top: 56px !important;
+    padding-bottom: 56px !important;
+    gap: 40px !important;
+  }
+
+  /* Source: mt-28 (=112px) replaces mobile mt-20 (=80px). */
+  [data-studio-home-services-items] {
+    margin-top: 112px !important;
+  }
+
+  /* Source Process: md:grid-cols-3 md:mt-20 (=80px). */
+  [data-studio-home-process-grid] {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    margin-top: 80px !important;
+    gap: 40px !important;
+  }
+}
+
+@media (max-width: 809px) {
+  /* Source Process: mobile grid-cols-1, gap-10 (40px), mt-16 (64px). */
+  [data-studio-home-process-grid] {
+    grid-template-columns: 1fr !important;
+    gap: 40px !important;
+    margin-top: 64px !important;
+  }
+
+  /* Source UseCases mobile: flex-col + items-start (already inline). */
+  [data-studio-home-usecases-intro] {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+  }
+
+  /* Source UseCases grid mobile: grid-cols-1, mt-16 (64px), no top border. */
+  [data-studio-home-usecases-grid] {
+    grid-template-columns: 1fr !important;
+    margin-top: 64px !important;
+    border-top: 0 !important;
+  }
+}
+
+@media (min-width: 810px) {
+  /* Source UseCases intro >=810: md:flex-row md:items-end. */
+  [data-studio-home-usecases-intro] {
+    flex-direction: row !important;
+    align-items: flex-end !important;
+  }
+
+  /* Source UseCases grid >=810: md:grid-cols-3, md:mt-20 (80px),
+     md:border-t border-white/15. */
+  [data-studio-home-usecases-grid] {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    margin-top: 80px !important;
+    border-top: 1px solid rgba(255,255,255,0.15) !important;
+  }
+
+  /* Source UseCases card >=810: md:py-12 (48px), md:px-8 (32px), no
+     mobile border-top, with md:border-l for cards 2+3. */
+  [data-studio-home-usecase-card] {
+    padding-top: 48px !important;
+    padding-bottom: 48px !important;
+    padding-left: 32px !important;
+    padding-right: 32px !important;
+    border-top: 0 !important;
+  }
+
+  [data-studio-home-usecase-card][data-studio-home-usecase-index="1"],
+  [data-studio-home-usecase-card][data-studio-home-usecase-index="2"] {
+    border-left: 1px solid rgba(255,255,255,0.15) !important;
+  }
+
+  /* Source UseCases title >=810: md:text-[28px]. */
+  [data-studio-home-usecase-title] {
+    font-size: 28px !important;
+  }
+
+  /* Source Mandates intro >=810: md:flex-row md:items-end. */
+  [data-studio-home-mandates-intro] {
+    flex-direction: row !important;
+    align-items: flex-end !important;
+  }
+
+  /* Source Mandates card >=810: md:p-10 (40px). */
+  [data-studio-home-mandate-card] {
+    padding: 40px !important;
+  }
+}
+
+/* Source Mandates grid: lg:grid-cols-3 lg:mt-20 — desktop is 1024px+,
+   not 810px+. Tailwind v4 `lg:` defaults to 1024px. */
+@media (min-width: 1024px) {
+  [data-studio-home-mandates-grid] {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    margin-top: 80px !important;
+  }
+}
+
+/* Source SupportServices grid: mobile grid-cols-1 mt-10 (40px),
+   desktop md:grid-cols-12 md:mt-14 (56px). */
+@media (max-width: 809px) {
+  [data-studio-home-support-grid] {
+    grid-template-columns: 1fr !important;
+    gap: 40px !important;
+    margin-top: 40px !important;
+  }
+
+  [data-studio-home-support-grid] > * {
+    grid-column: auto !important;
+  }
+}
+
+@media (min-width: 810px) {
+  [data-studio-home-support-grid] {
+    margin-top: 56px !important;
+    gap: 40px !important;
+  }
+}
+
+/* Source SupportServices cards: grid-cols-1 sm:grid-cols-2. Tailwind sm =
+   640px. Mobile <640: 1 card per row, sm/tablet/desktop: 2 cards. */
+@media (min-width: 640px) {
+  [data-studio-home-support-cards] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* Source site-header logo: w-auto h-8 md:h-9 (32px mobile / 36px desktop)
+   from components/site-header.tsx. */
+@media (min-width: 810px) {
+  [data-studio-header-logo] {
+    height: 36px !important;
+  }
+}
+
+/* Source btn-primary-on-dark hover + active state.
+   Source globals.css: `.btn-primary-on-dark:hover { background: rgba(255,255,255,0.9); }`. */
+[data-studio-btn-primary-on-dark]:hover,
+[data-studio-btn-primary-on-dark]:focus-visible {
+  background-color: rgba(255, 255, 255, 0.9) !important;
+}
+
+[data-studio-btn-primary]:hover,
+[data-studio-btn-primary]:focus-visible {
+  background-color: #000000 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cta-underline,
+  .cta-underline::after,
+  .cta-underline .cta-arrow,
+  [data-studio-btn-primary-on-dark] {
+    transition: none;
+  }
+}
+
+[data-studio-home-services-row] {
+  position: relative;
+}
+
+[data-studio-home-services-row]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 1px;
+  background: #ffffff;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+
+[data-studio-home-services-row]:hover::after,
+[data-studio-home-services-row]:focus-visible::after {
+  transform: scaleX(1);
+}
+
+[data-studio-home-services-row] [data-studio-home-services-arrow-col] {
+  transition: transform 300ms ease, color 300ms ease;
+}
+
+[data-studio-home-services-row]:hover [data-studio-home-services-arrow-col],
+[data-studio-home-services-row]:focus-visible [data-studio-home-services-arrow-col] {
+  transform: translateX(4px);
+}
+
+[data-studio-home-support-card] {
+  transition: border-color 250ms ease;
+}
+
+[data-studio-home-support-card]:hover,
+[data-studio-home-support-card]:focus-visible {
+  border-color: rgba(8, 8, 8, 0.30) !important;
+}
+
+[data-studio-home-support-card-arrow] {
+  transition: transform 300ms ease;
+}
+
+[data-studio-home-support-card]:hover [data-studio-home-support-card-arrow],
+[data-studio-home-support-card]:focus-visible [data-studio-home-support-card-arrow] {
+  transform: translateX(4px);
+}
+
+/* Source FeatureTabs inactive tab hover.
+   Source: hover:bg-black/[0.03] on inactive tabs only. */
+[data-studio-feature-tab="inactive"]:hover {
+  background-color: rgba(0, 0, 0, 0.03) !important;
+}
+
+[data-studio-feature-panel="inactive"] {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-studio-feature-tab] {
+    transition: none !important;
+  }
+}
+
+/* Source FeatureTabs CTA: hover:border-black on the underlined link. */
+[data-studio-feature-tab-cta]:hover,
+[data-studio-feature-tab-cta]:focus-visible {
+  border-bottom-color: rgba(0, 0, 0, 1) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-studio-feature-tab-cta] {
+    transition: none !important;
+  }
+}
+
+/* Source FeatureTabs (services-tabs): mobile horizontal scroll tabs +
+   1-col stacked panel; desktop (md:) 4-col grid tabs; lg+ (1024+) 12-col
+   panel with text col-span-5 / image col-span-7. */
+@media (max-width: 809px) {
+  [data-studio-feature-tabs-tablist] {
+    display: flex !important;
+    overflow-x: auto !important;
+    grid-template-columns: none !important;
+    background-color: transparent !important;
+    gap: 0 !important;
+  }
+  [data-studio-feature-tabs-tablist] > * {
+    min-width: 60vw !important;
+  }
+}
+
+@media (max-width: 1023px) {
+  /* Mobile/tablet: 1-col panel stack (text on top, image on bottom). */
+  [data-studio-feature-tabs-panel] {
+    grid-template-columns: 1fr !important;
+  }
+  [data-studio-feature-tabs-panel] > * {
+    grid-column: auto !important;
+  }
+}
+
+@media (min-width: 810px) {
+  /* Source: md:!min-w-0 md:w-auto md:px-5 on tab buttons. */
+  [data-studio-feature-tabs-tablist] > [data-studio-feature-tab] {
+    min-width: 0 !important;
+    padding-left: 20px !important;
+    padding-right: 20px !important;
+  }
+
+  /* Source text-col p-12 (48px) at md+. */
+  [data-studio-feature-tab-text-col] {
+    padding: 48px !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  /* Source lg:grid-cols-12 with col-span-5 text + col-span-7 image. */
+  [data-studio-feature-tabs-panel] {
+    grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+  }
+  [data-studio-feature-tab-text-col] {
+    grid-column: span 5 / span 5 !important;
+  }
+  [data-studio-feature-tab-image-col] {
+    grid-column: span 7 / span 7 !important;
+    min-height: 480px !important;
+  }
+}
+
+/* Source home CtaBanner inner panel: rounded-[2px] p-10 md:p-20.
+   Mobile p-10 (40px) inline; desktop p-20 (80px) override. */
+@media (min-width: 810px) {
+  [data-studio-home-cta-panel] {
+    padding: 80px !important;
+  }
+}
+
+/* Source home CtaBanner grid: grid-cols-1 gap-10 md:grid-cols-12 md:items-end. */
+@media (max-width: 809px) {
+  [data-studio-home-cta-grid] {
+    grid-template-columns: 1fr !important;
+    gap: 40px !important;
+  }
+  [data-studio-home-cta-grid] > * {
+    grid-column: auto !important;
+  }
+  [data-studio-home-cta-actions] {
+    align-items: flex-start !important;
+  }
+}
+
+@media (min-width: 810px) {
+  [data-studio-home-cta-grid] {
+    align-items: end !important;
+  }
+  [data-studio-home-cta-actions] {
+    align-items: flex-end !important;
+  }
+}
+
+@media (min-width: 810px) {
+  [data-studio-service-detail-row-md] {
+    gap: 64px !important;
+  }
+
+  [data-studio-service-detail-row-md]:not(:first-child) {
+    padding-top: 80px !important;
+  }
+
+  [data-studio-service-detail-row-md] {
+    padding-bottom: 80px !important;
+  }
+}
+
+/* Service-detail hero md-padding mirrors source pt-[200px] pb-[120px]. */
+@media (min-width: 810px) {
+  [data-studio-service-detail-hero] {
+    padding-top: 200px !important;
+    padding-bottom: 120px !important;
+  }
+}
+
+/* Service-detail CTA section/card md padding mirror source p-16 / pb section-pad. */
+@media (min-width: 810px) {
+  [data-studio-service-detail-cta-section] {
+    padding-bottom: 100px !important;
+  }
+
+  [data-studio-service-detail-cta-card] {
+    padding: 64px !important;
+  }
+}
+
+/* Service-detail Next-section py-16 md:py-24 mirrors source. */
+@media (min-width: 810px) {
+  [data-studio-service-detail-next] {
+    padding-top: 96px !important;
+    padding-bottom: 96px !important;
+  }
+}
+
+/* Image-hero md padding mirrors source pt-[160px] pb-20. */
+@media (min-width: 810px) {
+  [data-studio-image-hero-shell] {
+    padding-top: 160px !important;
+    padding-bottom: 80px !important;
+  }
+}
+
+/* Legal-page hero md-padding mirrors source pt-[160px] pb-20 (LegalPage in
+   hr-interim-solutions-studio-designmigration/components/legal-renderer.tsx).
+   Mobile keeps pt-[120px] pb-16 from inline styles. */
+@media (min-width: 810px) {
+  [data-studio-legal-hero] {
+    padding-top: 160px !important;
+    padding-bottom: 80px !important;
+  }
+}
+
+/* Legal-renderer h2 mobile text-[28px] / md:text-[32px]. Mobile from inline. */
+@media (min-width: 810px) {
+  [data-studio-legal-h2] {
+    font-size: 32px !important;
+  }
+}
+
+/* Welcome-grid 12-col layout mirrors source col-span 2/7/3 from 810px. */
+@media (min-width: 810px) {
+  [data-studio-welcome-col="eyebrow"] {
+    grid-column: span 2 / span 2 !important;
+  }
+
+  [data-studio-welcome-col="text"] {
+    grid-column: span 7 / span 7 !important;
+  }
+
+  [data-studio-welcome-col="image"] {
+    grid-column: span 3 / span 3 !important;
+  }
+}
+
+/* About competence-grid 12-col layout mirrors source col-span 5/7. */
+@media (min-width: 810px) {
+  [data-studio-about-col="image"] {
+    grid-column: span 5 / span 5 !important;
+  }
+
+  [data-studio-about-col="text"] {
+    grid-column: span 7 / span 7 !important;
+  }
+}
+
+.studio-import-link-arrow::after {
+  content: "→";
+  display: inline-block;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
+/* Home Metrics: mirror app/globals.css `.metrics-grid` and `.metric-item`
+   from hr-interim-solutions-studio-designmigration. Source uses
+   --color-line-light = rgba(8,8,8,0.10) for the dividers, NOT 0.14. */
+[data-studio-metric-item]:nth-child(even) {
+  border-left: 1px solid rgba(8, 8, 8, 0.10);
+}
+
+[data-studio-metric-item]:nth-child(n+3) {
+  border-top: 1px solid rgba(8, 8, 8, 0.10);
+}
+
+[data-studio-metrics-grid] {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+@media (min-width: 810px) {
+  [data-studio-metrics-grid] {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+
+  [data-studio-metric-item] {
+    padding: 40px 32px !important;
+    border-top: none !important;
+  }
+
+  [data-studio-metric-item]:not(:first-child) {
+    border-left: 1px solid rgba(8, 8, 8, 0.10) !important;
+  }
+
+  /* Source: `mt-4 md:mt-6` and `text-[11px] md:text-[12px]`. */
+  [data-studio-metric-label] {
+    margin-top: 24px !important;
+    font-size: 12px !important;
+  }
+}
+
+/* Source Industries: mobile <810 = 2-col grid, md+ >=810 = marquee.
+   Matches Tailwind `md:` against custom --breakpoint-md: 810px. */
+@media (min-width: 810px) {
+  [data-studio-industries-mobile-grid] {
+    display: none !important;
+  }
+
+  [data-studio-industries-marquee] {
+    display: block !important;
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 8%, #000 92%, transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 8%, #000 92%, transparent 100%);
+  }
+
+  [data-studio-industries-marquee-track],
+  [data-studio-industries-marquee] .marquee__track,
+  [data-studio-industries-marquee] [role="list"] {
+    animation: studio-industries-marquee-scroll 50s linear infinite;
+    will-change: transform;
+  }
+
+  [data-studio-industries-marquee]:hover [data-studio-industries-marquee-track],
+  [data-studio-industries-marquee]:focus-within [data-studio-industries-marquee-track],
+  [data-studio-industries-marquee]:hover .marquee__track,
+  [data-studio-industries-marquee]:focus-within .marquee__track,
+  [data-studio-industries-marquee]:hover [role="list"],
+  [data-studio-industries-marquee]:focus-within [role="list"] {
+    animation-play-state: paused;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-studio-industries-marquee-track],
+  [data-studio-industries-marquee] .marquee__track,
+  [data-studio-industries-marquee] [role="list"] {
+    animation: none !important;
+  }
+
+  [data-studio-industries-marquee] {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+}
+
+@keyframes studio-industries-marquee-scroll {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
 }
 
 /* GSAP animation hidden state */
@@ -162,4 +1071,38 @@ textarea:focus,
 select:focus,
 button:focus {
   outline: none !important;
+}
+
+/* Studio mobile drawer accessibility & UX layer:
+   - GSAP click interaction (mobileDrawerToggleInteraction in
+     scripts/novum-import-pages-plan.mjs) handles the visual open/close
+     transition (autoAlpha + y).
+   - .studio-mobile-drawer--open is added by AnimationInitializer's
+     initializeStudioMobileDrawer() to drive aria-hidden, body-scroll-lock,
+     focus-trap, Esc-close and the burger X-state. We do NOT set opacity here
+     so we don't fight the GSAP timeline.
+   - Burger X-state syncs from [aria-expanded] on the trigger button so the
+     two horizontal lines rotate into an X without per-project Custom Code. */
+@scope ([data-studio-runtime-profile="hr-interim-solutions"]) {
+[data-studio-mobile-drawer-trigger][aria-expanded="true"]
+  [data-studio-mobile-drawer-burger-line="top"] {
+  top: 50%;
+  transform: rotate(45deg);
+}
+[data-studio-mobile-drawer-trigger][aria-expanded="true"]
+  [data-studio-mobile-drawer-burger-line="bottom"] {
+  bottom: auto;
+  top: 50%;
+  transform: rotate(-45deg);
+}
+
+/* Studio site-footer wordmark: Source uses Tailwind `text-[20vw] md:text-[14vw]`
+   (20vw on mobile, 14vw at >=768px). Inline styles cannot express responsive
+   font-size, so we apply 14vw at md+ breakpoints here. The mobile default
+   stays at 20vw via the inline style on the layer. */
+@media (min-width: 768px) {
+  [data-studio-footer-wordmark] [data-layer-id="studio-import-footer-wordmark-text"] {
+    font-size: 14vw !important;
+  }
+}
 }

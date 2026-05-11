@@ -1,4 +1,7 @@
 import Link from 'next/link';
+import { cache } from 'react';
+import { notFound } from 'next/navigation';
+import { headers } from 'next/headers';
 import { fetchHomepage, fetchErrorPage } from '@/lib/page-fetcher';
 import PageRenderer from '@/components/PageRenderer';
 import PasswordForm from '@/components/PasswordForm';
@@ -6,10 +9,13 @@ import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
 import { generatePageMetadata } from '@/lib/generate-page-metadata';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
+import { projectLookupFromHost, resolveNovumProjectId, resolveSingleNovumProjectIdForUser } from '@/lib/project-scope';
+import { canAccessNovumProjectForUser } from '@/lib/novum-platform';
+import { getAuthUser } from '@/lib/supabase-auth';
 import type { Metadata } from 'next';
 
-async function fetchPreviewDraftCss() {
-  const settings = await getSettingsByKeys(['draft_css']);
+async function fetchPreviewDraftCss(projectId?: string | null) {
+  const settings = await getSettingsByKeys(['draft_css'], projectId);
   return (settings.draft_css as string) || undefined;
 }
 
@@ -17,9 +23,83 @@ async function fetchPreviewDraftCss() {
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export default async function Home() {
-  // Fetch draft homepage data (no caching)
-  const data = await fetchHomepage(false);
+type PreviewSearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
+
+function getPreviewProjectParam(searchParams: { [key: string]: string | string[] | undefined }): string | null {
+  const value = searchParams.project;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+async function getPreviewProjectLookup(searchParams: { [key: string]: string | string[] | undefined }): Promise<string | null> {
+  const explicit = getPreviewProjectParam(searchParams);
+  if (explicit) return explicit;
+
+  const requestHeaders = await headers();
+  const explicitHeader = requestHeaders.get('x-novum-project-slug')?.trim();
+  if (explicitHeader) return explicitHeader;
+
+  const host = requestHeaders.get('x-forwarded-host') || requestHeaders.get('host') || '';
+  return projectLookupFromHost(host);
+}
+
+function buildPreviewRedirectUrl(path: string, previewProjectParam: string | null): string {
+  if (!previewProjectParam) return path;
+  const url = new URL(path, 'http://studio.local');
+  url.searchParams.set('project', previewProjectParam);
+  return `${url.pathname}${url.search}`;
+}
+
+const resolvePreviewContext = cache(async (previewProjectParam: string | null) => {
+  const auth = await getAuthUser();
+  const actorUserId = auth?.user?.id || null;
+  if (!actorUserId) return null;
+
+  const previewProjectId = previewProjectParam
+    ? await resolveNovumProjectId(previewProjectParam)
+    : await resolveSingleNovumProjectIdForUser(actorUserId);
+  if (!previewProjectId) return null;
+  if (!(await canAccessNovumProjectForUser(previewProjectId, actorUserId))) return null;
+
+  const ycodeCoreProjectId = previewProjectId;
+  const data = await fetchHomepage(false, undefined, undefined, undefined, undefined, ycodeCoreProjectId);
+  if (!data || !data.pageLayers) {
+    return {
+      previewProjectParam,
+      previewProjectId,
+      ycodeCoreProjectId,
+      data,
+      draftCSS: undefined,
+      colorVariablesCss: undefined,
+      protection: null,
+    };
+  }
+
+  const [draftCSS, colorVariablesCss, folders, authCookie] = await Promise.all([
+    fetchPreviewDraftCss(ycodeCoreProjectId),
+    generateColorVariablesCss(ycodeCoreProjectId),
+    fetchFoldersForAuth(false, ycodeCoreProjectId),
+    parseAuthCookie(),
+  ]);
+  const protection = getPasswordProtection(data.page, folders, authCookie);
+
+  return {
+    previewProjectParam,
+    previewProjectId,
+    ycodeCoreProjectId,
+    data,
+    draftCSS,
+    colorVariablesCss,
+    protection,
+  };
+});
+
+export default async function Home({ searchParams }: { searchParams: PreviewSearchParams }) {
+  const previewProjectParam = await getPreviewProjectLookup(await searchParams);
+  const context = await resolvePreviewContext(previewProjectParam);
+  if (!context) {
+    notFound();
+  }
+  const { previewProjectId, ycodeCoreProjectId, data, draftCSS, colorVariablesCss, protection } = context;
 
   // If no homepage, show default landing page
   if (!data || !data.pageLayers) {
@@ -43,20 +123,9 @@ export default async function Home() {
     );
   }
 
-  // Fetch draft CSS and color variables
-  const [draftCSS, colorVariablesCss] = await Promise.all([
-    fetchPreviewDraftCss(),
-    generateColorVariablesCss(),
-  ]);
-
-  // Check password protection for homepage (using all folders for preview)
-  const folders = await fetchFoldersForAuth(false);
-  const authCookie = await parseAuthCookie();
-  const protection = getPasswordProtection(data.page, folders, authCookie);
-
   // If homepage is protected and not unlocked, show 401 error page
-  if (protection.isProtected && !protection.isUnlocked) {
-    const errorPageData = await fetchErrorPage(401, false);
+  if (protection?.isProtected && !protection.isUnlocked) {
+    const errorPageData = await fetchErrorPage(401, false, undefined, ycodeCoreProjectId);
 
     if (errorPageData) {
       const { page: errorPage, pageLayers: errorPageLayers, components: errorComponents } = errorPageData;
@@ -69,10 +138,13 @@ export default async function Home() {
           generatedCss={draftCSS}
           colorVariablesCss={colorVariablesCss || undefined}
           isPreview={true}
+          previewProjectParam={previewProjectParam}
+          renderProjectId={ycodeCoreProjectId}
+          customCodeProjectId={previewProjectId}
           passwordProtection={{
             pageId: protection.protectedBy === 'page' ? protection.protectedById : undefined,
             folderId: protection.protectedBy === 'folder' ? protection.protectedById : undefined,
-            redirectUrl: '/ycode/preview',
+            redirectUrl: buildPreviewRedirectUrl('/ycode/preview', previewProjectParam),
             isPublished: false,
           }}
         />
@@ -87,7 +159,7 @@ export default async function Home() {
         <PasswordForm
           pageId={protection.protectedBy === 'page' ? protection.protectedById : undefined}
           folderId={protection.protectedBy === 'folder' ? protection.protectedById : undefined}
-          redirectUrl="/ycode/preview"
+          redirectUrl={buildPreviewRedirectUrl('/ycode/preview', previewProjectParam)}
           isPublished={false}
         />
       </div>
@@ -105,28 +177,35 @@ export default async function Home() {
       locale={data.locale}
       availableLocales={data.availableLocales}
       isPreview={true}
+      previewProjectParam={previewProjectParam}
+      renderProjectId={ycodeCoreProjectId}
+      customCodeProjectId={previewProjectId}
       translations={data.translations}
     />
   );
 }
 
 // Generate metadata
-export async function generateMetadata(): Promise<Metadata> {
-  const data = await fetchHomepage(false);
+export async function generateMetadata({ searchParams }: { searchParams: PreviewSearchParams }): Promise<Metadata> {
+  const previewProjectParam = await getPreviewProjectLookup(await searchParams);
+  const context = await resolvePreviewContext(previewProjectParam);
+  if (!context) {
+    return {
+      title: 'Preview - Page Not Found',
+      robots: { index: false, follow: false },
+    };
+  }
+  const { data, protection } = context;
 
-  if (!data) {
+  if (!data || !data.pageLayers) {
     return {
       title: 'Preview - Ycode',
       description: 'Preview - Built with Ycode',
+      robots: { index: false, follow: false },
     };
   }
 
-  // Check password protection - don't leak metadata for protected pages
-  const folders = await fetchFoldersForAuth(false);
-  const authCookie = await parseAuthCookie();
-  const protection = getPasswordProtection(data.page, folders, authCookie);
-
-  if (protection.isProtected && !protection.isUnlocked) {
+  if (protection?.isProtected && !protection.isUnlocked) {
     return {
       title: 'Preview - Password Protected',
       description: 'This page is password protected.',

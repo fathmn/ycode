@@ -9,7 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Spinner } from '@/components/ui/spinner';
 import Icon from '@/components/ui/icon';
 import { useSettingsStore } from '@/stores/useSettingsStore';
-import { publishApi } from '@/lib/api';
+import { STUDIO_PROJECT_SELECTION_EVENT, getSelectedStudioProjectSlug, publishApi } from '@/lib/api';
 import { formatRelativeTime } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -23,6 +23,13 @@ interface PublishPreviewCounts {
   total: number;
 }
 
+interface PublishReadiness {
+  livePublishAvailable: boolean;
+  projectScopedPublishAvailable: boolean;
+  previewApproved?: boolean;
+  blockerMessage: string | null;
+}
+
 /** Breakdown row config for rendering */
 const BREAKDOWN_ITEMS: { key: keyof Omit<PublishPreviewCounts, 'total'>; label: string; icon: Parameters<typeof Icon>[0]['name'] }[] = [
   { key: 'pages', label: 'Seiten', icon: 'page' },
@@ -32,6 +39,31 @@ const BREAKDOWN_ITEMS: { key: keyof Omit<PublishPreviewCounts, 'total'>; label: 
   { key: 'layerStyles', label: 'Layer-Styles', icon: 'cube' },
   { key: 'assets', label: 'Assets', icon: 'image' },
 ];
+
+function getLastRenderedPreviewUrl(): string {
+  if (typeof window === 'undefined') return '/ycode/preview';
+  const projectSlug = getSelectedStudioProjectSlug();
+  const value = window.localStorage?.getItem('novum:last-rendered-preview-url') || '';
+  try {
+    const url = new URL(value, window.location.origin);
+    if (url.pathname === '/ycode/preview' || url.pathname.startsWith('/ycode/preview/')) {
+      if (projectSlug && url.searchParams.get('project') !== projectSlug) {
+        return getProjectPreviewUrl();
+      }
+      return `${url.pathname}${url.search}`;
+    }
+  } catch {
+    // Fall through to the selected-project preview URL.
+  }
+  return getProjectPreviewUrl();
+}
+
+function getProjectPreviewUrl(): string {
+  const projectSlug = getSelectedStudioProjectSlug();
+  if (!projectSlug) return '/ycode/preview';
+  const params = new URLSearchParams({ project: projectSlug });
+  return `/ycode/preview?${params.toString()}`;
+}
 
 interface PublishPopoverProps {
   isPublishing: boolean;
@@ -58,20 +90,80 @@ export default function PublishPopover({
   const [isRevertDialogOpen, setIsRevertDialogOpen] = useState(false);
   const [isApprovingPreview, setIsApprovingPreview] = useState(false);
   const [previewApprovedAt, setPreviewApprovedAt] = useState<string | null>(null);
+  const [publishReadiness, setPublishReadiness] = useState<PublishReadiness | null>(null);
+  const [selectedProjectSlug, setSelectedProjectSlug] = useState<string | null>(() => getSelectedStudioProjectSlug());
 
   const { getSettingByKey, updateSetting } = useSettingsStore();
   const publishedAt = getSettingByKey('published_at');
+  const requiresProjectSelection = !selectedProjectSlug;
+  const livePublishBlocked = publishReadiness?.livePublishAvailable !== true;
+  const livePublishBlockerMessage = publishReadiness?.blockerMessage
+    || 'Live-Schaltung ist blockiert, bis projektgebundenes Publishing verfügbar ist.';
+  const previewApproved = publishReadiness?.previewApproved === true || previewApprovedAt !== null;
 
   // Load changes count when popover opens
   useEffect(() => {
     if (isOpen) {
-      loadChangesCount();
+      loadPublishReadiness();
     }
   }, [isOpen]);
 
-  const loadChangesCount = async () => {
+  useEffect(() => {
+    const updateSelectedProject = () => setSelectedProjectSlug(getSelectedStudioProjectSlug());
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === 'studio:selected-project-slug' || event.key === 'novum:selected-project-slug') {
+        updateSelectedProject();
+      }
+    };
+    window.addEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
+    window.addEventListener('storage', handleStorage);
+    updateSelectedProject();
+    return () => {
+      window.removeEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    setPreviewApprovedAt(null);
+    setPublishSuccess(false);
+    setPublishReadiness(null);
+    setChangeCounts(null);
+    if (isOpen && selectedProjectSlug) {
+      loadPublishReadiness();
+      loadChangesCount();
+    }
+  }, [selectedProjectSlug, isOpen]);
+
+  const loadPublishReadiness = async () => {
+    const response = await publishApi.getReadiness();
+    if (response.data) {
+      setPublishReadiness(response.data);
+      if (response.data.previewApproved !== true) {
+        setPreviewApprovedAt(null);
+      }
+      if (!response.data.projectScopedPublishAvailable) {
+        setChangeCounts(null);
+      } else {
+        loadChangesCount(response.data);
+      }
+    } else {
+      setPublishReadiness({
+        livePublishAvailable: false,
+        projectScopedPublishAvailable: false,
+        blockerMessage: response.error || 'Publish-Bereitschaft konnte nicht geprüft werden',
+      });
+      setChangeCounts(null);
+    }
+  };
+
+  const loadChangesCount = async (readinessOverride: PublishReadiness | null = publishReadiness) => {
     setIsLoadingCount(true);
     try {
+      if (readinessOverride?.projectScopedPublishAvailable !== true) {
+        setChangeCounts(null);
+        return;
+      }
       const response = await publishApi.getPreview();
       setChangeCounts(response.data ?? null);
     } catch (error) {
@@ -109,7 +201,7 @@ export default function PublishPopover({
 
       // Refresh counts in background (non-blocking)
       onPublishSuccess();
-      loadChangesCount();
+      loadPublishReadiness();
     } catch (error) {
       console.error('Failed to publish all:', error);
     } finally {
@@ -121,13 +213,14 @@ export default function PublishPopover({
     try {
       setIsApprovingPreview(true);
 
-      const result = await publishApi.approvePreview('/ycode/preview');
+      const result = await publishApi.approvePreview(getLastRenderedPreviewUrl());
 
       if (result.error) {
         throw new Error(result.error);
       }
 
       setPreviewApprovedAt(result.data?.created_at || new Date().toISOString());
+      await loadPublishReadiness();
       toast.success('Vorschau für Live-Schaltung freigegeben');
     } catch (error) {
       console.error('Failed to approve preview:', error);
@@ -163,7 +256,7 @@ export default function PublishPopover({
     <>
     <Popover open={isOpen} onOpenChange={setIsOpen}>
       <PopoverTrigger asChild>
-        <Button size="sm" disabled={isDisabled}>Live schalten</Button>
+        <Button size="sm" disabled={isDisabled || requiresProjectSelection}>Live schalten</Button>
       </PopoverTrigger>
 
       <PopoverContent className="mr-4 mt-0.5 w-64">
@@ -189,7 +282,8 @@ export default function PublishPopover({
             size="sm"
             variant="secondary"
             className="w-full"
-            onClick={() => window.open('/ycode/preview', '_blank')}
+            onClick={() => window.open(getProjectPreviewUrl(), '_blank')}
+            disabled={requiresProjectSelection}
           >
             Vorschau öffnen
           </Button>
@@ -198,14 +292,14 @@ export default function PublishPopover({
             variant="secondary"
             className="w-full"
             onClick={handleApprovePreview}
-            disabled={isApprovingPreview || isPublishing}
+            disabled={requiresProjectSelection || isApprovingPreview || isPublishing}
           >
             {isApprovingPreview ? (
               <>
                 <Spinner />
                 Wird freigegeben...
               </>
-            ) : previewApprovedAt ? (
+            ) : previewApproved ? (
               <>
                 <Icon name="check" />
                 Vorschau freigegeben
@@ -227,7 +321,7 @@ export default function PublishPopover({
           size="sm"
           className="w-full"
           onClick={handlePublishAll}
-          disabled={isPublishing || publishSuccess}
+          disabled={requiresProjectSelection || livePublishBlocked || isPublishing || publishSuccess}
         >
           {isPublishing ? (
             <Spinner />
@@ -237,6 +331,11 @@ export default function PublishPopover({
             publishedAt ? 'Aktualisieren' : 'Live schalten'
           )}
         </Button>
+        {livePublishBlocked && (
+          <span className="text-[10px] text-muted-foreground">
+            {livePublishBlockerMessage}
+          </span>
+        )}
 
         <hr className="my-3" />
 
@@ -245,6 +344,10 @@ export default function PublishPopover({
             <Spinner className="size-3" />
             Änderungen werden berechnet...
           </div>
+        ) : publishReadiness?.projectScopedPublishAvailable !== true ? (
+          <span className="text-xs text-muted-foreground">
+            Änderungszählung wartet auf projektgebundenes Publishing.
+          </span>
         ) : changeCounts ? (
           changeCounts.total > 0 ? (
             <Collapsible>

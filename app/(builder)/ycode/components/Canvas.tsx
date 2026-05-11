@@ -192,6 +192,12 @@ function CanvasContent({
 
   const bodyLayer = layers.find(l => l.id === 'body');
   const bodyClasses = bodyLayer ? getClassesString(bodyLayer) : '';
+  const bodyRuntimeProfile = typeof bodyLayer?.attributes?.['data-studio-runtime-profile'] === 'string'
+    ? bodyLayer.attributes['data-studio-runtime-profile']
+    : undefined;
+  const bodyRuntimeAdapters = typeof bodyLayer?.attributes?.['data-studio-runtime-adapters'] === 'string'
+    ? bodyLayer.attributes['data-studio-runtime-adapters']
+    : undefined;
   const childLayers = bodyLayer
     ? [...(bodyLayer.children || []), ...layers.filter(l => l.id !== 'body')]
     : layers;
@@ -219,6 +225,183 @@ function CanvasContent({
     () => ({ container: portalContainer, zoom }),
     [portalContainer, zoom]
   );
+
+  // Body-layer runtime attributes scope imported interaction/style adapters.
+  // In the published renderer they live on the body/main boundary; in the
+  // editor iframe the global header/footer are rendered as body children, so
+  // mirror the attributes to the iframe body and canvas root.
+  useEffect(() => {
+    if (!bodyRef.current) return;
+
+    const canvasBody = bodyRef.current;
+    const iframeBody = canvasBody.ownerDocument.body;
+    const runtimeAttrs = [
+      ['data-studio-runtime-profile', bodyRuntimeProfile],
+      ['data-studio-runtime-adapters', bodyRuntimeAdapters],
+    ] as const;
+
+    for (const [name, value] of runtimeAttrs) {
+      if (value) {
+        iframeBody.setAttribute(name, value);
+        canvasBody.setAttribute(name, value);
+      } else {
+        iframeBody.removeAttribute(name);
+        canvasBody.removeAttribute(name);
+      }
+    }
+
+    return () => {
+      for (const [name] of runtimeAttrs) {
+        iframeBody.removeAttribute(name);
+        canvasBody.removeAttribute(name);
+      }
+    };
+  }, [bodyRuntimeProfile, bodyRuntimeAdapters]);
+
+  // The editor canvas can simulate desktop/tablet/mobile independently from the
+  // browser viewport. Expose the selected breakpoint to canvas CSS so imported
+  // responsive helpers are driven by the Studio toolbar state, not by stale
+  // external CSS cache or parent chrome dimensions.
+  useEffect(() => {
+    if (!bodyRef.current || !editorBreakpoint) return;
+    const canvasBody = bodyRef.current;
+    const iframeDoc = bodyRef.current.ownerDocument;
+    iframeDoc.body.setAttribute('data-ycode-editor-breakpoint', editorBreakpoint);
+    canvasBody.setAttribute('data-ycode-editor-breakpoint', editorBreakpoint);
+    return () => {
+      iframeDoc.body.removeAttribute('data-ycode-editor-breakpoint');
+      canvasBody.removeAttribute('data-ycode-editor-breakpoint');
+    };
+  }, [editorBreakpoint]);
+
+  // Runtime adapters such as AnimationInitializer run in the published/preview
+  // document, but the editor canvas renders layers into an iframe from the
+  // parent React runtime. Initialize the imported mobile drawer against the
+  // iframe's own document so canvas interactions match preview behavior.
+  useEffect(() => {
+    if (!bodyRef.current) return;
+
+    const iframeDoc = bodyRef.current.ownerDocument;
+    const iframeWindow = iframeDoc.defaultView;
+    if (!iframeWindow) return;
+
+    const drawers = Array.from(
+      iframeDoc.querySelectorAll<HTMLElement>('[data-studio-mobile-drawer]')
+    );
+    if (drawers.length === 0) return;
+
+    const cleanups: Array<() => void> = [];
+    const OPEN_CLASS = 'studio-mobile-drawer--open';
+
+    for (const drawer of drawers) {
+      const drawerId = drawer.id || drawer.getAttribute('data-studio-mobile-drawer-id') || '';
+      const triggerCandidates = Array.from(
+        iframeDoc.querySelectorAll<HTMLElement>('[data-studio-mobile-drawer-trigger]')
+      );
+      const trigger = drawerId
+        ? triggerCandidates.find((candidate) =>
+          candidate.getAttribute('data-studio-mobile-drawer-target') === drawerId
+          || candidate.getAttribute('aria-controls') === drawerId
+        ) || null
+        : triggerCandidates[0] || null;
+
+      const initial = {
+        display: drawer.style.display,
+        visibility: drawer.style.visibility,
+        opacity: drawer.style.opacity,
+        pointerEvents: drawer.style.pointerEvents,
+        transform: drawer.style.transform,
+        overflow: iframeDoc.body.style.overflow,
+      };
+
+      const isOpen = () => drawer.classList.contains(OPEN_CLASS);
+
+      const open = () => {
+        drawer.classList.add(OPEN_CLASS);
+        drawer.setAttribute('aria-hidden', 'false');
+        trigger?.setAttribute('aria-expanded', 'true');
+        iframeDoc.body.style.overflow = 'hidden';
+        drawer.style.display = 'flex';
+        drawer.style.visibility = 'visible';
+        drawer.style.opacity = '1';
+        drawer.style.pointerEvents = 'auto';
+        drawer.style.transform = 'translateY(0px)';
+      };
+
+      const close = () => {
+        drawer.classList.remove(OPEN_CLASS);
+        drawer.setAttribute('aria-hidden', 'true');
+        trigger?.setAttribute('aria-expanded', 'false');
+        iframeDoc.body.style.overflow = initial.overflow;
+        drawer.style.display = initial.display || 'none';
+        drawer.style.visibility = initial.visibility || 'hidden';
+        drawer.style.opacity = initial.opacity || '0';
+        drawer.style.pointerEvents = initial.pointerEvents || 'none';
+        drawer.style.transform = initial.transform || 'translateY(-12px)';
+      };
+
+      const onTriggerClick = (event: MouseEvent) => {
+        event.preventDefault();
+        if (isOpen()) {
+          close();
+        } else {
+          open();
+        }
+      };
+
+      const onCloseClick = (event: MouseEvent) => {
+        const target = event.target;
+        if (!(target instanceof iframeWindow.Element)) return;
+        if (target.closest('[data-studio-mobile-drawer-close]')) {
+          event.preventDefault();
+          close();
+        }
+      };
+
+      const onLinkClick = (event: MouseEvent) => {
+        const target = event.target;
+        if (!(target instanceof iframeWindow.Element)) return;
+        const link = target.closest('a[href]');
+        if (link && drawer.contains(link)) {
+          close();
+        }
+      };
+
+      const onBackdropClick = (event: MouseEvent) => {
+        if (isOpen() && event.target === drawer) {
+          event.preventDefault();
+          close();
+        }
+      };
+
+      const onKeydown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape' && isOpen()) {
+          event.preventDefault();
+          close();
+          trigger?.focus();
+        }
+      };
+
+      trigger?.addEventListener('click', onTriggerClick);
+      drawer.addEventListener('click', onCloseClick);
+      drawer.addEventListener('click', onLinkClick);
+      drawer.addEventListener('click', onBackdropClick);
+      iframeDoc.addEventListener('keydown', onKeydown);
+
+      cleanups.push(() => {
+        trigger?.removeEventListener('click', onTriggerClick);
+        drawer.removeEventListener('click', onCloseClick);
+        drawer.removeEventListener('click', onLinkClick);
+        drawer.removeEventListener('click', onBackdropClick);
+        iframeDoc.removeEventListener('keydown', onKeydown);
+        close();
+      });
+    }
+
+    return () => {
+      cleanups.forEach((cleanup) => cleanup());
+    };
+  }, [layers, pageId, editorBreakpoint]);
 
   return (
     <CanvasPortalProvider value={portalValue}>

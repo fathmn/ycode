@@ -1,6 +1,7 @@
 import type { Page, PageFolder } from '@/types';
 import { createHmac, randomUUID } from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 
 /**
  * Page Password Protection Utilities
@@ -186,7 +187,7 @@ export function getPasswordProtection(
  * @param isPublished - If true, fetch only published folders. If false, fetch all (for preview).
  * @returns Array of page folders
  */
-export async function fetchFoldersForAuth(isPublished: boolean): Promise<PageFolder[]> {
+export async function fetchFoldersForAuth(isPublished: boolean, projectId?: string | null): Promise<PageFolder[]> {
   const supabase = await getSupabaseAdmin();
   if (!supabase) return [];
 
@@ -198,6 +199,7 @@ export async function fetchFoldersForAuth(isPublished: boolean): Promise<PageFol
   if (isPublished) {
     query = query.eq('is_published', true);
   }
+  query = (await applyProjectScopeToQuery(query, supabase, 'page_folders', projectId)).query;
 
   const { data } = await query;
   return (data as PageFolder[]) || [];

@@ -42,6 +42,7 @@ export function updateUrlQueryParam(key: string, value: string | null | undefine
 export type EditorRouteType = 'page' | 'layers' | 'collection' | 'collections-base' | 'component' | 'settings' | 'localization' | 'profile' | 'forms' | 'integrations' | null;
 export type PageSettingsTab = 'general' | 'seo' | 'custom-code';
 export type EditorTab = 'layers' | 'pages' | 'cms';
+type EditorViewportMode = 'desktop' | 'tablet' | 'mobile';
 
 interface EditorUrlState {
   type: EditorRouteType;
@@ -53,9 +54,15 @@ interface EditorUrlState {
   pageSize?: number | null; // For collection items per page
   search?: string | null; // For collection search
   sidebarTab: EditorTab; // Inferred from route type
-  view?: 'desktop' | 'tablet' | 'mobile' | null; // Viewport mode
+  view?: EditorViewportMode | null; // Viewport mode
   rightTab?: 'design' | 'settings' | 'interactions' | null; // Right sidebar tab
   layerId?: string | null; // Selected layer ID
+}
+
+function normalizeViewportMode(value: string | null | undefined): EditorViewportMode | null {
+  if (value === 'desktop' || value === 'tablet' || value === 'mobile') return value;
+  if (value === 'phone') return 'mobile';
+  return null;
 }
 
 export function useEditorUrl() {
@@ -82,7 +89,7 @@ export function useEditorUrl() {
     const profileMatch = pathname?.match(/^\/ycode\/profile(?:\/([^/]+))?$/);
 
     if (layersMatch) {
-      const viewParam = searchParams?.get('view');
+      const viewParam = normalizeViewportMode(searchParams?.get('view'));
       const rightTabParam = searchParams?.get('tab');
       const layerParam = searchParams?.get('layer');
 
@@ -92,7 +99,7 @@ export function useEditorUrl() {
         tab: null,
         page: null,
         sidebarTab: 'layers', // Inferred: layers route shows layers sidebar
-        view: viewParam as 'desktop' | 'tablet' | 'mobile' | null,
+        view: viewParam,
         rightTab: rightTabParam as 'design' | 'settings' | 'interactions' | null,
         layerId: layerParam,
       };
@@ -105,7 +112,7 @@ export function useEditorUrl() {
       const editTab = editParam && editParam !== '' && editParam !== 'general'
         ? (editParam as PageSettingsTab)
         : null;
-      const viewParam = searchParams?.get('view');
+      const viewParam = normalizeViewportMode(searchParams?.get('view'));
       const rightTabParam = searchParams?.get('tab');
       const layerParam = searchParams?.get('layer');
 
@@ -116,7 +123,7 @@ export function useEditorUrl() {
         tab: editTab,
         page: null,
         sidebarTab: 'pages', // Inferred: pages route shows pages sidebar
-        view: viewParam as 'desktop' | 'tablet' | 'mobile' | null,
+        view: viewParam,
         rightTab: rightTabParam as 'design' | 'settings' | 'interactions' | null,
         layerId: layerParam,
       };
@@ -240,7 +247,7 @@ export function useEditorUrl() {
       currentParams.delete('edit');
 
       // Update/set specific params (use provided values or current values or defaults)
-      currentParams.set('view', view || currentParams.get('view') || 'desktop');
+      currentParams.set('view', normalizeViewportMode(view || currentParams.get('view')) || 'desktop');
       currentParams.set('tab', rightTab || currentParams.get('tab') || 'design');
       currentParams.set('layer', layerId || currentParams.get('layer') || 'body');
 
@@ -259,7 +266,7 @@ export function useEditorUrl() {
       currentParams.delete('edit');
 
       // Update/set specific params (use provided values or current values or defaults)
-      currentParams.set('view', view || currentParams.get('view') || 'desktop');
+      currentParams.set('view', normalizeViewportMode(view || currentParams.get('view')) || 'desktop');
       currentParams.set('tab', rightTab || currentParams.get('tab') || 'design');
       currentParams.set('layer', layerId || currentParams.get('layer') || 'body');
 

@@ -30,6 +30,29 @@ export default function MigrationChecker({ onComplete }: MigrationCheckerProps) 
       setProgress('Checking and running migrations...');
       setError(null);
 
+      const setupStatusResponse = await novumFetch('/ycode/api/setup/status');
+      const setupStatus = await setupStatusResponse.json().catch(() => null);
+      if (
+        setupStatusResponse.ok
+        && setupStatus?.is_vercel === true
+        && setupStatus?.is_setup_complete === true
+      ) {
+        onComplete();
+        return;
+      }
+
+      const projectsResponse = await novumFetch('/ycode/api/novum/projects');
+      const projectsResult = await projectsResponse.json().catch(() => null);
+      const projects = Array.isArray(projectsResult?.data) ? projectsResult.data : [];
+      const canRunMigrations = projects.some((project: { role?: string }) =>
+        project.role === 'novum_admin' || project.role === 'novum_developer'
+      );
+
+      if (!canRunMigrations) {
+        onComplete();
+        return;
+      }
+
       // Single API call: checks AND runs migrations if needed
       const response = await novumFetch('/ycode/api/setup/migrate', {
         method: 'POST',

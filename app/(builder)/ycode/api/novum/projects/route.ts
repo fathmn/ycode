@@ -1,34 +1,46 @@
 import { NextRequest } from 'next/server';
 import { noCache } from '@/lib/api-response';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { extractSupabaseAccessToken } from '@/lib/supabase-cookie-token';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-function extractSupabaseAccessToken(request: NextRequest): string | null {
-  const bearer = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (bearer) return bearer;
-
-  for (const cookie of request.cookies.getAll()) {
-    if (!cookie.name.includes('auth-token')) continue;
-
-    try {
-      const parsed = JSON.parse(decodeURIComponent(cookie.value));
-      if (Array.isArray(parsed) && typeof parsed[0] === 'string') return parsed[0];
-      if (typeof parsed?.access_token === 'string') return parsed.access_token;
-      if (typeof parsed?.currentSession?.access_token === 'string') {
-        return parsed.currentSession.access_token;
-      }
-    } catch {
-      // Supabase cookie formats can differ between helpers.
-    }
-  }
-
-  return null;
-}
-
 function getCurrentSiteKey(): string {
   return process.env.STUDIO_YCODE_SITE_KEY || 'default';
+}
+
+function normalizePublicUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(withProtocol);
+    return `${url.protocol}//${url.host}`.replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
+function getProjectProductionUrl(project: {
+  primary_domain?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): string | null {
+  const metadata = project.metadata && typeof project.metadata === 'object' ? project.metadata : {};
+  const primaryDomainVerified = metadata.primaryDomainVerified === true
+    || metadata.primary_domain_verified === true
+    || metadata.primaryDomainStatus === 'active'
+    || metadata.primary_domain_status === 'active';
+
+  if (primaryDomainVerified) {
+    return normalizePublicUrl(project.primary_domain);
+  }
+
+  return normalizePublicUrl(metadata.productionUrl)
+    || normalizePublicUrl(metadata.production_url)
+    || normalizePublicUrl(metadata.vercelProductionUrl)
+    || normalizePublicUrl(metadata.vercel_production_url);
 }
 
 export async function GET(request: NextRequest) {
@@ -57,6 +69,7 @@ export async function GET(request: NextRequest) {
         slug,
         name,
         primary_domain,
+        metadata,
         status,
         ycode_site_key
       )
@@ -85,6 +98,7 @@ export async function GET(request: NextRequest) {
         slug: project.slug,
         name: project.name,
         primary_domain: project.primary_domain,
+        production_url: getProjectProductionUrl(project),
         status: project.status,
         role: membership.role,
       };

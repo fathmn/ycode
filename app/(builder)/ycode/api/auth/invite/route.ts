@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { noCache } from '@/lib/api-response';
+import { requireNovumProjectRole } from '@/lib/novum-platform';
 
 /**
  * POST /ycode/api/auth/invite
@@ -9,6 +10,9 @@ import { noCache } from '@/lib/api-response';
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireNovumProjectRole(request, ['novum_admin', 'novum_developer']);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const body = await request.json();
     const { email, redirectTo } = body;
 

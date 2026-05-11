@@ -6,6 +6,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import type { ColorVariable } from '@/types';
 
 export interface CreateColorVariableData {
@@ -22,8 +23,10 @@ export interface UpdateColorVariableData {
  * Convert a stored color value (#hex or #hex/opacity) to a CSS-ready value.
  */
 function toCssValue(val: string): string {
-  const parts = val.split('/');
-  if (parts.length < 2) return val;
+  const trimmed = val.trim();
+  if (!isSafeColorValue(trimmed)) return '';
+  const parts = trimmed.split('/');
+  if (parts.length < 2) return trimmed;
   const hex = parts[0];
   const opacity = parseInt(parts[1]) / 100;
   const r = parseInt(hex.slice(1, 3), 16);
@@ -32,31 +35,59 @@ function toCssValue(val: string): string {
   return `rgba(${r},${g},${b},${opacity})`;
 }
 
+function isSafeColorVariableId(value: string): boolean {
+  return /^[a-zA-Z0-9_-]{1,128}$/.test(value);
+}
+
+function isSafeColorValue(value: string): boolean {
+  if (/</.test(value) || /\/\*|\*\//.test(value) || /url\s*\(|@import|expression\s*\(/i.test(value)) return false;
+  return (
+    /^#[0-9a-f]{3,8}(?:\/(?:100|[1-9]?\d))?$/i.test(value)
+    || /^rgba?\(\s*(?:\d{1,3}\s*,\s*){2}\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i.test(value)
+    || /^hsla?\(\s*\d{1,3}(?:deg)?\s*,\s*\d{1,3}%\s*,\s*\d{1,3}%(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i.test(value)
+    || /^(transparent|currentColor)$/i.test(value)
+  );
+}
+
+function escapeStyleBoundary(value: string): string {
+  return value.replace(/<\/style/gi, '<\\/style');
+}
+
 /**
  * Generate a `:root { ... }` CSS string with all color variable declarations.
  * Returns null if no variables exist.
  */
-export async function generateColorVariablesCss(): Promise<string | null> {
+export async function generateColorVariablesCss(projectId?: string | null): Promise<string | null> {
   try {
-    const colorVars = await getAllColorVariables();
+    const colorVars = await getAllColorVariables(projectId);
     if (colorVars.length === 0) return null;
-    const declarations = colorVars.map((v) => `--${v.id}: ${toCssValue(v.value)};`).join(' ');
-    return `:root { ${declarations} }`;
+    const declarations = colorVars
+      .map((v) => {
+        if (!isSafeColorVariableId(v.id)) return null;
+        const cssValue = toCssValue(v.value);
+        return cssValue ? `--${v.id}: ${cssValue};` : null;
+      })
+      .filter((declaration): declaration is string => Boolean(declaration))
+      .join(' ');
+    if (!declarations) return null;
+    return escapeStyleBoundary(`:root { ${declarations} }`);
   } catch {
     return null;
   }
 }
 
-export async function getAllColorVariables(): Promise<ColorVariable[]> {
+export async function getAllColorVariables(projectId?: string | null): Promise<ColorVariable[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('color_variables')
-    .select('*')
+    .select('*');
+  query = (await applyProjectScopeToQuery(query, client, 'color_variables', projectId)).query;
+  const { data, error } = await query
     .order('sort_order', { ascending: true })
     .order('created_at', { ascending: true });
 

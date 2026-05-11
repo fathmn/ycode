@@ -1,6 +1,11 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import {
+  getSelectedStudioProjectSlug,
+  novumFetch,
+  setSelectedStudioProjectSlug,
+  studioProjectsApi,
+} from '@/lib/api';
 /**
  * Ycode Builder Main Component
  *
@@ -21,7 +26,6 @@ import { novumFetch } from '@/lib/api';
 
 // 1. React/Next.js
 import { useEffect, useState, useMemo, useRef, useCallback, Suspense, lazy } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 // 2. Internal components
@@ -104,6 +108,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
   const signOut = useAuthStore((state) => state.signOut);
   const user = useAuthStore((state) => state.user);
   const authInitialized = useAuthStore((state) => state.initialized);
+  const authenticatedUserId = user?.id ?? null;
 
   const selectedLayerId = useEditorStore((state) => state.selectedLayerId);
   const selectedLayerIds = useEditorStore((state) => state.selectedLayerIds);
@@ -228,6 +233,8 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
   // Check if Supabase is configured, redirect to setup if not
   const [supabaseConfigured, setSupabaseConfigured] = useState<boolean | null>(null);
+  const [projectSelectionReady, setProjectSelectionReady] = useState(false);
+  const [projectSelectionError, setProjectSelectionError] = useState<string | null>(null);
 
   useEffect(() => {
     const checkSupabaseConfig = async () => {
@@ -251,6 +258,63 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
     checkSupabaseConfig();
   }, [router]);
+
+  useEffect(() => {
+    if (!authInitialized) {
+      return;
+    }
+
+    if (!authenticatedUserId) {
+      setProjectSelectionReady(true);
+      setProjectSelectionError(null);
+      return;
+    }
+
+    let isMounted = true;
+    setProjectSelectionReady(false);
+    setProjectSelectionError(null);
+
+    const ensureProjectSelection = async () => {
+      try {
+        const response = await studioProjectsApi.getAssigned();
+        if (!isMounted) return;
+
+        if (response.error || !response.data) {
+          setProjectSelectionError(response.error || 'Projektzuweisung konnte nicht geladen werden.');
+          setProjectSelectionReady(true);
+          return;
+        }
+
+        const projects = response.data;
+        if (projects.length === 0) {
+          setProjectSelectionError('Diesem Konto ist noch kein aktives Website-Projekt zugewiesen.');
+          setProjectSelectionReady(true);
+          return;
+        }
+
+        const selectedSlug = getSelectedStudioProjectSlug();
+        const hasSelectedProject = selectedSlug
+          ? projects.some((project) => project.slug === selectedSlug)
+          : false;
+
+        if (!hasSelectedProject) {
+          setSelectedStudioProjectSlug(projects[0].slug);
+        }
+
+        setProjectSelectionReady(true);
+      } catch (error) {
+        if (!isMounted) return;
+        setProjectSelectionError(error instanceof Error ? error.message : 'Projektzuweisung konnte nicht geladen werden.');
+        setProjectSelectionReady(true);
+      }
+    };
+
+    ensureProjectSelection();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authInitialized, authenticatedUserId]);
 
   // Sync viewportMode with activeBreakpoint in store
   useEffect(() => {
@@ -433,6 +497,8 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginNotice, setLoginNotice] = useState<string | null>(null);
+  const [loginMode, setLoginMode] = useState<'magic' | 'password'>('magic');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // Ensure dark mode is applied for login screen on client-side navigation
@@ -446,6 +512,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     e.preventDefault();
     setIsLoggingIn(true);
     setLoginError(null);
+    setLoginNotice(null);
 
     const { signIn } = useAuthStore.getState();
     const result = await signIn(loginEmail, loginPassword);
@@ -457,11 +524,29 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     // If successful, user state will update and component will re-render with builder
   };
 
+  const handleMagicLinkLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoggingIn(true);
+    setLoginError(null);
+    setLoginNotice(null);
+
+    const { signInWithMagicLink } = useAuthStore.getState();
+    const result = await signInWithMagicLink(loginEmail);
+
+    if (result.error) {
+      setLoginError(result.error);
+    } else {
+      setLoginNotice('Magic Link wurde versendet. Bitte öffnen Sie die E-Mail auf diesem Gerät.');
+    }
+
+    setIsLoggingIn(false);
+  };
+
   // Track initial data load completion
   const initialLoadRef = useRef(false);
 
   useEffect(() => {
-    if (migrationsComplete && !builderDataPreloaded && !initialLoadRef.current) {
+    if (migrationsComplete && projectSelectionReady && !projectSelectionError && !builderDataPreloaded && !initialLoadRef.current) {
       initialLoadRef.current = true;
 
       // Load everything in parallel using Promise.all
@@ -532,7 +617,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
       loadBuilderData();
     }
-  }, [migrationsComplete, builderDataPreloaded, setBuilderDataPreloaded]);
+  }, [migrationsComplete, projectSelectionError, projectSelectionReady, builderDataPreloaded, setBuilderDataPreloaded]);
 
   // Handle URL-based navigation after data loads
   useEffect(() => {
@@ -1771,14 +1856,26 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         <div className="w-full max-w-sm animate-in fade-in slide-in-from-bottom-1 duration-700" style={{ animationFillMode: 'both' }}>
           <div className="mb-8 flex flex-col items-center gap-1 text-center">
             <Label className="text-white" size="sm">studio.novum partners</Label>
-            <p className="text-xs text-white/50">Kundenlogin für Website-Projekte</p>
+            <p className="text-xs text-white/50">Login für freigegebene Website-Projekte</p>
           </div>
 
-          <form onSubmit={handleLogin} className="flex flex-col gap-6">
+          <div className="mb-6 rounded-md border border-white/10 bg-white/[0.03] px-4 py-3 text-center">
+            <p className="text-xs leading-5 text-white/55">
+              Geben Sie Ihre freigegebene E-Mail-Adresse ein. Wir senden Ihnen einen sicheren Login-Link.
+            </p>
+          </div>
+
+          <form onSubmit={loginMode === 'magic' ? handleMagicLinkLogin : handleLogin} className="flex flex-col gap-6">
 
             {loginError && (
               <Alert variant="destructive">
                 <AlertTitle>{loginError}</AlertTitle>
+              </Alert>
+            )}
+
+            {loginNotice && (
+              <Alert>
+                <AlertTitle>{loginNotice}</AlertTitle>
               </Alert>
             )}
 
@@ -1797,41 +1894,67 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
               />
             </Field>
 
-            <Field>
-              <Label htmlFor="password">
-                Passwort
-              </Label>
-              <Input
-                type="password"
-                id="password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="••••••••"
-                disabled={isLoggingIn}
-                autoComplete="current-password"
-                required
-              />
-            </Field>
+            {loginMode === 'password' && (
+              <Field>
+                <Label htmlFor="password">
+                  Passwort
+                </Label>
+                <Input
+                  type="password"
+                  id="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="••••••••"
+                  disabled={isLoggingIn}
+                  autoComplete="current-password"
+                  required
+                />
+              </Field>
+            )}
 
             <Button
               type="submit"
               size="sm"
               disabled={isLoggingIn}
             >
-              {isLoggingIn ? <Spinner /> : 'Einloggen'}
+              {isLoggingIn ? <Spinner /> : loginMode === 'magic' ? 'Magic Link senden' : 'Mit Passwort einloggen'}
             </Button>
           </form>
 
-          <div className="mt-4 text-center">
+          <div className="mt-4 flex flex-col items-center gap-3 text-center">
+            <button
+              type="button"
+              className="text-xs font-medium text-white/70 underline-offset-4 hover:text-white hover:underline"
+              onClick={() => {
+                setLoginMode(loginMode === 'magic' ? 'password' : 'magic');
+                setLoginError(null);
+                setLoginNotice(null);
+              }}
+            >
+              {loginMode === 'magic' ? 'Mit Passwort einloggen' : 'Stattdessen Magic Link senden'}
+            </button>
             <p className="text-xs text-white/50">
-              Setup noch nicht abgeschlossen?{' '}
-              <Link href="/ycode/welcome" className="text-white/80">
-                Setup starten
-              </Link>
+              Noch keine Einladung erhalten? Bitte wenden Sie sich an novum partners.
             </p>
           </div>
         </div>
 
+      </div>
+    );
+  }
+
+  if (!projectSelectionReady) {
+    return <BuilderLoading message="Projekt wird geladen..." />;
+  }
+
+  if (projectSelectionError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-neutral-950 px-6">
+        <div className="w-full max-w-sm text-center">
+          <Alert variant="destructive">
+            <AlertTitle>{projectSelectionError}</AlertTitle>
+          </Alert>
+        </div>
       </div>
     );
   }

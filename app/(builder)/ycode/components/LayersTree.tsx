@@ -150,6 +150,19 @@ function isDescendant(
   return isDescendant(node, parent, allNodes);
 }
 
+function layerSupportsCssOrder(layer: Layer): boolean {
+  if (layer.id === 'body' || layer.name === 'body') return false;
+
+  const classes = Array.isArray(layer.classes) ? layer.classes.join(' ') : (layer.classes || '');
+  if (/(^|\s)(flex|inline-flex|grid|inline-grid)(\s|$)/.test(classes)) return true;
+
+  const style = typeof layer.attributes?.style === 'string' ? layer.attributes.style : '';
+  if (/\bdisplay\s*:\s*(flex|inline-flex|grid|inline-grid)\b/i.test(style)) return true;
+
+  const display = layer.design?.layout?.display;
+  return typeof display === 'string' && /^(flex|grid)$/i.test(display);
+}
+
 // LayerRow Component - Individual draggable/droppable tree node
 // Memoized to prevent unnecessary re-renders on hover state changes
 const LayerRow = React.memo(function LayerRow({
@@ -1707,14 +1720,20 @@ export default function LayersTree({
         }
       }
 
-      // Check if this is a within-parent reorder on a non-desktop breakpoint
-      // If so, use CSS order classes instead of changing DOM structure
+      // Check if this is a within-parent reorder on a non-desktop breakpoint.
+      // CSS order only affects flex/grid parents; normal block-flow parents
+      // such as the Body layer must be structurally reordered to update canvas.
       const isWithinParentReorder = activeNode.parentId === newParentId;
       const isResponsiveBreakpoint = activeBreakpoint !== 'desktop';
+      const targetParentNode = flattenedNodes.find(n => n.id === newParentId);
+      const canUseResponsiveOrder = isWithinParentReorder &&
+        isResponsiveBreakpoint &&
+        targetParentNode &&
+        layerSupportsCssOrder(targetParentNode.layer);
 
       let newLayers: Layer[];
 
-      if (isWithinParentReorder && isResponsiveBreakpoint) {
+      if (canUseResponsiveOrder) {
         // Apply CSS order classes for responsive visual reordering
         // This keeps DOM structure intact but changes visual order on this breakpoint
         newLayers = applyResponsiveOrderClasses(

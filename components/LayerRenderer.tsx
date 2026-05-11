@@ -46,7 +46,7 @@ import FilterableCollection from '@/components/FilterableCollection';
 import LocaleSelector from '@/components/layers/LocaleSelector';
 import { usePagesStore } from '@/stores/usePagesStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
-import { generateLinkHref, resolveLinkAttrs, isLinkAtCollectionBoundary, type LinkResolutionContext } from '@/lib/link-utils';
+import { generateLinkHref, resolveLinkAttrs, isLinkAtCollectionBoundary, prefixPreviewHref, sanitizeHrefForAttribute, type LinkResolutionContext } from '@/lib/link-utils';
 import { collectEditorHiddenLayerIds, type HiddenLayerInfo } from '@/lib/animation-utils';
 import AnimationInitializer from '@/components/AnimationInitializer';
 import { transformLayerIdsForInstance, resolveVariableLinks } from '@/lib/resolve-components';
@@ -74,6 +74,78 @@ function buildAnchorMap(layers: Layer[]): Record<string, string> {
 
   traverse(layers);
   return map;
+}
+
+function isSafeInlineSvg(svg: string): boolean {
+  const value = svg.trim();
+  if (!value.startsWith('<svg') || !value.endsWith('</svg>')) return false;
+  if (/<script\b|<foreignObject\b|<iframe\b|<object\b|<embed\b/i.test(value)) return false;
+  if (/\son[a-z]+\s*=/i.test(value)) return false;
+  if (/(?:href|src|xlink:href)\s*=\s*["']?\s*(?:javascript:|data:|https?:)/i.test(value)) return false;
+  if (/url\s*\(/i.test(value)) return false;
+  return true;
+}
+
+const ALLOWED_IFRAME_HOSTS = [
+  'youtube.com',
+  'www.youtube.com',
+  'youtube-nocookie.com',
+  'www.youtube-nocookie.com',
+  'player.vimeo.com',
+  'www.google.com',
+  'maps.google.com',
+  'calendly.com',
+  'assets.calendly.com',
+];
+
+function sanitizeIframeSrc(value?: string): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return undefined;
+    if (!ALLOWED_IFRAME_HOSTS.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`))) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function isDangerousAttributeName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return normalized === 'srcdoc'
+    || normalized === 'dangerouslysetinnerhtml'
+    || normalized === 'innerhtml'
+    || normalized === 'outerhtml'
+    || normalized === 'sandbox'
+    || normalized === 'nonce'
+    || /^on[a-z]/.test(normalized);
+}
+
+function sanitizeAttributeValue(name: string, value: unknown): unknown | undefined {
+  if (isDangerousAttributeName(name)) return undefined;
+  if (typeof value !== 'string') return value;
+
+  const normalized = name.trim().toLowerCase();
+  if (
+    normalized === 'href'
+    || normalized === 'src'
+    || normalized === 'action'
+    || normalized.endsWith('href')
+    || normalized.endsWith('src')
+    || normalized === 'formaction'
+  ) {
+    return sanitizeHrefForAttribute(value) || undefined;
+  }
+
+  return value;
+}
+
+function scriptJson(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
+function htmlEmbedSrcDoc(html: string, layerId: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>body{margin:0;padding:0;overflow:hidden}</style></head><body>${html}<script>(()=>{const id=${scriptJson(layerId)};const send=()=>{const h=Math.max(document.documentElement?.scrollHeight||0,document.body?.scrollHeight||0,document.body?.offsetHeight||0);parent.postMessage({type:'ycode-html-embed-resize',id,height:h},'*')};addEventListener('load',send,{once:true});if('ResizeObserver'in window&&document.body){new ResizeObserver(send).observe(document.body)}setInterval(send,250);queueMicrotask(send);requestAnimationFrame(send)})()</script></body></html>`;
 }
 
 interface LayerRendererProps {
@@ -115,12 +187,15 @@ interface LayerRendererProps {
   folders?: any[]; // Folders for link resolution
   collectionItemSlugs?: Record<string, string>; // Maps collection_item_id -> slug value for link resolution
   isPreview?: boolean; // Whether we're in preview mode (prefix links with /ycode/preview)
+  previewProjectParam?: string | null; // Active Studio project slug/domain for preview links
   translations?: Record<string, any> | null; // Translations for localized URL generation
   anchorMap?: Record<string, string>; // Pre-built map of layerId -> anchor value for O(1) lookups
   /** Pre-resolved assets (asset_id -> { url, width, height }) for SSR resolution */
   resolvedAssets?: Record<string, { url: string; width?: number | null; height?: number | null }>;
   /** Components for resolving embedded component nodes in rich-text (preview/published) */
   components?: Component[];
+  /** Whether custom-code surfaces such as HTML embeds may execute while rendering. */
+  allowCustomCodeExecution?: boolean;
   /** Component IDs in the rendering chain, used to prevent circular loops through collection rich-text data */
   ancestorComponentIds?: Set<string>;
   /** Whether these layers are direct children of a slides wrapper (adds swiper-slide class) */
@@ -169,10 +244,12 @@ const LayerRenderer: React.FC<LayerRendererProps> = ({
   pages: pagesProp,
   folders: foldersProp,
   isPreview = false,
+  previewProjectParam,
   translations,
   anchorMap: anchorMapProp,
   resolvedAssets,
   components: componentsProp,
+  allowCustomCodeExecution = true,
   ancestorComponentIds,
   isSlideChild: isSlideChildProp,
   serverSettings,
@@ -314,10 +391,12 @@ const LayerRenderer: React.FC<LayerRendererProps> = ({
         folders={folders}
         collectionItemSlugs={collectionItemSlugs}
         isPreview={isPreview}
+        previewProjectParam={previewProjectParam}
         translations={translations}
         anchorMap={anchorMap}
         resolvedAssets={resolvedAssets}
         components={componentsProp}
+        allowCustomCodeExecution={allowCustomCodeExecution}
         ancestorComponentIds={ancestorComponentIds}
         isSlideChild={isSlideChildProp}
         serverSettings={serverSettings}
@@ -379,10 +458,12 @@ const LayerItem: React.FC<{
   folders?: any[]; // Folders for link resolution
   collectionItemSlugs?: Record<string, string>; // Maps collection_item_id -> slug value for link resolution
   isPreview?: boolean; // Whether we're in preview mode
+  previewProjectParam?: string | null; // Active Studio project slug/domain for preview links
   translations?: Record<string, any> | null; // Translations for localized URL generation
   anchorMap?: Record<string, string>; // Pre-built map of layerId -> anchor value
   resolvedAssets?: Record<string, { url: string; width?: number | null; height?: number | null }>;
   components?: Component[];
+  allowCustomCodeExecution?: boolean;
   ancestorComponentIds?: Set<string>;
   isSlideChild?: boolean;
   serverSettings?: Record<string, unknown>;
@@ -431,10 +512,12 @@ const LayerItem: React.FC<{
   folders,
   collectionItemSlugs,
   isPreview,
+  previewProjectParam,
   translations,
   anchorMap,
   resolvedAssets,
   components: componentsProp,
+  allowCustomCodeExecution = true,
   ancestorComponentIds,
   isSlideChild,
   serverSettings,
@@ -527,15 +610,17 @@ const LayerItem: React.FC<{
     folders,
     collectionItemSlugs,
     isPreview,
+    previewProjectParam,
     translations,
     anchorMap,
     resolvedAssets,
     components: componentsProp,
+    allowCustomCodeExecution,
     serverSettings,
   // selectedLayerId and hoveredLayerId kept in the object for SSR/published mode
   // but excluded from deps so changes don't cascade re-renders in edit mode.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [isEditMode, isPublished, onLayerClick, onLayerUpdate, onLayerHover, pageId, collectionLayerData, collectionLayerItemId, effectiveLayerDataMap, pageCollectionItemId, pageCollectionItemData, pageCollectionSortedItemIds, hiddenLayerInfo, editorHiddenLayerIds, editorBreakpoint, currentLocale, availableLocales, localeSelectorFormat, liveLayerUpdates, liveComponentUpdates, isInsideForm, isInsideLink, parentFormSettings, pages, folders, collectionItemSlugs, isPreview, translations, anchorMap, resolvedAssets, componentsProp, serverSettings]);
+  }), [isEditMode, isPublished, onLayerClick, onLayerUpdate, onLayerHover, pageId, collectionLayerData, collectionLayerItemId, effectiveLayerDataMap, pageCollectionItemId, pageCollectionItemData, pageCollectionSortedItemIds, hiddenLayerInfo, editorHiddenLayerIds, editorBreakpoint, currentLocale, availableLocales, localeSelectorFormat, liveLayerUpdates, liveComponentUpdates, isInsideForm, isInsideLink, parentFormSettings, pages, folders, collectionItemSlugs, isPreview, previewProjectParam, translations, anchorMap, resolvedAssets, componentsProp, allowCustomCodeExecution, serverSettings]);
 
   // Callback for rendering embedded components inside rich-text content
   // Clicks on the embedded component's internal layers should select the text layer
@@ -661,7 +746,7 @@ const LayerItem: React.FC<{
   // Code Embed iframe ref and effect - must be at component level
   const htmlEmbedIframeRef = React.useRef<HTMLIFrameElement>(null);
   const filterLayerRef = React.useRef<HTMLDivElement>(null);
-  const htmlEmbedCode = layer.name === 'htmlEmbed'
+  const htmlEmbedCode = layer.name === 'htmlEmbed' && allowCustomCodeExecution
     ? (layer.settings?.htmlEmbed?.code || '<div>Add your custom code here</div>')
     : '';
 
@@ -670,58 +755,22 @@ const LayerItem: React.FC<{
     if (layer.name !== 'htmlEmbed' || !htmlEmbedIframeRef.current) return;
 
     const iframe = htmlEmbedIframeRef.current;
-    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-
-    if (!iframeDoc) return;
-
-    // Create a complete HTML document inside iframe
-    iframeDoc.open();
-    iframeDoc.write(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-          body {
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-          }
-        </style>
-      </head>
-      <body>
-        ${htmlEmbedCode}
-      </body>
-      </html>
-    `);
-    iframeDoc.close();
-
-    // Auto-resize iframe to match content height
-    const updateHeight = () => {
-      if (iframeDoc.body) {
-        const height = iframeDoc.body.scrollHeight;
-        iframe.style.height = `${height}px`;
-      }
+    const handleMessage = (event: MessageEvent) => {
+      if (event.source !== iframe.contentWindow) return;
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type !== 'ycode-html-embed-resize' || data.id !== layer.id) return;
+      const height = Number(data.height);
+      if (!Number.isFinite(height) || height < 0 || height > 100000) return;
+      iframe.style.height = `${Math.ceil(height)}px`;
     };
 
-    // Initial height update
-    updateHeight();
-
-    // Watch for content size changes
-    const resizeObserver = new ResizeObserver(updateHeight);
-    if (iframeDoc.body) {
-      resizeObserver.observe(iframeDoc.body);
-    }
-
-    // Fallback: Update height periodically for dynamic content
-    const interval = setInterval(updateHeight, 100);
+    window.addEventListener('message', handleMessage);
 
     return () => {
-      resizeObserver.disconnect();
-      clearInterval(interval);
+      window.removeEventListener('message', handleMessage);
     };
-  }, [htmlEmbedCode, layer.name]);
+  }, [layer.id, layer.name]);
 
   // Filter layer runtime behavior: attach event listeners to child inputs
   const isFilterLayer = layer.name === 'filter';
@@ -1568,6 +1617,7 @@ const LayerItem: React.FC<{
     collectionItemData: collectionLayerData,
     pageCollectionItemData: pageCollectionItemData || undefined,
     isPreview,
+    previewProjectParam,
     locale: currentLocale,
     translations,
     getAsset,
@@ -1623,6 +1673,7 @@ const LayerItem: React.FC<{
       'for': 'htmlFor',
       'class': 'className',
       'autofocus': 'autoFocus',
+      'tabindex': 'tabIndex',
     };
 
     // Convert string boolean values to actual booleans and map HTML attrs to JSX
@@ -1631,30 +1682,31 @@ const LayerItem: React.FC<{
         .filter(([key]) => {
           // React uses defaultValue/value on <select>, not selected on <option>
           if (htmlTag === 'option' && key === 'selected') return false;
+          if (sanitizeAttributeValue(key, otherAttributes[key]) === undefined) return false;
           return true;
         })
         .map(([key, value]) => {
           // Map HTML attribute names to JSX equivalents
           const jsxKey = htmlToJsxAttrMap[key] || key;
+          const safeValue = sanitizeAttributeValue(jsxKey, value);
 
           // If value is already a boolean, keep it
-          if (typeof value === 'boolean') {
-            return [jsxKey, value];
+          if (typeof safeValue === 'boolean') {
+            return [jsxKey, safeValue];
           }
           // If value is a string that looks like a boolean, convert it
-          if (typeof value === 'string') {
-            if (value === 'true') {
+          if (typeof safeValue === 'string') {
+            if (safeValue === 'true') {
               return [jsxKey, true];
             }
-            if (value === 'false') {
+            if (safeValue === 'false') {
               return [jsxKey, false];
             }
           }
           // For all other values, keep them as-is
-          return [jsxKey, value];
+          return [jsxKey, safeValue];
         })
     );
-
     // Parse style string to object if needed (for display: contents from collection wrappers)
     const parsedAttrStyle = typeof attrStyle === 'string'
       ? Object.fromEntries(
@@ -1864,8 +1916,39 @@ const LayerItem: React.FC<{
     // Apply custom attributes from settings
     if (layer.settings?.customAttributes) {
       Object.entries(layer.settings.customAttributes).forEach(([name, value]) => {
-        elementProps[name] = value;
+        const safeValue = sanitizeAttributeValue(name, value);
+        if (safeValue !== undefined) {
+          elementProps[name] = safeValue;
+        }
       });
+    }
+    const previewHrefPath = typeof elementProps.href === 'string'
+      ? elementProps.href.split(/[?#]/)[0]
+      : '';
+    const isReservedPreviewHref = ['/ycode', '/api', '/_next'].some((prefix) =>
+      previewHrefPath === prefix || previewHrefPath.startsWith(`${prefix}/`)
+    );
+    const isStaticAssetHref = typeof elementProps.href === 'string'
+      && /\.(?:avif|bmp|css|csv|eot|gif|ico|jpeg|jpg|js|json|map|mp3|mp4|otf|pdf|png|svg|ttf|txt|webm|webp|woff|woff2|xml|zip)(?:[?#].*)?$/i.test(elementProps.href);
+    if (
+      isPreview
+      && htmlTag === 'a'
+      && typeof elementProps.href === 'string'
+      && !('download' in elementProps)
+      && elementProps.href.startsWith('/')
+      && !elementProps.href.startsWith('//')
+      && !isReservedPreviewHref
+      && !isStaticAssetHref
+    ) {
+      elementProps.href = prefixPreviewHref(elementProps.href, previewProjectParam);
+    }
+    if (htmlTag === 'a' && typeof elementProps.href === 'string') {
+      const safeHref = sanitizeHrefForAttribute(elementProps.href);
+      if (safeHref) {
+        elementProps.href = safeHref;
+      } else {
+        delete elementProps.href;
+      }
     }
 
     // Select with placeholder: set defaultValue so React shows the placeholder option
@@ -2311,6 +2394,7 @@ const LayerItem: React.FC<{
                 folders,
                 collectionItemSlugs,
                 isPreview,
+                previewProjectParam,
                 locale: currentLocale,
                 translations,
                 getAsset,
@@ -2375,9 +2459,13 @@ const LayerItem: React.FC<{
           const resolvedValue = resolveFieldValue(iconSrc, collectionLayerData, pageCollectionItemData, effectiveLayerDataMap);
           if (resolvedValue && typeof resolvedValue === 'string') {
             const asset = assetsById[resolvedValue] || getAsset(resolvedValue);
-            iconHtml = asset?.content || resolvedValue;
+            iconHtml = asset?.content || '';
           }
         }
+      }
+
+      if (!isSafeInlineSvg(iconHtml)) {
+        iconHtml = '';
       }
 
       // If no valid icon content, show default icon
@@ -2396,13 +2484,29 @@ const LayerItem: React.FC<{
 
     // Handle Code Embed layers - Framer-style iframe isolation
     if (layer.name === 'htmlEmbed') {
+      if (!allowCustomCodeExecution) {
+        return (
+          <div
+            data-layer-id={layer.id}
+            data-layer-type="htmlEmbed"
+            data-html-embed="blocked"
+            className={fullClassName}
+            style={{
+              width: '100%',
+              display: 'block',
+              ...mergedStyle,
+            }}
+          />
+        );
+      }
       return (
         <iframe
           ref={htmlEmbedIframeRef}
           data-layer-id={layer.id}
           data-layer-type="htmlEmbed"
           data-html-embed="true"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+          sandbox="allow-scripts allow-forms allow-popups allow-modals"
+          srcDoc={htmlEmbedSrcDoc(htmlEmbedCode, layer.id)}
           className={fullClassName}
           style={{
             width: '100%',
@@ -2522,7 +2626,10 @@ const LayerItem: React.FC<{
           // Apply custom attributes from settings
           if (layer.settings?.customAttributes) {
             Object.entries(layer.settings.customAttributes).forEach(([name, value]) => {
-              iframeProps[name] = value;
+              const safeValue = sanitizeAttributeValue(name, value);
+              if (safeValue !== undefined) {
+                iframeProps[name] = safeValue;
+              }
             });
           }
 
@@ -2669,8 +2776,9 @@ const LayerItem: React.FC<{
       // (autoplay and volume must be set via JavaScript on the DOM element)
       if (htmlTag === 'audio' || htmlTag === 'video') {
         const originalRef = mediaProps.ref;
-        const volumeValue = normalizedAttributes?.volume
-          ? parseInt(normalizedAttributes.volume) / 100
+        const rawVolumeValue = normalizedAttributes?.volume;
+        const volumeValue = typeof rawVolumeValue === 'string' || typeof rawVolumeValue === 'number'
+          ? parseInt(String(rawVolumeValue), 10) / 100
           : undefined;
 
         if (shouldAutoPlay || volumeValue !== undefined) {
@@ -2724,6 +2832,7 @@ const LayerItem: React.FC<{
               folders={folders}
               collectionItemSlugs={collectionItemSlugs}
               isPreview={isPreview}
+              previewProjectParam={previewProjectParam}
               translations={translations}
               anchorMap={anchorMap}
               resolvedAssets={resolvedAssets}
@@ -2738,6 +2847,7 @@ const LayerItem: React.FC<{
               isInsideLink={isInsideLink}
               parentFormSettings={parentFormSettings}
               components={componentsProp}
+              allowCustomCodeExecution={allowCustomCodeExecution}
               ancestorComponentIds={effectiveAncestorIds}
               isSlideChild={layer.name === 'slides'}
               serverSettings={serverSettings}
@@ -2748,7 +2858,9 @@ const LayerItem: React.FC<{
     }
 
     if (htmlTag === 'iframe') {
-      const iframeSrc = getIframeUrlFromVariable(layer.variables?.iframe?.src) || (normalizedAttributes as Record<string, string>).src || undefined;
+      const iframeSrc = sanitizeIframeSrc(
+        getIframeUrlFromVariable(layer.variables?.iframe?.src) || (normalizedAttributes as Record<string, string>).src || undefined
+      );
 
       // Don't render iframe if no src (prevents empty src warning)
       if (!iframeSrc) {
@@ -2953,6 +3065,7 @@ const LayerItem: React.FC<{
                     anchorMap={anchorMap}
                     resolvedAssets={resolvedAssets}
                     components={componentsProp}
+                    allowCustomCodeExecution={allowCustomCodeExecution}
                     ancestorComponentIds={effectiveAncestorIds}
                     isSlideChild={layer.name === 'slides'}
                     serverSettings={serverSettings}
@@ -3022,6 +3135,7 @@ const LayerItem: React.FC<{
               isInsideLink={isInsideLink || htmlTag === 'a'}
               parentFormSettings={htmlTag === 'form' ? layer.settings?.form : parentFormSettings}
               components={componentsProp}
+              allowCustomCodeExecution={allowCustomCodeExecution}
               ancestorComponentIds={effectiveAncestorIds}
               serverSettings={serverSettings}
             />
@@ -3091,10 +3205,12 @@ const LayerItem: React.FC<{
             folders={folders}
             collectionItemSlugs={collectionItemSlugs}
             isPreview={isPreview}
+            previewProjectParam={previewProjectParam}
             translations={translations}
             anchorMap={anchorMap}
             resolvedAssets={resolvedAssets}
             components={componentsProp}
+            allowCustomCodeExecution={allowCustomCodeExecution}
             ancestorComponentIds={effectiveAncestorIds}
             isSlideChild={layer.name === 'slides'}
             serverSettings={serverSettings}

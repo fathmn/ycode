@@ -20,6 +20,7 @@ interface AuthActions {
   initialize: () => Promise<void>;
   signUp: (email: string, password: string) => Promise<{ error: string | null }>;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  signInWithMagicLink: (email: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   checkSession: () => Promise<void>;
   setError: (error: string | null) => void;
@@ -163,6 +164,42 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return { error: null };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sign in failed';
+      set({ loading: false, error: message });
+      return { error: message };
+    }
+  },
+
+  /**
+   * Send a passwordless login link for an existing invited user.
+   */
+  signInWithMagicLink: async (email) => {
+    set({ loading: true, error: null });
+
+    try {
+      const supabase = await createBrowserClient();
+
+      if (!supabase) {
+        set({ loading: false, error: 'Supabase not configured. Please complete setup first.' });
+        return { error: 'Supabase not configured. Please complete setup first.' };
+      }
+
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          emailRedirectTo: `${window.location.origin}/ycode/api/auth/callback`,
+          shouldCreateUser: false,
+        },
+      });
+
+      if (error) {
+        set({ loading: false, error: error.message });
+        return { error: error.message };
+      }
+
+      set({ loading: false });
+      return { error: null };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Magic link sign in failed';
       set({ loading: false, error: message });
       return { error: message };
     }

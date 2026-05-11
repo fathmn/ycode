@@ -7,6 +7,7 @@ import { getValuesByFieldId, getValuesByItemIds, getValuesByItemId } from '@/lib
 import { generateCollectionItemContentHash } from '@/lib/hash-utils';
 import { castValue } from '../collection-utils';
 import { findStatusFieldId, buildStatusValue } from '@/lib/collection-field-utils';
+import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired } from '@/lib/project-scope';
 
 /**
  * Collection Item Repository
@@ -37,7 +38,8 @@ export interface QueryFilters {
 export async function getTopItemsPerCollection(
   collectionIds: string[],
   is_published: boolean = false,
-  limit: number = 10
+  limit: number = 10,
+  projectId?: string | null
 ): Promise<CollectionItem[]> {
   const client = await getSupabaseAdmin();
 
@@ -49,12 +51,45 @@ export async function getTopItemsPerCollection(
     return [];
   }
 
-  // Use raw SQL with window function to get top N items per collection
-  const { data, error } = await client.rpc('get_top_items_per_collection', {
+  if (projectId) {
+    const batches = await Promise.all(collectionIds.map(async (collectionId) => {
+      let query = client
+        .from('collection_items')
+        .select('*')
+        .eq('collection_id', collectionId)
+        .eq('is_published', is_published)
+        .is('deleted_at', null)
+        .order('manual_order', { ascending: true })
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
+
+      if (is_published) {
+        query = query.eq('is_publishable', true);
+      }
+
+      const { data: batchData, error: batchError } = await query;
+
+      if (batchError) {
+        throw new Error(`Failed to fetch items: ${batchError.message}`);
+      }
+
+      return batchData || [];
+    }));
+
+    return batches.flat();
+  }
+
+  if (isSharedDbProjectScopeRequired()) {
+    throw new Error('Project scope is required for collection_items batch reads');
+  }
+
+  const rpcResult = await client.rpc('get_top_items_per_collection', {
     p_collection_ids: collectionIds,
     p_is_published: is_published,
     p_limit: limit,
   });
+  const { data, error } = rpcResult;
 
   if (error) {
     // Fallback to manual approach if RPC doesn't exist yet
@@ -68,6 +103,7 @@ export async function getTopItemsPerCollection(
       .order('manual_order', { ascending: true })
       .order('created_at', { ascending: false })
       .limit(collectionIds.length * limit);
+    manualQuery = (await applyProjectScopeToQuery(manualQuery, client, 'collection_items', projectId)).query;
 
     // For published queries, only include publishable items
     if (is_published) {
@@ -119,7 +155,8 @@ export interface UpdateCollectionItemData {
 export async function getItemsByCollectionId(
   collection_id: string,
   is_published: boolean = false,
-  filters?: QueryFilters
+  filters?: QueryFilters,
+  projectId?: string | null
 ): Promise<{ items: CollectionItem[], total: number }> {
   const client = await getSupabaseAdmin();
 
@@ -139,12 +176,14 @@ export async function getItemsByCollectionId(
     const searchTerm = `%${filters.search.trim()}%`;
 
     // Query collection_item_values for matching values (same published state)
-    const { data: matchingValues, error: searchError } = await client
+    let searchQuery = client
       .from('collection_item_values')
       .select('item_id')
       .ilike('value', searchTerm)
       .eq('is_published', is_published)
       .is('deleted_at', null);
+    searchQuery = (await applyProjectScopeToQuery(searchQuery, client, 'collection_item_values', projectId)).query;
+    const { data: matchingValues, error: searchError } = await searchQuery;
 
     if (searchError) {
       throw new Error(`Failed to search items: ${searchError.message}`);
@@ -183,6 +222,7 @@ export async function getItemsByCollectionId(
     .select('*', { count: 'exact', head: true })
     .eq('collection_id', collection_id)
     .eq('is_published', is_published);
+  countQuery = (await applyProjectScopeToQuery(countQuery, client, 'collection_items', projectId)).query;
 
   // For published queries, only include publishable items
   if (is_published) {
@@ -220,6 +260,7 @@ export async function getItemsByCollectionId(
     .eq('is_published', is_published)
     .order('manual_order', { ascending: true })
     .order('created_at', { ascending: false });
+  query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
 
   // For published queries, only include publishable items
   if (is_published) {
@@ -270,6 +311,7 @@ export async function enrichItemsWithStatus(
   items: CollectionItemWithValues[],
   collectionId: string,
   statusFieldId: string | null,
+  projectId?: string | null,
 ): Promise<void> {
   if (!statusFieldId || items.length === 0) return;
 
@@ -281,12 +323,14 @@ export async function enrichItemsWithStatus(
   // Fetch published counterparts (id + content_hash) in one query
   let publishedRows: Array<{ id: string; content_hash: string | null }> | null = null;
   try {
-    const { data, error } = await client
+    let publishedQuery = client
       .from('collection_items')
       .select('id, content_hash')
       .in('id', itemIds)
       .eq('is_published', true)
       .is('deleted_at', null);
+    publishedQuery = (await applyProjectScopeToQuery(publishedQuery, client, 'collection_items', projectId)).query;
+    const { data, error } = await publishedQuery;
 
     if (error) {
       console.error('Failed to fetch published items for status:', error.message);
@@ -306,17 +350,19 @@ export async function enrichItemsWithStatus(
   const itemsMissingHash = (publishedRows || []).filter(row => row.content_hash == null);
   if (itemsMissingHash.length > 0) {
     const backfillPromises = itemsMissingHash.map(async (row) => {
-      const pubValues = await getValuesByItemId(row.id, true);
+      const pubValues = await getValuesByItemId(row.id, true, projectId);
       if (pubValues.length === 0) return;
       const hash = generateCollectionItemContentHash(
         pubValues.map(v => ({ field_id: v.field_id, value: v.value }))
       );
       publishedHashMap.set(row.id, hash);
-      await client
+      let updateQuery = client
         .from('collection_items')
         .update({ content_hash: hash })
         .eq('id', row.id)
         .eq('is_published', true);
+      updateQuery = (await applyProjectScopeToQuery(updateQuery, client, 'collection_items', projectId)).query;
+      await updateQuery;
     });
     await Promise.all(backfillPromises);
   }
@@ -340,9 +386,10 @@ export async function enrichItemsWithStatus(
 export async function enrichSingleItemWithStatus(
   item: CollectionItemWithValues,
   collectionId: string,
+  projectId?: string | null,
 ): Promise<void> {
-  const fields = await getFieldsByCollectionId(collectionId, false);
-  await enrichItemsWithStatus([item], collectionId, findStatusFieldId(fields));
+  const fields = await getFieldsByCollectionId(collectionId, false, undefined, projectId);
+  await enrichItemsWithStatus([item], collectionId, findStatusFieldId(fields), projectId);
 }
 
 /**
@@ -410,19 +457,20 @@ export async function getAllItemsByCollectionId(
  * @param id - Item UUID
  * @param isPublished - Get draft (false) or published (true) version. Defaults to false (draft).
  */
-export async function getItemById(id: string, isPublished: boolean = false): Promise<CollectionItem | null> {
+export async function getItemById(id: string, isPublished: boolean = false, projectId?: string | null): Promise<CollectionItem | null> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('collection_items')
     .select('*')
     .eq('id', id)
-    .eq('is_published', isPublished)
-    .single();
+    .eq('is_published', isPublished);
+  query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
+  const { data, error } = await query.single();
 
   if (error && error.code !== 'PGRST116') {
     throw new Error(`Failed to fetch collection item: ${error.message}`);
@@ -468,7 +516,7 @@ export async function getItemsByIds(ids: string[], isPublished: boolean = false)
  * @param id - Item UUID
  * @param is_published - Get draft (false) or published (true) values. Defaults to false (draft).
  */
-export async function getItemWithValues(id: string, is_published: boolean = false): Promise<CollectionItemWithValues | null> {
+export async function getItemWithValues(id: string, is_published: boolean = false, projectId?: string | null): Promise<CollectionItemWithValues | null> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -476,7 +524,7 @@ export async function getItemWithValues(id: string, is_published: boolean = fals
   }
 
   // Get the item
-  const item = await getItemById(id, is_published);
+  const item = await getItemById(id, is_published, projectId);
   if (!item) return null;
 
   // Build query for values with field type info
@@ -485,6 +533,7 @@ export async function getItemWithValues(id: string, is_published: boolean = fals
     .select('value, field_id, collection_fields!inner(type)')
     .eq('item_id', id)
     .eq('is_published', is_published);
+  valuesQuery = (await applyProjectScopeToQuery(valuesQuery, client, 'collection_item_values', projectId)).query;
 
   // If the item itself is deleted, include deleted values (to show name in UI)
   // Otherwise, exclude deleted values
@@ -523,7 +572,8 @@ export async function getItemIdsByFieldValue(
   collectionId: string,
   fieldId: string,
   targetValue: string,
-  isPublished: boolean = false
+  isPublished: boolean = false,
+  projectId?: string | null
 ): Promise<string[]> {
   const client = await getSupabaseAdmin();
 
@@ -535,13 +585,15 @@ export async function getItemIdsByFieldValue(
   // For single reference: value = targetValue (exact match)
   // For multi_reference: value is a JSON string like '["uuid1","uuid2"]' containing targetValue
   // We query for both patterns using OR with LIKE for JSON array containment
-  const { data, error } = await client
+  let valuesQuery = client
     .from('collection_item_values')
     .select('item_id')
     .eq('field_id', fieldId)
     .eq('is_published', isPublished)
     .is('deleted_at', null)
     .or(`value.eq.${targetValue},value.like.%"${targetValue}"%`);
+  valuesQuery = (await applyProjectScopeToQuery(valuesQuery, client, 'collection_item_values', projectId)).query;
+  const { data, error } = await valuesQuery;
 
   if (error) {
     throw new Error(`Failed to query inverse references: ${error.message}`);
@@ -552,13 +604,15 @@ export async function getItemIdsByFieldValue(
   // Get unique item IDs that also belong to the target collection and are not deleted
   const candidateIds = [...new Set(data.map(v => v.item_id))];
 
-  const { data: validItems, error: itemError } = await client
+  let validItemsQuery = client
     .from('collection_items')
     .select('id')
     .eq('collection_id', collectionId)
     .eq('is_published', isPublished)
     .is('deleted_at', null)
     .in('id', candidateIds);
+  validItemsQuery = (await applyProjectScopeToQuery(validItemsQuery, client, 'collection_items', projectId)).query;
+  const { data: validItems, error: itemError } = await validItemsQuery;
 
   if (itemError) {
     throw new Error(`Failed to validate inverse reference items: ${itemError.message}`);
@@ -576,16 +630,17 @@ export async function getItemIdsByFieldValue(
 export async function getItemsWithValues(
   collection_id: string,
   is_published: boolean = false,
-  filters?: QueryFilters
+  filters?: QueryFilters,
+  projectId?: string | null
 ): Promise<{ items: CollectionItemWithValues[], total: number }> {
-  const { items, total } = await getItemsByCollectionId(collection_id, is_published, filters);
+  const { items, total } = await getItemsByCollectionId(collection_id, is_published, filters, projectId);
 
   if (items.length === 0) {
     return { items: [], total };
   }
 
   const itemIds = items.map(item => item.id);
-  const valuesByItem = await getValuesByItemIds(itemIds, is_published);
+  const valuesByItem = await getValuesByItemIds(itemIds, is_published, projectId);
 
   const itemsWithValues: CollectionItemWithValues[] = items.map(item => ({
     ...item,
@@ -607,14 +662,15 @@ export async function getItemsWithValues(
 export async function getTopItemsWithValuesPerCollection(
   collectionIds: string[],
   is_published: boolean = false,
-  limit: number = 25
+  limit: number = 25,
+  projectId?: string | null
 ): Promise<Record<string, { items: CollectionItemWithValues[] }>> {
   if (collectionIds.length === 0) {
     return {};
   }
 
   // Query 1: Get top N items per collection using window function
-  const items = await getTopItemsPerCollection(collectionIds, is_published, limit);
+  const items = await getTopItemsPerCollection(collectionIds, is_published, limit, projectId);
 
   if (items.length === 0) {
     const result: Record<string, { items: CollectionItemWithValues[] }> = {};
@@ -626,7 +682,7 @@ export async function getTopItemsWithValuesPerCollection(
 
   // Query 2: Get all values for these items in one query
   const itemIds = items.map(item => item.id);
-  const valuesByItem = await getValuesByItemIds(itemIds, is_published);
+  const valuesByItem = await getValuesByItemIds(itemIds, is_published, projectId);
 
   // Combine items with their values
   const itemsWithValues: CollectionItemWithValues[] = items.map(item => ({

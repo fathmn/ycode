@@ -1,4 +1,3 @@
-import { cache } from 'react';
 import { escapeHtml } from '@/lib/escape-html';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl, detectLocaleFromPath, matchPageWithTranslatedSlugs, matchDynamicPageWithTranslatedSlugs } from '@/lib/page-utils';
@@ -29,7 +28,8 @@ import { resolveInlineVariables, resolveInlineVariablesFromData } from '@/lib/in
 import { formatFieldValue } from '@/lib/cms-variables-utils';
 import { buildLayerTranslationKey, getTranslationByKey, hasValidTranslationValue, getTranslationValue } from '@/lib/localisation-utils';
 import { formatDateFieldsInItemValues } from '@/lib/date-format-utils';
-import { getSettingByKey } from '@/lib/repositories/settingsRepository';
+import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
+import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired } from '@/lib/project-scope';
 import { parseMultiAssetFieldValue, buildAssetVirtualValues } from '@/lib/multi-asset-utils';
 import { parseMultiReferenceValue } from '@/lib/collection-utils';
 import { combineBgValues, mergeStaticBgVars } from '@/lib/tailwind-class-mapper';
@@ -45,6 +45,11 @@ import type { DesignColorVariable } from '@/types';
 // Set by ensureMapTokens() before HTML generation begins.
 let _cachedMapboxToken: string | null = null;
 let _cachedGoogleMapsEmbedKey: string | null = null;
+
+async function getTimezoneSetting(projectId?: string | null): Promise<string> {
+  const settings = await getSettingsByKeys(['timezone'], projectId);
+  return (settings.timezone as string | null) || 'UTC';
+}
 
 async function ensureMapTokens(): Promise<void> {
   if (_cachedMapboxToken === null) {
@@ -159,7 +164,8 @@ function matchDynamicPagePattern(urlPath: string, patternPath: string): string |
 export async function loadTranslationsForLocale(
   localeCode: string,
   isPublished: boolean,
-  tenantId?: string
+  tenantId?: string,
+  projectId?: string | null
 ): Promise<{ locale: Locale | null; translations: Record<string, Translation> }> {
   try {
     const supabase = await getSupabaseAdmin(tenantId);
@@ -169,25 +175,28 @@ export async function loadTranslationsForLocale(
     }
 
     // Find the locale by code
-    const { data: locale } = await supabase
+    let localeQuery = supabase
       .from('locales')
       .select('*')
       .eq('code', localeCode)
       .eq('is_published', isPublished)
-      .is('deleted_at', null)
-      .single();
+      .is('deleted_at', null);
+    localeQuery = (await applyProjectScopeToQuery(localeQuery, supabase, 'locales', projectId)).query;
+    const { data: locale } = await localeQuery.single();
 
     if (!locale) {
       return { locale: null, translations: {} };
     }
 
     // Fetch all translations for this locale
-    const { data: translations } = await supabase
+    let translationsQuery = supabase
       .from('translations')
       .select('*')
       .eq('locale_id', locale.id)
       .eq('is_published', isPublished)
       .is('deleted_at', null);
+    translationsQuery = (await applyProjectScopeToQuery(translationsQuery, supabase, 'translations', projectId)).query;
+    const { data: translations } = await translationsQuery;
 
     if (!translations) {
       return { locale, translations: {} };
@@ -225,7 +234,8 @@ async function getCollectionItemBySlug(
   collectionFields?: CollectionField[],
   locale?: Locale | null,
   translations?: Record<string, Translation>,
-  tenantId?: string
+  tenantId?: string,
+  projectId?: string | null
 ): Promise<CollectionItemWithValues | null> {
   try {
     const supabase = await getSupabaseAdmin(tenantId);
@@ -252,18 +262,19 @@ async function getCollectionItemBySlug(
             const itemId = translation.source_id;
 
             // Verify this item belongs to the correct collection
-            const { data: item, error: itemError } = await supabase
+            let itemQuery = supabase
               .from('collection_items')
               .select('*')
               .eq('id', itemId)
               .eq('collection_id', collectionId)
               .eq('is_published', isPublished)
-              .is('deleted_at', null)
-              .single();
+              .is('deleted_at', null);
+            itemQuery = (await applyProjectScopeToQuery(itemQuery, supabase, 'collection_items', projectId)).query;
+            const { data: item, error: itemError } = await itemQuery.single();
 
             if (!itemError && item) {
               // Found the item via translation - return it with all values
-              return await getItemWithValues(item.id, isPublished);
+              return await getItemWithValues(item.id, isPublished, projectId);
             }
           }
         }
@@ -271,36 +282,38 @@ async function getCollectionItemBySlug(
     }
 
     // Fall back to original slug lookup (no translation or translation not found)
-    const { data: valueData, error: valueError } = await supabase
+    let valueQuery = supabase
       .from('collection_item_values')
       .select('item_id')
       .eq('field_id', slugFieldId)
       .eq('value', slugValue)
       .eq('is_published', isPublished)
       .is('deleted_at', null)
-      .limit(1)
-      .single();
+      .limit(1);
+    valueQuery = (await applyProjectScopeToQuery(valueQuery, supabase, 'collection_item_values', projectId)).query;
+    const { data: valueData, error: valueError } = await valueQuery.single();
 
     if (valueError || !valueData) {
       return null;
     }
 
     // Verify the item belongs to the correct collection
-    const { data: item, error: itemError } = await supabase
+    let itemQuery = supabase
       .from('collection_items')
       .select('*')
       .eq('id', valueData.item_id)
       .eq('collection_id', collectionId)
       .eq('is_published', isPublished)
-      .is('deleted_at', null)
-      .single();
+      .is('deleted_at', null);
+    itemQuery = (await applyProjectScopeToQuery(itemQuery, supabase, 'collection_items', projectId)).query;
+    const { data: item, error: itemError } = await itemQuery.single();
 
     if (itemError || !item) {
       return null;
     }
 
     // Fetch the item with all its values
-    return await getItemWithValues(item.id, isPublished);
+    return await getItemWithValues(item.id, isPublished, projectId);
   } catch (error) {
     console.error('Failed to fetch collection item by slug:', error);
     return null;
@@ -316,11 +329,12 @@ async function getCollectionItemBySlug(
  * @param isPublished - Whether to fetch published or draft version
  * @param paginationContext - Optional pagination context with page numbers from URL
  */
-export const fetchPageByPath = cache(async function fetchPageByPath(
+export async function fetchPageByPath(
   slugPath: string,
   isPublished: boolean,
   paginationContext?: PaginationContext,
-  tenantId?: string
+  tenantId?: string,
+  projectId?: string | null
 ): Promise<PageData | null> {
   try {
     const supabase = await getSupabaseAdmin(tenantId);
@@ -331,11 +345,13 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
     }
 
     // Get all active locales from the database
-    const { data: availableLocales } = await supabase
+    let localesQuery = supabase
       .from('locales')
       .select('*')
       .eq('is_published', isPublished)
       .is('deleted_at', null);
+    localesQuery = (await applyProjectScopeToQuery(localesQuery, supabase, 'locales', projectId)).query;
+    const { data: availableLocales } = await localesQuery;
 
     const validLocaleCodes = availableLocales?.map(l => l.code) || [];
 
@@ -351,17 +367,22 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
       const { locale, translations: trans } = await loadTranslationsForLocale(
         localeDetection.localeCode,
         isPublished,
-        tenantId
+        tenantId,
+        projectId
       );
       detectedLocale = locale;
       translations = trans;
     }
 
     // Fetch pages, folders, and components in parallel
+    let pagesQuery = supabase.from('pages').select('*').eq('is_published', isPublished).is('deleted_at', null);
+    pagesQuery = (await applyProjectScopeToQuery(pagesQuery, supabase, 'pages', projectId)).query;
+    let foldersQuery = supabase.from('page_folders').select('*').eq('is_published', isPublished).is('deleted_at', null);
+    foldersQuery = (await applyProjectScopeToQuery(foldersQuery, supabase, 'page_folders', projectId)).query;
     const [{ data: pages }, { data: folders }, components] = await Promise.all([
-      supabase.from('pages').select('*').eq('is_published', isPublished).is('deleted_at', null),
-      supabase.from('page_folders').select('*').eq('is_published', isPublished).is('deleted_at', null),
-      fetchComponents(supabase, isPublished),
+      pagesQuery,
+      foldersQuery,
+      fetchComponents(supabase, isPublished, projectId),
     ]);
 
     if (!pages || !folders) {
@@ -374,7 +395,7 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
     // try to fetch the homepage
     if (targetPath === '' && detectedLocale) {
       // Pass preloaded components and translations so CMS content is translated
-      const homepageData = await fetchHomepage(isPublished, paginationContext, components, tenantId, translations);
+      const homepageData = await fetchHomepage(isPublished, paginationContext, components, tenantId, translations, projectId);
       if (homepageData) {
         // Components and collection layers are already resolved by fetchHomepage
         // Apply translations for the detected locale
@@ -384,7 +405,7 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
         }
 
         // Resolve all AssetVariables to URLs server-side (prevents client-side API calls)
-        const resolved = await resolveAllAssets(processedLayers, isPublished, components);
+        const resolved = await resolveAllAssets(processedLayers, isPublished, components, projectId);
         processedLayers = resolved.layers;
 
         return {
@@ -447,7 +468,8 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
             const collectionFields = await getFieldsByCollectionId(
               cmsSettings.collection_id,
               isPublished,
-              { excludeComputed: true }
+              { excludeComputed: true },
+              projectId
             );
 
             const collectionItem = await getCollectionItemBySlug(
@@ -458,7 +480,8 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
               collectionFields,
               detectedLocale,
               translations,
-              tenantId
+              tenantId,
+              projectId
             );
 
             if (!collectionItem) {
@@ -470,12 +493,14 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
             matchingPage = dynamicPage;
 
             // Get layers for the dynamic page
-            const { data: pageLayers, error: layersError } = await supabase
+            let pageLayersQuery = supabase
               .from('page_layers')
               .select('*')
               .eq('page_id', matchingPage.id)
               .eq('is_published', isPublished)
-              .is('deleted_at', null)
+              .is('deleted_at', null);
+            pageLayersQuery = (await applyProjectScopeToQuery(pageLayersQuery, supabase, 'page_layers', projectId)).query;
+            const { data: pageLayers, error: layersError } = await pageLayersQuery
               .order('created_at', { ascending: false })
               .limit(1)
               .single();
@@ -490,14 +515,17 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
             let enhancedItemValues = await resolveReferenceFields(
               collectionItem.values,
               collectionFields,
-              isPublished
+              isPublished,
+              '',
+              new Set(),
+              projectId
             );
 
             // Apply CMS translations to the item values
             enhancedItemValues = applyCmsTranslations(collectionItem.id, enhancedItemValues, collectionFields, translations);
 
             // Format date fields in user's timezone
-            const timezone = (await getSettingByKey('timezone') as string | null) || 'UTC';
+            const timezone = await getTimezoneSetting(projectId);
             const rawItemValues = { ...enhancedItemValues };
             enhancedItemValues = formatDateFieldsInItemValues(enhancedItemValues, collectionFields, timezone);
 
@@ -514,7 +542,7 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
             // This resolves inline variables like "Name → Location" on the page
             const layersWithInjectedData = await Promise.all(
               layersWithComponents.map((layer: Layer) =>
-                injectCollectionData(layer, enhancedItemValues, collectionFields, isPublished, undefined, rawItemValues, timezone)
+                injectCollectionData(layer, enhancedItemValues, collectionFields, isPublished, undefined, rawItemValues, timezone, projectId)
               )
             );
 
@@ -523,11 +551,11 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
             // Pass enhanced values so nested collections can filter based on dynamic page data
             // Pass collectionItem.id so inverse reference layers can query by parent item
             let resolvedLayers = layersWithInjectedData.length > 0
-              ? await resolveCollectionLayers(layersWithInjectedData, isPublished, enhancedItemValues, paginationContext, translations, collectionItem.id)
+              ? await resolveCollectionLayers(layersWithInjectedData, isPublished, enhancedItemValues, paginationContext, translations, collectionItem.id, projectId)
               : [];
 
             // Resolve collections inside rich text embedded components
-            resolvedLayers = await resolveRichTextCollections(resolvedLayers, components, isPublished, translations);
+            resolvedLayers = await resolveRichTextCollections(resolvedLayers, components, isPublished, translations, undefined, projectId);
 
             // Apply translations (components already resolved above)
             if (detectedLocale && translations && Object.keys(translations).length > 0) {
@@ -535,7 +563,7 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
             }
 
             // Resolve all AssetVariables to URLs server-side (prevents client-side API calls)
-            const resolved = await resolveAllAssets(resolvedLayers, isPublished, components);
+            const resolved = await resolveAllAssets(resolvedLayers, isPublished, components, projectId);
             resolvedLayers = resolved.layers;
 
             // Fetch the ordered list of ids + slugs for the page's collection
@@ -552,7 +580,9 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
               const slugFieldId = collectionFields.find(f => f.key === 'slug')?.id;
               const { items: fetchedItems } = await getItemsWithValues(
                 cmsSettings.collection_id,
-                isPublished
+                isPublished,
+                undefined,
+                projectId
               );
               const orderedItems = sortItemsForNextPrevious(
                 fetchedItems,
@@ -597,12 +627,14 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
 
     // Handle non-dynamic page (exact match)
     // Get layers for the matched page
-    const { data: pageLayers, error: layersError } = await supabase
+    let pageLayersQuery = supabase
       .from('page_layers')
       .select('*')
       .eq('page_id', matchingPage.id)
       .eq('is_published', isPublished)
-      .is('deleted_at', null)
+      .is('deleted_at', null);
+    pageLayersQuery = (await applyProjectScopeToQuery(pageLayersQuery, supabase, 'page_layers', projectId)).query;
+    const { data: pageLayers, error: layersError } = await pageLayersQuery
       .order('created_at', { ascending: false })
       .limit(1)
       .single();
@@ -618,11 +650,11 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
     // Resolve collection layers server-side (for both draft and published)
     // The isPublished parameter controls which collection items to fetch
     let resolvedLayers = layersWithComponents.length > 0
-      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, paginationContext, translations)
+      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, paginationContext, translations, undefined, projectId)
       : [];
 
     // Resolve collections inside rich text embedded components
-    resolvedLayers = await resolveRichTextCollections(resolvedLayers, components, isPublished, translations);
+    resolvedLayers = await resolveRichTextCollections(resolvedLayers, components, isPublished, translations, undefined, projectId);
 
     // Apply translations (components already resolved above)
     if (detectedLocale && translations && Object.keys(translations).length > 0) {
@@ -630,7 +662,7 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
     }
 
     // Resolve all AssetVariables to URLs server-side (prevents client-side API calls)
-    const resolved = await resolveAllAssets(resolvedLayers, isPublished, components);
+    const resolved = await resolveAllAssets(resolvedLayers, isPublished, components, projectId);
     resolvedLayers = resolved.layers;
 
     return {
@@ -648,7 +680,7 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
     console.error('Failed to fetch page:', error);
     return null;
   }
-});
+}
 
 /**
  * Fetch error page by error code (404, 401, 500)
@@ -657,7 +689,8 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
 export async function fetchErrorPage(
   errorCode: number,
   isPublished: boolean,
-  tenantId?: string
+  tenantId?: string,
+  projectId?: string | null
 ): Promise<PageData | null> {
   try {
     const supabase = await getSupabaseAdmin(tenantId);
@@ -668,19 +701,23 @@ export async function fetchErrorPage(
     }
 
     // Get all active locales from the database
-    const { data: availableLocales } = await supabase
+    let localesQuery = supabase
       .from('locales')
       .select('*')
       .eq('is_published', isPublished)
       .is('deleted_at', null);
+    localesQuery = (await applyProjectScopeToQuery(localesQuery, supabase, 'locales', projectId)).query;
+    const { data: availableLocales } = await localesQuery;
 
     // Get the error page
-    const { data: errorPage } = await supabase
+    let errorPageQuery = supabase
       .from('pages')
       .select('*')
       .eq('error_page', errorCode)
       .eq('is_published', isPublished)
-      .is('deleted_at', null)
+      .is('deleted_at', null);
+    errorPageQuery = (await applyProjectScopeToQuery(errorPageQuery, supabase, 'pages', projectId)).query;
+    const { data: errorPage } = await errorPageQuery
       .single();
 
     if (!errorPage) {
@@ -688,12 +725,14 @@ export async function fetchErrorPage(
     }
 
     // Get layers for the error page
-    const { data: pageLayers, error: layersError } = await supabase
+    let pageLayersQuery = supabase
       .from('page_layers')
       .select('*')
       .eq('page_id', errorPage.id)
       .eq('is_published', isPublished)
-      .is('deleted_at', null)
+      .is('deleted_at', null);
+    pageLayersQuery = (await applyProjectScopeToQuery(pageLayersQuery, supabase, 'page_layers', projectId)).query;
+    const { data: pageLayers, error: layersError } = await pageLayersQuery
       .order('created_at', { ascending: false })
       .limit(1)
       .single();
@@ -703,7 +742,7 @@ export async function fetchErrorPage(
       return null;
     }
 
-    const components = await fetchComponents(supabase, isPublished);
+    const components = await fetchComponents(supabase, isPublished, projectId);
 
     // First, resolve components so collection layers inside components are available
     const layersWithComponents = resolveComponents(pageLayers?.layers || [], components);
@@ -711,14 +750,14 @@ export async function fetchErrorPage(
     // Resolve collection layers server-side (for both draft and published)
     // The isPublished parameter controls which collection items to fetch
     let resolvedLayers = layersWithComponents.length > 0
-      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, undefined, undefined)
+      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, undefined, undefined, undefined, projectId)
       : [];
 
     // Resolve collections inside rich text embedded components
-    resolvedLayers = await resolveRichTextCollections(resolvedLayers, components, isPublished);
+    resolvedLayers = await resolveRichTextCollections(resolvedLayers, components, isPublished, undefined, undefined, projectId);
 
     // Resolve all AssetVariables to URLs server-side (prevents client-side API calls)
-    const resolved = await resolveAllAssets(resolvedLayers, isPublished, components);
+    const resolved = await resolveAllAssets(resolvedLayers, isPublished, components, projectId);
     resolvedLayers = resolved.layers;
 
     return {
@@ -745,12 +784,13 @@ export async function fetchErrorPage(
  * @param paginationContext - Optional pagination context with page numbers from URL
  * @param preloadedComponents - Optional pre-fetched components to avoid redundant queries
  */
-export const fetchHomepage = cache(async function fetchHomepage(
+export async function fetchHomepage(
   isPublished: boolean,
   paginationContext?: PaginationContext,
   preloadedComponents?: Component[],
   tenantId?: string,
-  translations?: Record<string, Translation>
+  translations?: Record<string, Translation>,
+  projectId?: string | null
 ): Promise<Pick<PageData, 'page' | 'pageLayers' | 'components' | 'locale' | 'availableLocales' | 'translations'> | null> {
   try {
     const supabase = await getSupabaseAdmin(tenantId);
@@ -760,14 +800,24 @@ export const fetchHomepage = cache(async function fetchHomepage(
     }
 
     // Fetch locales, homepage, and components in parallel
+    let localesQuery = supabase.from('locales').select('*').eq('is_published', isPublished).is('deleted_at', null);
+    localesQuery = (await applyProjectScopeToQuery(localesQuery, supabase, 'locales', projectId)).query;
+    let homepageQuery = supabase
+      .from('pages')
+      .select('*')
+      .eq('is_index', true)
+      .is('page_folder_id', null)
+      .eq('is_published', isPublished)
+      .is('deleted_at', null);
+    homepageQuery = (await applyProjectScopeToQuery(homepageQuery, supabase, 'pages', projectId)).query;
     const [
       { data: availableLocales },
       { data: homepage },
       componentsResult,
     ] = await Promise.all([
-      supabase.from('locales').select('*').eq('is_published', isPublished).is('deleted_at', null),
-      supabase.from('pages').select('*').eq('is_index', true).is('page_folder_id', null).eq('is_published', isPublished).is('deleted_at', null).limit(1).single(),
-      preloadedComponents ? Promise.resolve(preloadedComponents) : fetchComponents(supabase, isPublished),
+      localesQuery,
+      homepageQuery.limit(1).single(),
+      preloadedComponents ? Promise.resolve(preloadedComponents) : fetchComponents(supabase, isPublished, projectId),
     ]);
 
     if (!homepage) {
@@ -777,17 +827,22 @@ export const fetchHomepage = cache(async function fetchHomepage(
     const components = componentsResult;
 
     // Get layers for homepage (depends on homepage.id)
-    const { data: pageLayers, error: layersError } = await supabase
+    let pageLayersQuery = supabase
       .from('page_layers')
       .select('*')
       .eq('page_id', homepage.id)
       .eq('is_published', isPublished)
-      .is('deleted_at', null)
+      .is('deleted_at', null);
+    pageLayersQuery = (await applyProjectScopeToQuery(pageLayersQuery, supabase, 'page_layers', projectId)).query;
+    const { data: pageLayers, error: layersError } = await pageLayersQuery
       .order('created_at', { ascending: false })
       .limit(1)
       .single();
 
     if (layersError) {
+      if (isSharedDbProjectScopeRequired()) {
+        throw new Error(`Failed to fetch scoped homepage layers: ${layersError.message}`);
+      }
       return null;
     }
 
@@ -796,14 +851,14 @@ export const fetchHomepage = cache(async function fetchHomepage(
 
     // Resolve collection layers server-side (for both draft and published)
     let resolvedLayers = layersWithComponents.length > 0
-      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, paginationContext, translations)
+      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, paginationContext, translations, undefined, projectId)
       : [];
 
     // Resolve collections inside rich text embedded components
-    resolvedLayers = await resolveRichTextCollections(resolvedLayers, components, isPublished, translations);
+    resolvedLayers = await resolveRichTextCollections(resolvedLayers, components, isPublished, translations, undefined, projectId);
 
     // Resolve all AssetVariables to URLs server-side (prevents client-side API calls)
-    const resolved = await resolveAllAssets(resolvedLayers, isPublished, components);
+    const resolved = await resolveAllAssets(resolvedLayers, isPublished, components, projectId);
     resolvedLayers = resolved.layers;
 
     return {
@@ -818,9 +873,12 @@ export const fetchHomepage = cache(async function fetchHomepage(
       translations: translations || {},
     };
   } catch (error) {
+    if (isSharedDbProjectScopeRequired()) {
+      throw error;
+    }
     return null;
   }
-});
+}
 
 /**
  * Inject translated text and assets into layers recursively
@@ -958,12 +1016,14 @@ function injectTranslatedText(
  * @param isPublished - Whether to fetch published or draft components (defaults to false for draft)
  * @returns Array of components or empty array if fetch fails
  */
-async function fetchComponents(supabase: any, isPublished: boolean = false): Promise<Component[]> {
-  const { data: components } = await supabase
+async function fetchComponents(supabase: any, isPublished: boolean = false, projectId?: string | null): Promise<Component[]> {
+  let query = supabase
     .from('components')
     .select('*')
     .eq('is_published', isPublished)
     .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, supabase, 'components', projectId)).query;
+  const { data: components } = await query;
   return components || [];
 }
 
@@ -1031,7 +1091,8 @@ async function resolveReferenceFields(
   fields: CollectionField[],
   isPublished: boolean,
   pathPrefix: string = '',
-  visited: Set<string> = new Set()
+  visited: Set<string> = new Set(),
+  projectId?: string | null
 ): Promise<Record<string, string>> {
   const enhancedValues = { ...itemValues };
 
@@ -1051,11 +1112,11 @@ async function resolveReferenceFields(
 
     try {
       // Fetch the referenced item
-      const refItem = await getItemWithValues(refItemId, isPublished);
+      const refItem = await getItemWithValues(refItemId, isPublished, projectId);
       if (!refItem) continue;
 
       // Get fields for the referenced collection
-      const refFields = await getFieldsByCollectionId(field.reference_collection_id, isPublished, { excludeComputed: true });
+      const refFields = await getFieldsByCollectionId(field.reference_collection_id, isPublished, { excludeComputed: true }, projectId);
 
       // Build the path prefix for this level
       const currentPath = pathPrefix ? `${pathPrefix}.${field.id}` : field.id;
@@ -1077,7 +1138,8 @@ async function resolveReferenceFields(
         refFields,
         isPublished,
         currentPath,
-        visited
+        visited,
+        projectId
       );
 
       // Merge nested values (they'll have the full path)
@@ -1108,12 +1170,13 @@ async function injectCollectionData(
   isPublished: boolean = true,
   layerDataMap?: Record<string, Record<string, string>>,
   rawItemValues?: Record<string, string>,
-  timezone: string = 'UTC'
+  timezone: string = 'UTC',
+  projectId?: string | null
 ): Promise<Layer> {
   // Resolve reference fields if we have field definitions
   let enhancedValues = itemValues;
   if (fields && fields.length > 0) {
-    enhancedValues = await resolveReferenceFields(itemValues, fields, isPublished);
+    enhancedValues = await resolveReferenceFields(itemValues, fields, isPublished, '', new Set(), projectId);
   }
 
   const updates: Partial<Layer> = {};
@@ -1257,7 +1320,7 @@ async function injectCollectionData(
         if (child.variables?.collection?.id) {
           return Promise.resolve(child);
         }
-        return injectCollectionData(child, enhancedValues, fields, isPublished, layerDataMap, rawItemValues, timezone);
+        return injectCollectionData(child, enhancedValues, fields, isPublished, layerDataMap, rawItemValues, timezone, projectId);
       })
     );
     updates.children = resolvedChildren;
@@ -1569,6 +1632,7 @@ async function resolveTiptapComponentCollections(
   isPublished: boolean,
   translations?: Record<string, Translation>,
   ancestorComponentIds?: Set<string>,
+  projectId?: string | null
 ): Promise<any> {
   if (!content || typeof content !== 'object') return content;
 
@@ -1576,7 +1640,7 @@ async function resolveTiptapComponentCollections(
     let changed = false;
     const result = await Promise.all(
       content.map(async (node: any) => {
-        const resolved = await resolveTiptapComponentCollections(node, components, isPublished, translations, ancestorComponentIds);
+        const resolved = await resolveTiptapComponentCollections(node, components, isPublished, translations, ancestorComponentIds, projectId);
         if (resolved !== node) changed = true;
         return resolved;
       })
@@ -1601,12 +1665,12 @@ async function resolveTiptapComponentCollections(
         const overrides = node.attrs.componentOverrides ?? undefined;
         const withOverrides = applyComponentOverrides(comp.layers, overrides, comp.variables);
         const withComponents = resolveComponents(withOverrides, components, comp.variables, overrides);
-        const withCollections = await resolveCollectionLayers(withComponents, isPublished, undefined, undefined, translations);
+        const withCollections = await resolveCollectionLayers(withComponents, isPublished, undefined, undefined, translations, undefined, projectId);
 
         // Recursively resolve rich text components inside the resolved layers
         // (handles Component A → rich text → Component B → collection)
         const fullyResolved = await resolveRichTextCollections(
-          withCollections, components, isPublished, translations, childAncestors,
+          withCollections, components, isPublished, translations, childAncestors, projectId,
         );
 
         node = {
@@ -1620,7 +1684,7 @@ async function resolveTiptapComponentCollections(
 
   // Recurse into content array
   if (Array.isArray(node.content)) {
-    const resolvedContent = await resolveTiptapComponentCollections(node.content, components, isPublished, translations, ancestorComponentIds);
+    const resolvedContent = await resolveTiptapComponentCollections(node.content, components, isPublished, translations, ancestorComponentIds, projectId);
     if (resolvedContent !== node.content) {
       node = { ...node, content: resolvedContent };
       nodeChanged = true;
@@ -1642,6 +1706,7 @@ export async function resolveRichTextCollections(
   isPublished: boolean,
   translations?: Record<string, Translation>,
   ancestorComponentIds?: Set<string>,
+  projectId?: string | null
 ): Promise<Layer[]> {
   if (!components.length) return layers;
 
@@ -1652,7 +1717,7 @@ export async function resolveRichTextCollections(
     const textVar = layer.variables?.text;
     if (textVar?.type === 'dynamic_rich_text' && textVar.data?.content) {
       const resolved = await resolveTiptapComponentCollections(
-        textVar.data.content, components, isPublished, translations, ancestorComponentIds,
+        textVar.data.content, components, isPublished, translations, ancestorComponentIds, projectId,
       );
       if (resolved !== textVar.data.content) {
         updated = {
@@ -1687,10 +1752,11 @@ export async function resolveCollectionLayers(
   parentItemValues?: Record<string, string>,
   paginationContext?: PaginationContext,
   translations?: Record<string, Translation>,
-  parentCollectionItemId?: string
+  parentCollectionItemId?: string,
+  projectId?: string | null
 ): Promise<Layer[]> {
   // Fetch timezone setting for date formatting
-  const timezone = (await getSettingByKey('timezone') as string | null) || 'UTC';
+  const timezone = await getTimezoneSetting(projectId);
 
   const resolveLayer = async (
     layer: Layer,
@@ -1727,7 +1793,24 @@ export async function resolveCollectionLayers(
             }
 
             // Fetch all assets at once (returns Record<string, Asset>)
-            const assetsById = await getAssetsByIds(assetIds, isPublished);
+            let assetsById = await getAssetsByIds(assetIds, isPublished);
+            if (projectId) {
+              const supabase = await getSupabaseAdmin();
+              if (supabase) {
+                let assetsQuery = supabase
+                  .from('assets')
+                  .select('*')
+                  .in('id', assetIds)
+                  .eq('is_published', isPublished);
+                assetsQuery = (await applyProjectScopeToQuery(assetsQuery, supabase, 'assets', projectId)).query;
+                if (!isPublished) assetsQuery = assetsQuery.is('deleted_at', null);
+                const { data } = await assetsQuery;
+                assetsById = {};
+                for (const asset of data || []) {
+                  assetsById[asset.id] = asset;
+                }
+              }
+            }
 
             // Clone the layer for each asset (like regular collections)
             const clonedLayers: Layer[] = await Promise.all(
@@ -1752,7 +1835,7 @@ export async function resolveCollectionLayers(
                 // Inject virtual field data into the resolved children
                 const injectedChildren = await Promise.all(
                   resolvedChildren.map(child =>
-                    injectCollectionData(child, virtualValues, undefined, isPublished, updatedLayerDataMap, undefined, timezone)
+                    injectCollectionData(child, virtualValues, undefined, isPublished, updatedLayerDataMap, undefined, timezone, projectId)
                   )
                 );
 
@@ -1841,7 +1924,8 @@ export async function resolveCollectionLayers(
               collectionVariable.id,
               sourceFieldId,
               parentItemId,
-              isPublished
+              isPublished,
+              projectId
             );
           } else if (sourceFieldId && itemValues) {
             const refValue = itemValues[sourceFieldId];
@@ -1868,7 +1952,8 @@ export async function resolveCollectionLayers(
           const fetchResult = await getItemsWithValues(
             collectionVariable.id,
             isPublished,
-            filters
+            filters,
+            projectId
           );
           let items = fetchResult.items;
           const totalItems = fetchResult.total;
@@ -1932,7 +2017,7 @@ export async function resolveCollectionLayers(
           }
 
           // Fetch collection fields for reference resolution
-          const collectionFields = await getFieldsByCollectionId(collectionVariable.id, isPublished, { excludeComputed: true });
+          const collectionFields = await getFieldsByCollectionId(collectionVariable.id, isPublished, { excludeComputed: true }, projectId);
 
           // Find slug field for building collection item URLs
           const slugField = collectionFields.find(f => f.key === 'slug');
@@ -1950,7 +2035,7 @@ export async function resolveCollectionLayers(
 
               // Resolve reference fields BEFORE building layerDataMap
               // This ensures relationship paths (e.g., "refFieldId.targetFieldId") are available
-              const enhancedValues = await resolveReferenceFields(translatedValues, collectionFields, isPublished);
+              const enhancedValues = await resolveReferenceFields(translatedValues, collectionFields, isPublished, '', new Set(), projectId);
               // Overlay raw values on enhanced to preserve relationship paths while keeping unformatted dates
               const rawEnhancedValues = { ...enhancedValues, ...rawTranslatedValues };
 
@@ -1974,7 +2059,7 @@ export async function resolveCollectionLayers(
               // Then inject field data into the resolved children
               const injectedChildren = await Promise.all(
                 resolvedChildren.map(child =>
-                  injectCollectionData(child, enhancedValues, collectionFields, isPublished, updatedLayerDataMap, rawEnhancedValues, timezone)
+                  injectCollectionData(child, enhancedValues, collectionFields, isPublished, updatedLayerDataMap, rawEnhancedValues, timezone, projectId)
                 )
               );
 
@@ -2082,8 +2167,8 @@ export async function resolveCollectionLayers(
     if (layer.name === 'select' && layer.settings?.optionsSource?.collectionId) {
       try {
         const sourceCollectionId = layer.settings.optionsSource.collectionId;
-        let { items: sourceItems } = await getItemsWithValues(sourceCollectionId, isPublished);
-        const sourceFields = await getFieldsByCollectionId(sourceCollectionId, isPublished);
+        let { items: sourceItems } = await getItemsWithValues(sourceCollectionId, isPublished, undefined, projectId);
+        const sourceFields = await getFieldsByCollectionId(sourceCollectionId, isPublished, undefined, projectId);
         const opts = layer.settings.optionsSource;
 
         const displayField = findDisplayField(sourceFields);
@@ -2252,8 +2337,8 @@ export async function resolveCollectionLayers(
       if (inputType) {
         try {
           const sourceCollectionId = layer.settings.optionsSource.collectionId;
-          const { items } = await getItemsWithValues(sourceCollectionId, isPublished);
-          const fields = await getFieldsByCollectionId(sourceCollectionId, isPublished);
+          const { items } = await getItemsWithValues(sourceCollectionId, isPublished, undefined, projectId);
+          const fields = await getFieldsByCollectionId(sourceCollectionId, isPublished, undefined, projectId);
           return buildInputGroupFragment(inputType, items, fields);
         } catch (error) {
           console.error(`Failed to resolve collection-sourced ${inputType} options for layer ${layer.id}:`, error);
@@ -2685,12 +2770,13 @@ export async function renderCollectionItemsToHtml(
   tenantId?: string,
   collectionLayerClasses?: string[],
   collectionLayerTag?: string,
+  projectId?: string | null,
 ): Promise<string> {
   // Fetch collection fields for field resolution
-  const collectionFields = await getFieldsByCollectionId(collectionId, isPublished, { excludeComputed: true });
+  const collectionFields = await getFieldsByCollectionId(collectionId, isPublished, { excludeComputed: true }, projectId);
 
   // Get timezone setting for date formatting
-  const htmlTimezone = (await getSettingByKey('timezone') as string | null) || 'UTC';
+  const htmlTimezone = await getTimezoneSetting(projectId);
 
   // Pre-fetch map provider tokens for map layers in HTML export
   await ensureMapTokens();
@@ -2708,7 +2794,7 @@ export async function renderCollectionItemsToHtml(
       // Inject collection data into each layer of the template (text, images, etc.)
       const injectedLayers = await Promise.all(
         clonedTemplate.map((layer: Layer) =>
-          injectCollectionDataForHtml(layer, formattedValues, collectionFields, isPublished, rawValues, htmlTimezone)
+          injectCollectionDataForHtml(layer, formattedValues, collectionFields, isPublished, rawValues, htmlTimezone, projectId)
         )
       );
 
@@ -2720,11 +2806,12 @@ export async function renderCollectionItemsToHtml(
         item.values, // Parent item values for multi-reference filtering
         undefined, // No pagination context for Load More rendering
         undefined, // TODO: Add translation support for Load More pagination
-        item.id // Parent item ID for inverse reference resolution
+        item.id, // Parent item ID for inverse reference resolution
+        projectId
       );
 
       // Resolve all AssetVariables to URLs server-side
-      const resolved = await resolveAllAssets(resolvedLayers, isPublished);
+      const resolved = await resolveAllAssets(resolvedLayers, isPublished, undefined, projectId);
       resolvedLayers = resolved.layers;
       let assetMap = resolved.assetMap;
 
@@ -2798,12 +2885,13 @@ async function injectCollectionDataForHtml(
   fields: CollectionField[],
   isPublished: boolean,
   rawItemValues?: Record<string, string>,
-  timezone: string = 'UTC'
+  timezone: string = 'UTC',
+  projectId?: string | null
 ): Promise<Layer> {
   // Resolve reference fields if we have field definitions
   let enhancedValues = itemValues;
   if (fields && fields.length > 0) {
-    enhancedValues = await resolveReferenceFields(itemValues, fields, isPublished);
+    enhancedValues = await resolveReferenceFields(itemValues, fields, isPublished, '', new Set(), projectId);
   }
 
   const updates: Partial<Layer> = {};
@@ -2924,7 +3012,7 @@ async function injectCollectionDataForHtml(
   if (layer.children) {
     const resolvedChildren = await Promise.all(
       layer.children.map(child =>
-        injectCollectionDataForHtml(child, enhancedValues, fields, isPublished, rawItemValues, timezone)
+        injectCollectionDataForHtml(child, enhancedValues, fields, isPublished, rawItemValues, timezone, projectId)
       )
     );
     updates.children = resolvedChildren;
@@ -2947,14 +3035,36 @@ async function resolveAllAssets(
   layers: Layer[],
   isPublished: boolean = true,
   components?: Component[],
-): Promise<{ layers: Layer[]; assetMap: Record<string, { public_url: string | null; content?: string | null; width?: number | null; height?: number | null }> }> {
-  const { getAssetsByIds } = await import('@/lib/repositories/assetRepository');
-
+  projectId?: string | null,
+): Promise<{ layers: Layer[]; assetMap: Record<string, any> }> {
   // Step 1: Collect all asset IDs from the layer tree
   const assetIds = collectLayerAssetIds(layers, components || []);
 
-  // Step 2: Fetch all assets in a single query
-  const assetMap = await getAssetsByIds(Array.from(assetIds), isPublished);
+	  // Step 2: Fetch all assets in a single query
+	  let assetMap: Record<string, any> = {};
+	  if (assetIds.size > 0 && projectId) {
+	    const supabase = await getSupabaseAdmin();
+	    if (!supabase) {
+	      throw new Error('Supabase admin client is required for project-scoped asset resolution');
+	    }
+	    let query = supabase
+	      .from('assets')
+	      .select('*')
+	      .in('id', Array.from(assetIds))
+	      .eq('is_published', isPublished);
+	    query = (await applyProjectScopeToQuery(query, supabase, 'assets', projectId)).query;
+	    if (!isPublished) query = query.is('deleted_at', null);
+	    const { data, error } = await query;
+	    if (error) {
+	      throw new Error(`Failed to resolve project-scoped assets: ${error.message}`);
+	    }
+	    for (const asset of data || []) {
+	      assetMap[asset.id] = asset;
+	    }
+	  } else {
+    const { getAssetsByIds } = await import('@/lib/repositories/assetRepository');
+    assetMap = await getAssetsByIds(Array.from(assetIds), isPublished);
+  }
 
   // Step 2.5: Override public_url with SEO-friendly proxy URLs where available
   for (const asset of Object.values(assetMap)) {

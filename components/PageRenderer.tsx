@@ -19,7 +19,12 @@ import { getItemWithValues, getItemsWithValues } from '@/lib/repositories/collec
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import { REF_PAGE_PREFIX, REF_COLLECTION_PREFIX, isCollectionItemKeyword } from '@/lib/link-utils';
 import { getClassesString } from '@/lib/layer-utils';
-import type { Layer, Component, Page, CollectionItemWithValues, CollectionField, Locale, PageFolder } from '@/types';
+import { parseSafeBodyStyle } from '@/lib/body-style';
+import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
+import { castValue } from '@/lib/collection-utils';
+import { canRenderNovumCustomCode } from '@/lib/novum-platform';
+import type { Layer, Component, Page, CollectionItemWithValues, CollectionField, Locale, PageFolder, Font, ColorVariable, Asset } from '@/types';
 
 interface PageLinkRef { collection_item_id: string; page_id: string }
 
@@ -127,6 +132,9 @@ interface PageRendererProps {
   locale?: Locale | null;
   availableLocales?: Locale[];
   isPreview?: boolean;
+  previewProjectParam?: string | null;
+  renderProjectId?: string | null;
+  customCodeProjectId?: string | null;
   translations?: Record<string, any> | null;
   gaMeasurementId?: string | null;
   globalCustomCodeHead?: string | null;
@@ -142,18 +150,306 @@ interface PageRendererProps {
  * Note: This is a Server Component. Script/style tags are automatically
  * hoisted to <head> by Next.js during SSR, eliminating FOUC.
  */
-/** Extract body layer from the tree and return its classes + children to render */
-function extractBodyLayer(layers: Layer[]): { bodyClasses: string; childLayers: Layer[] } {
+/** Extract body layer from the tree and return its classes/style/attrs + children to render */
+function extractBodyLayer(layers: Layer[]): { hasBodyLayer: boolean; bodyClasses: string; bodyStyle: string; bodyAttributes: Record<string, unknown>; childLayers: Layer[] } {
   const bodyLayer = layers.find(l => l.id === 'body');
   if (!bodyLayer) {
-    return { bodyClasses: '', childLayers: layers };
+    return { hasBodyLayer: false, bodyClasses: '', bodyStyle: '', bodyAttributes: {}, childLayers: layers };
   }
 
   const otherLayers = layers.filter(l => l.id !== 'body');
   return {
+    hasBodyLayer: true,
     bodyClasses: getClassesString(bodyLayer),
+    bodyStyle: typeof bodyLayer.attributes?.style === 'string' ? bodyLayer.attributes.style : '',
+    bodyAttributes: bodyLayer.attributes || {},
     childLayers: [...(bodyLayer.children || []), ...otherLayers],
   };
+}
+
+function bodyStyleForSsr(style: string): string {
+  return parseSafeBodyStyle(style)
+    .map(({ prop, value, priority }) => `${prop}:${value}${priority ? ' !important' : ''}`)
+    .join(';');
+}
+
+function bodyStyleDeclarationsForBootstrap(style: string): Array<{ prop: string; value: string; priority: string }> {
+  return parseSafeBodyStyle(style);
+}
+
+function safeBodyClassList(classes: string): string[] {
+  const classList = (classes || 'bg-white')
+    .split(/\s+/)
+    .map((className) => className.trim())
+    .filter((className) => className.length > 0 && !/[<>"'=&]/.test(className));
+  return classList.length > 0 ? classList : ['bg-white'];
+}
+
+function scriptJson(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+}
+
+function safeGaMeasurementId(value?: string | null): string | null {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return /^(G|GT|UA|AW|DC)-[A-Z0-9-]+$/i.test(trimmed) ? trimmed : null;
+}
+
+function escapeStyleBoundary(css: string): string {
+  return css.replace(/<\/style/gi, '<\\/style');
+}
+
+function bodyBootstrapScript(classes: string, style: string): string {
+  const classList = safeBodyClassList(classes);
+  const styleDeclarations = bodyStyleDeclarationsForBootstrap(style);
+  return `(function(){var next=${scriptJson(classList)};var decls=${scriptJson(styleDeclarations)};function apply(){var b=document.body;if(!b)return;var prev=(b.dataset.ycodeAppliedBodyClasses||'').split(/\\s+/).filter(Boolean);if(prev.length)b.classList.remove.apply(b.classList,prev);if(b.classList.contains('text-xs'))b.dataset.ycodeRemovedShellTextXs='true';b.classList.remove('text-xs');if(next.length)b.classList.add.apply(b.classList,next);b.dataset.ycodeAppliedBodyClasses=next.join(' ');var prevProps=(b.dataset.ycodeAppliedBodyStyleProps||'').split(',').filter(Boolean);prevProps.forEach(function(prop){b.style.removeProperty(prop)});var snap={};decls.forEach(function(d){var value=b.style.getPropertyValue(d.prop);var priority=b.style.getPropertyPriority(d.prop);snap[d.prop]={value:value,priority:priority,hadValue:value!==''||priority!==''};b.style.setProperty(d.prop,d.value,d.priority||'')});b.dataset.ycodeAppliedBodyStyleProps=decls.map(function(d){return d.prop}).join(',');b.dataset.ycodeBootstrapBodyStyleSnapshot=JSON.stringify(snap)}if(document.body)apply();else document.addEventListener('DOMContentLoaded',apply,{once:true});})()`;
+}
+
+function hasStudioPageTransition(layers: Layer[]): boolean {
+  const scan = (layer: Layer): boolean => {
+    if (layer.attributes?.['data-studio-page-transition'] !== undefined) return true;
+    return Array.isArray(layer.children) && layer.children.some(scan);
+  };
+
+  return layers.some(scan);
+}
+
+function pageTransitionInitialCss(): string {
+  return [
+    '@keyframes ycode-studio-page-transition{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}',
+    '@media (prefers-reduced-motion:no-preference){[data-studio-page-transition]{opacity:0;transform:translateY(20px);animation:ycode-studio-page-transition 700ms cubic-bezier(0.16,1,0.3,1) forwards}}',
+    '@media (prefers-reduced-motion:reduce){[data-studio-page-transition]{opacity:1;transform:none;animation:none}}',
+  ].join('');
+}
+
+function isProjectScopeRequired(): boolean {
+  return process.env.STUDIO_REQUIRE_SHARED_DB_PROJECT_SCOPE === '1';
+}
+
+function isMissingColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const err = error as { message?: string; code?: string; details?: string; hint?: string };
+  if (err.code === '42703') return true;
+  const message = [err.message, err.details, err.hint].filter(Boolean).join(' ').toLowerCase();
+  return (
+    message.includes('column')
+    && (
+      message.includes('could not find')
+      || message.includes('does not exist')
+      || message.includes('schema cache')
+    )
+  );
+}
+
+const renderProjectScopeColumnCache = new Set<string>();
+
+async function renderTableHasProjectScope(client: any, tableName: string): Promise<boolean> {
+  if (renderProjectScopeColumnCache.has(tableName)) {
+    return true;
+  }
+  const { error } = await client.from(tableName).select('project_id').limit(0);
+  if (!error) {
+    renderProjectScopeColumnCache.add(tableName);
+    return true;
+  }
+  if (isProjectScopeRequired() && !isMissingColumnError(error)) {
+    throw new Error(`Failed to inspect project scope for ${tableName}: ${error.message}`);
+  }
+  return false;
+}
+
+function applyRenderProjectScopeToBuilder(query: any, tableName: string, projectId: string | null, hasProjectScope: boolean) {
+  if (!hasProjectScope) {
+    if (isProjectScopeRequired()) {
+      throw new Error(`Project scope column is required for ${tableName}`);
+    }
+    return query;
+  }
+  if (!projectId) {
+    throw new Error(`Project scope is required to render ${tableName}`);
+  }
+  return query.eq('project_id', projectId);
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value);
+}
+
+function getRenderProjectId(page: Page): string | null {
+  const pageWithProject = page as Page & { project_id?: unknown };
+  const settings = page.settings as (Page['settings'] & { studio_import?: Record<string, unknown> }) | undefined;
+  const studioImport = settings?.studio_import;
+  const candidates = [
+    pageWithProject.project_id,
+    studioImport?.applied_project_id,
+  ];
+  for (const candidate of candidates) {
+    if (isUuid(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function getRenderPages(projectId: string | null, isPublished: boolean): Promise<Page[]> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase not configured');
+  let query = client.from('pages').select('*').eq('is_published', isPublished).is('deleted_at', null);
+  query = applyRenderProjectScopeToBuilder(query, 'pages', projectId, await renderTableHasProjectScope(client, 'pages'));
+  const { data, error } = await query.order('order', { ascending: true });
+  if (error) throw new Error(`Failed to fetch render pages: ${error.message}`);
+  return data || [];
+}
+
+async function getRenderPageFolders(projectId: string | null, isPublished: boolean): Promise<PageFolder[]> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase not configured');
+  let query = client.from('page_folders').select('*').eq('is_published', isPublished).is('deleted_at', null);
+  query = applyRenderProjectScopeToBuilder(query, 'page_folders', projectId, await renderTableHasProjectScope(client, 'page_folders'));
+  const { data, error } = await query.order('order', { ascending: true });
+  if (error) throw new Error(`Failed to fetch render page folders: ${error.message}`);
+  return data || [];
+}
+
+async function getRenderFonts(projectId: string | null, isPreview: boolean): Promise<Font[]> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase not configured');
+  let query = client
+    .from('fonts')
+    .select('*')
+    .eq('is_published', isPreview ? false : true)
+    .is('deleted_at', null);
+  query = applyRenderProjectScopeToBuilder(query, 'fonts', projectId, await renderTableHasProjectScope(client, 'fonts'));
+  const { data, error } = await query
+    .order('created_at', { ascending: true })
+    .limit(SUPABASE_QUERY_LIMIT);
+  if (error) throw new Error(`Failed to fetch render fonts: ${error.message}`);
+  return data || [];
+}
+
+async function getRenderColorVariables(projectId: string | null): Promise<ColorVariable[]> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase not configured');
+  let query = client.from('color_variables').select('*');
+  query = applyRenderProjectScopeToBuilder(query, 'color_variables', projectId, await renderTableHasProjectScope(client, 'color_variables'));
+  const { data, error } = await query
+    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`Failed to fetch render color variables: ${error.message}`);
+  return data || [];
+}
+
+async function getRenderFieldsByCollectionId(collectionId: string, isPublished: boolean, projectId: string | null): Promise<CollectionField[]> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase not configured');
+  let query = client
+    .from('collection_fields')
+    .select('*')
+    .eq('collection_id', collectionId)
+    .eq('is_published', isPublished)
+    .is('deleted_at', null);
+  query = applyRenderProjectScopeToBuilder(query, 'collection_fields', projectId, await renderTableHasProjectScope(client, 'collection_fields'));
+  const { data, error } = await query.order('order', { ascending: true });
+  if (error) throw new Error(`Failed to fetch render collection fields: ${error.message}`);
+  return data || [];
+}
+
+async function getRenderItemWithValues(id: string, isPublished: boolean, projectId: string | null): Promise<CollectionItemWithValues | null> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase not configured');
+  let itemQuery = client
+    .from('collection_items')
+    .select('*')
+    .eq('id', id)
+    .eq('is_published', isPublished)
+    .is('deleted_at', null);
+  itemQuery = applyRenderProjectScopeToBuilder(itemQuery, 'collection_items', projectId, await renderTableHasProjectScope(client, 'collection_items'));
+  const { data: item, error: itemError } = await itemQuery.maybeSingle();
+  if (itemError) throw new Error(`Failed to fetch render collection item: ${itemError.message}`);
+  if (!item) return null;
+
+  let valuesQuery = client
+    .from('collection_item_values')
+    .select('value, field_id, collection_fields!inner(type)')
+    .eq('item_id', id)
+    .eq('is_published', isPublished);
+  valuesQuery = applyRenderProjectScopeToBuilder(valuesQuery, 'collection_item_values', projectId, await renderTableHasProjectScope(client, 'collection_item_values'));
+  valuesQuery = valuesQuery.is('deleted_at', null);
+  const { data: valuesData, error: valuesError } = await valuesQuery;
+  if (valuesError) throw new Error(`Failed to fetch render collection item values: ${valuesError.message}`);
+
+  const values: Record<string, any> = {};
+  valuesData?.forEach((row: any) => {
+    if (row.field_id) {
+      const fieldType = row.collection_fields?.type;
+      values[row.field_id] = castValue(row.value, fieldType || 'text');
+    }
+  });
+  return { ...item, values };
+}
+
+async function getRenderItemsWithValues(collectionId: string, isPublished: boolean, projectId: string | null): Promise<{ items: CollectionItemWithValues[] }> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase not configured');
+  let itemsQuery = client
+    .from('collection_items')
+    .select('*')
+    .eq('collection_id', collectionId)
+    .eq('is_published', isPublished)
+    .is('deleted_at', null);
+  itemsQuery = applyRenderProjectScopeToBuilder(itemsQuery, 'collection_items', projectId, await renderTableHasProjectScope(client, 'collection_items'));
+  const { data: items, error: itemsError } = await itemsQuery
+    .order('manual_order', { ascending: true })
+    .order('created_at', { ascending: true })
+    .limit(SUPABASE_QUERY_LIMIT);
+  if (itemsError) throw new Error(`Failed to fetch render collection items: ${itemsError.message}`);
+  if (!items || items.length === 0) return { items: [] };
+
+  let valuesQuery = client
+    .from('collection_item_values')
+    .select('item_id, value, field_id, collection_fields!inner(type)')
+    .in('item_id', items.map((item: { id: string }) => item.id))
+    .eq('is_published', isPublished)
+    .is('deleted_at', null);
+  valuesQuery = applyRenderProjectScopeToBuilder(valuesQuery, 'collection_item_values', projectId, await renderTableHasProjectScope(client, 'collection_item_values'));
+  const { data: valuesData, error: valuesError } = await valuesQuery;
+  if (valuesError) throw new Error(`Failed to fetch render collection item values: ${valuesError.message}`);
+
+  const valuesByItem: Record<string, Record<string, any>> = {};
+  valuesData?.forEach((row: any) => {
+    if (!row.item_id || !row.field_id) return;
+    const fieldType = row.collection_fields?.type;
+    valuesByItem[row.item_id] ||= {};
+    valuesByItem[row.item_id][row.field_id] = castValue(row.value, fieldType || 'text');
+  });
+  return {
+    items: items.map((item: any) => ({
+      ...item,
+      values: valuesByItem[item.id] || {},
+    })),
+  };
+}
+
+async function getRenderAssetsByIds(ids: string[], isPublished: boolean, projectId: string | null): Promise<Record<string, Asset>> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase not configured');
+  if (ids.length === 0) return {};
+
+  let query = client
+    .from('assets')
+    .select('*')
+    .eq('is_published', isPublished)
+    .in('id', ids);
+  query = applyRenderProjectScopeToBuilder(query, 'assets', projectId, await renderTableHasProjectScope(client, 'assets'));
+  if (!isPublished) query = query.is('deleted_at', null);
+
+  const { data, error } = await query;
+  if (error) throw new Error(`Failed to fetch render assets: ${error.message}`);
+
+  const assetMap: Record<string, Asset> = {};
+  data?.forEach((asset: Asset) => {
+    assetMap[asset.id] = asset;
+  });
+  return assetMap;
 }
 
 export default async function PageRenderer({
@@ -169,6 +465,9 @@ export default async function PageRenderer({
   locale,
   availableLocales = [],
   isPreview = false,
+  previewProjectParam = null,
+  renderProjectId: explicitRenderProjectId = null,
+  customCodeProjectId: explicitCustomCodeProjectId = null,
   translations,
   gaMeasurementId,
   globalCustomCodeHead,
@@ -176,6 +475,26 @@ export default async function PageRenderer({
   ycodeBadge = true,
   passwordProtection,
 }: PageRendererProps) {
+  const sharedDbScopedRender = isProjectScopeRequired();
+  const pageRenderProjectId = getRenderProjectId(page);
+  const scopedRenderProjectId = isUuid(explicitRenderProjectId) ? explicitRenderProjectId : null;
+  if (pageRenderProjectId && scopedRenderProjectId && pageRenderProjectId !== scopedRenderProjectId) {
+    throw new Error('Project-scoped preview render project mismatch');
+  }
+  // In the isolated-site MVP the preview `project` param is still carried into
+  // render repositories. Tables without project_id stay site-local; tables with
+  // project_id are scoped by the repository helper.
+  const renderProjectId = scopedRenderProjectId || pageRenderProjectId;
+  if (isPreview && previewProjectParam && sharedDbScopedRender && !renderProjectId) {
+    throw new Error('Project-scoped preview render requires a resolved project id');
+  }
+  const requireScopedRender = sharedDbScopedRender;
+  const handleRenderFetchError = (label: string, error: unknown) => {
+    console.error(`[PageRenderer] ${label}:`, error);
+    if (requireScopedRender) {
+      throw error;
+    }
+  };
   // Check if this is a 401 error page that needs password form
   const is401Page = page.error_page === 401;
   // Layers are always pre-resolved by the caller (page-fetcher).
@@ -214,19 +533,23 @@ export default async function PageRenderer({
   // These are needed to resolve page links to their URLs
   let pages: Page[] = [];
   let folders: PageFolder[] = [];
+  const renderIsPublished = !isPreview;
 
   try {
-    // Use repository functions which work reliably
     [pages, folders] = await Promise.all([
-      getAllPages(),
-      getAllPageFolders(),
+      (renderProjectId || isProjectScopeRequired()) ? getRenderPages(renderProjectId, renderIsPublished) : getAllPages(),
+      (renderProjectId || isProjectScopeRequired()) ? getRenderPageFolders(renderProjectId, renderIsPublished) : getAllPageFolders(),
     ]);
 
     // Fetch collection items if we have references to them
     if (referencedItemIds.size > 0) {
       // Fetch items using repository function which handles EAV properly
       const itemsWithValues = await Promise.all(
-        Array.from(referencedItemIds).map(itemId => getItemWithValues(itemId, false))
+        Array.from(referencedItemIds).map(itemId => (
+          (renderProjectId || isProjectScopeRequired())
+            ? getRenderItemWithValues(itemId, renderIsPublished, renderProjectId)
+            : getItemWithValues(itemId, renderIsPublished)
+        ))
       );
 
       // For each item, find its collection's slug field and extract the slug
@@ -234,7 +557,9 @@ export default async function PageRenderer({
         if (!item) continue;
 
         // Get the slug field for this item's collection
-        const fields = await getFieldsByCollectionId(item.collection_id, false);
+        const fields = (renderProjectId || isProjectScopeRequired())
+          ? await getRenderFieldsByCollectionId(item.collection_id, renderIsPublished, renderProjectId)
+          : await getFieldsByCollectionId(item.collection_id, renderIsPublished);
         const slugField = fields.find(f => f.key === 'slug');
 
         if (slugField && item.values[slugField.id]) {
@@ -251,11 +576,15 @@ export default async function PageRenderer({
         .filter((id): id is string => !!id)
     );
     for (const collId of refTargetCollectionIds) {
-      const fields = await getFieldsByCollectionId(collId, false);
+      const fields = (renderProjectId || isProjectScopeRequired())
+        ? await getRenderFieldsByCollectionId(collId, renderIsPublished, renderProjectId)
+        : await getFieldsByCollectionId(collId, renderIsPublished);
       const slugField = fields.find(f => f.key === 'slug');
       if (!slugField) continue;
 
-      const { items } = await getItemsWithValues(collId, false);
+      const { items } = (renderProjectId || isProjectScopeRequired())
+        ? await getRenderItemsWithValues(collId, renderIsPublished, renderProjectId)
+        : await getItemsWithValues(collId, renderIsPublished);
       for (const item of items) {
         if (item.values[slugField.id]) {
           collectionItemSlugs[item.id] = item.values[slugField.id];
@@ -263,7 +592,7 @@ export default async function PageRenderer({
       }
     }
   } catch (error) {
-    console.error('[PageRenderer] Error fetching link resolution data:', error);
+    handleRenderFetchError('Error fetching link resolution data', error);
   }
 
   // Extract custom code from page settings and resolve placeholders for dynamic pages
@@ -277,9 +606,27 @@ export default async function PageRenderer({
   const pageCustomCodeBody = page.is_dynamic && collectionItem
     ? resolveCustomCodePlaceholders(rawPageCustomCodeBody, collectionItem, collectionFields)
     : rawPageCustomCodeBody;
+  const pageProjectId = typeof (page as Page & { project_id?: unknown }).project_id === 'string'
+    ? (page as Page & { project_id?: string }).project_id || null
+    : null;
+  const customCodeRenderProjectId = explicitCustomCodeProjectId || renderProjectId || pageProjectId;
+  const allowCustomCodeExecution = await canRenderNovumCustomCode(customCodeRenderProjectId, !isPreview, {
+    requireProject: isProjectScopeRequired() || Boolean(process.env.STUDIO_YCODE_SITE_KEY && process.env.STUDIO_YCODE_SITE_KEY !== 'default'),
+  });
 
-  const { bodyClasses, childLayers } = extractBodyLayer(resolvedLayers);
+  const { hasBodyLayer, bodyClasses, bodyStyle, bodyAttributes, childLayers } = extractBodyLayer(resolvedLayers);
+  const appliedBodyClasses = bodyClasses || 'bg-white';
+  const appliedBodyStyle = bodyStyle || '';
+  const runtimeProfile = typeof bodyAttributes['data-studio-runtime-profile'] === 'string'
+    ? bodyAttributes['data-studio-runtime-profile']
+    : undefined;
+  const runtimeAdapters = typeof bodyAttributes['data-studio-runtime-adapters'] === 'string'
+    ? bodyAttributes['data-studio-runtime-adapters']
+    : undefined;
+  const ssrBodyStyle = bodyStyleForSsr(appliedBodyStyle);
+  const safeGaId = safeGaMeasurementId(gaMeasurementId);
   const hasLayers = childLayers.length > 0;
+  const hasPageTransition = hasStudioPageTransition(childLayers);
 
   // Generate CSS for initial animation states to prevent flickering
   const { css: initialAnimationCSS, hiddenLayerInfo } = generateInitialAnimationCSS(resolvedLayers);
@@ -290,19 +637,30 @@ export default async function PageRenderer({
   try {
     const { getAllFonts: getAllDraftFonts } = await import('@/lib/repositories/fontRepository');
     const { getPublishedFonts } = await import('@/lib/repositories/fontRepository');
-    const fonts = isPreview ? await getAllDraftFonts() : await getPublishedFonts();
+    const fonts = (renderProjectId || isProjectScopeRequired())
+      ? await getRenderFonts(renderProjectId, isPreview)
+      : (isPreview ? await getAllDraftFonts() : await getPublishedFonts());
     fontsCss = buildCustomFontsCss(fonts) + buildFontClassesCss(fonts);
     googleFontLinkUrls = getGoogleFontLinks(fonts);
   } catch (error) {
-    console.error('[PageRenderer] Error loading fonts:', error);
+    handleRenderFetchError('Error loading fonts', error);
   }
 
-  // Fetch server-side settings needed by LayerRenderer (map tokens, color variables)
-  const [mapboxToken, googleMapsEmbedKey, serverColorVariables] = await Promise.all([
-    getMapboxAccessToken(),
-    getGoogleMapsEmbedApiKey(),
-    getAllColorVariables(),
-  ]);
+  // Fetch server-side settings needed by LayerRenderer (map tokens, color variables).
+  // A build without Supabase credentials should still complete; individual
+  // repository helpers already fail closed, so keep this fetch best-effort.
+  let mapboxToken: string | null = null;
+  let googleMapsEmbedKey: string | null = null;
+  let serverColorVariables: Awaited<ReturnType<typeof getAllColorVariables>> = [];
+  try {
+    [mapboxToken, googleMapsEmbedKey, serverColorVariables] = await Promise.all([
+      getMapboxAccessToken(),
+      getGoogleMapsEmbedApiKey(),
+      (renderProjectId || isProjectScopeRequired()) ? getRenderColorVariables(renderProjectId) : getAllColorVariables(),
+    ]);
+  } catch (error) {
+    handleRenderFetchError('Error fetching server settings', error);
+  }
   const serverSettings: Record<string, unknown> = {};
   if (mapboxToken) {
     serverSettings.mapbox_access_token = mapboxToken;
@@ -332,7 +690,10 @@ export default async function PageRenderer({
   if (layerAssetIds.size > 0) {
     try {
       const { getAssetsByIds } = await import('@/lib/repositories/assetRepository');
-      const assetMap = await getAssetsByIds(Array.from(layerAssetIds), !isPreview);
+      const assetIds = Array.from(layerAssetIds);
+      const assetMap = (renderProjectId || isProjectScopeRequired())
+        ? await getRenderAssetsByIds(assetIds, !isPreview, renderProjectId)
+        : await getAssetsByIds(assetIds, !isPreview);
       resolvedAssets = {};
       for (const [id, asset] of Object.entries(assetMap)) {
         let url: string | undefined;
@@ -349,19 +710,19 @@ export default async function PageRenderer({
         }
       }
     } catch (error) {
-      console.error('[PageRenderer] Error fetching assets:', error);
+      handleRenderFetchError('Error fetching assets', error);
     }
   }
 
   return (
     <>
       {/* Global head code fallback when layout skips it (SKIP_SETUP mode) */}
-      {process.env.SKIP_SETUP === 'true' && globalCustomCodeHead && (
+      {allowCustomCodeExecution && process.env.SKIP_SETUP === 'true' && globalCustomCodeHead && (
         renderRootLayoutHeadCode(globalCustomCodeHead, 'global-head')
       )}
 
       {/* Page-specific custom head code — React 19 hoists meta/link/style/title to <head> */}
-      {pageCustomCodeHead && renderRootLayoutHeadCode(pageCustomCodeHead, 'page-head')}
+      {allowCustomCodeExecution && pageCustomCodeHead && renderRootLayoutHeadCode(pageCustomCodeHead, 'page-head')}
 
       {/* Strip native browser appearance from form elements so Tailwind classes apply */}
       <style
@@ -373,7 +734,7 @@ export default async function PageRenderer({
       {generatedCss && (
         <style
           id="ycode-styles"
-          dangerouslySetInnerHTML={{ __html: generatedCss }}
+          dangerouslySetInnerHTML={{ __html: escapeStyleBoundary(generatedCss) }}
         />
       )}
 
@@ -381,7 +742,7 @@ export default async function PageRenderer({
       {colorVariablesCss && (
         <style
           id="ycode-color-vars"
-          dangerouslySetInnerHTML={{ __html: colorVariablesCss }}
+          dangerouslySetInnerHTML={{ __html: escapeStyleBoundary(colorVariablesCss) }}
         />
       )}
 
@@ -398,7 +759,26 @@ export default async function PageRenderer({
       {fontsCss && (
         <style
           id="ycode-fonts"
-          dangerouslySetInnerHTML={{ __html: fontsCss }}
+          dangerouslySetInnerHTML={{ __html: escapeStyleBoundary(fontsCss) }}
+        />
+      )}
+
+      {ssrBodyStyle && (
+        <style
+          id="ycode-body-layer-style"
+          dangerouslySetInnerHTML={{ __html: escapeStyleBoundary(`body{${ssrBodyStyle}}`) }}
+        />
+      )}
+
+      <script
+        id="ycode-body-layer-class-bootstrap"
+        dangerouslySetInnerHTML={{ __html: bodyBootstrapScript(appliedBodyClasses, appliedBodyStyle) }}
+      />
+
+      {hasPageTransition && (
+        <style
+          id="ycode-studio-page-transition-initial"
+          dangerouslySetInnerHTML={{ __html: escapeStyleBoundary(pageTransitionInitialCss()) }}
         />
       )}
 
@@ -406,16 +786,16 @@ export default async function PageRenderer({
       {initialAnimationCSS && (
         <style
           id="ycode-gsap-initial-styles"
-          dangerouslySetInnerHTML={{ __html: initialAnimationCSS }}
+          dangerouslySetInnerHTML={{ __html: escapeStyleBoundary(initialAnimationCSS) }}
         />
       )}
 
       {/* Inject Google Analytics script (non-preview only) */}
-      {gaMeasurementId && (
+      {allowCustomCodeExecution && safeGaId && (
         <>
           <script
             async
-            src={`https://www.googletagmanager.com/gtag/js?id=${gaMeasurementId}`}
+            src={`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(safeGaId)}`}
           />
           <script
             id="google-analytics"
@@ -424,20 +804,14 @@ export default async function PageRenderer({
                 window.dataLayer = window.dataLayer || [];
                 function gtag(){dataLayer.push(arguments);}
                 gtag('js', new Date());
-                gtag('config', '${gaMeasurementId}');
+                gtag('config', ${scriptJson(safeGaId)});
               `,
             }}
           />
         </>
       )}
 
-      {/* Apply body layer classes immediately to prevent FOUC */}
-      <script
-        dangerouslySetInnerHTML={{
-          __html: `document.body.className=document.body.className.replace(/\\bycode-body-applied\\b/g,'')+' ${(bodyClasses || 'bg-white').replace(/'/g, "\\'")} ycode-body-applied'`,
-        }}
-      />
-      <BodyClassApplier classes={bodyClasses || 'bg-white'} />
+      <BodyClassApplier classes={appliedBodyClasses} style={appliedBodyStyle} />
 
       <main
         id="ybody"
@@ -445,6 +819,8 @@ export default async function PageRenderer({
         data-layer-id="body"
         data-layer-type="div"
         data-is-empty={hasLayers ? 'false' : 'true'}
+        data-studio-runtime-profile={runtimeProfile}
+        data-studio-runtime-adapters={runtimeAdapters}
       >
         <LayerRenderer
           layers={childLayers}
@@ -460,9 +836,11 @@ export default async function PageRenderer({
           folders={folders as any}
           collectionItemSlugs={collectionItemSlugs}
           isPreview={isPreview}
+          previewProjectParam={previewProjectParam}
           translations={translations}
           resolvedAssets={resolvedAssets}
           components={components}
+          allowCustomCodeExecution={allowCustomCodeExecution}
           serverSettings={serverSettings}
         />
 
@@ -478,7 +856,7 @@ export default async function PageRenderer({
       </main>
 
       {/* Initialize GSAP animations based on layer interactions */}
-      <AnimationInitializer layers={resolvedLayers} />
+      <AnimationInitializer layers={resolvedLayers} initializeGlobalRuntime />
 
       {/* Initialize Swiper on slider elements */}
       {hasSliderLayers(resolvedLayers) && <SliderInitializer />}
@@ -490,12 +868,12 @@ export default async function PageRenderer({
       {!page.is_published && <ContentHeightReporter />}
 
       {/* Inject global custom body code (applies to all pages) */}
-      {globalCustomCodeBody && (
+      {allowCustomCodeExecution && globalCustomCodeBody && (
         <CustomCodeInjector html={globalCustomCodeBody} />
       )}
 
       {/* Inject page-specific custom body code */}
-      {pageCustomCodeBody && (
+      {allowCustomCodeExecution && pageCustomCodeBody && (
         <CustomCodeInjector html={pageCustomCodeBody} />
       )}
 
