@@ -412,7 +412,7 @@ export async function recordExplicitNovumPreviewApproval(request: NextRequest): 
     .insert({
       project_id: context.project.id,
       actor_user_id: context.actorUserId,
-      source: 'studio_preview_approval',
+      source: 'ycode_preview',
       preview_url: renderedPreview.preview_url,
       draft_hash: draftHash,
       status: 'created',
