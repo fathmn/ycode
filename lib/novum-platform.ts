@@ -32,6 +32,18 @@ type NovumProject = {
   slug: string;
 };
 
+type NovumProductionDeploymentResult = {
+  provider: 'vercel';
+  configured: boolean;
+  triggered: boolean;
+  deploymentId?: string;
+  deploymentUrl?: string;
+  productionUrl?: string;
+  status?: string;
+  skippedReason?: string;
+  error?: string;
+};
+
 type NovumContext = {
   client: any;
   project: NovumProject;
@@ -66,6 +78,22 @@ function isSafeProjectLookupValue(value: string): boolean {
 
 function getCurrentSiteKey(): string {
   return process.env.STUDIO_YCODE_SITE_KEY || 'default';
+}
+
+function readMetadataString(metadata: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function getVercelErrorMessage(payload: Record<string, any> | null): string | null {
+  const error = payload?.error;
+  if (typeof error === 'string') return error;
+  if (error && typeof error.message === 'string') return error.message;
+  if (typeof payload?.message === 'string') return payload.message;
+  return null;
 }
 
 export async function requireNovumProjectRole(
@@ -350,6 +378,129 @@ export async function verifyNovumPublishGate(request: NextRequest): Promise<
   }
 
   return { ok: true, context, draftHash, customCode };
+}
+
+export async function triggerNovumProductionDeployment(input: {
+  client: any;
+  project: NovumProject;
+}): Promise<NovumProductionDeploymentResult> {
+  const resultBase = {
+    provider: 'vercel' as const,
+    configured: false,
+    triggered: false,
+  };
+
+  const token = process.env.STUDIO_VERCEL_API_TOKEN || process.env.VERCEL_API_TOKEN;
+  const teamId = process.env.STUDIO_VERCEL_TEAM_ID || process.env.VERCEL_TEAM_ID;
+
+  if (!token) {
+    return {
+      ...resultBase,
+      skippedReason: 'vercel_api_token_missing',
+    };
+  }
+
+  const { data: project, error } = await input.client
+    .from('novum_projects')
+    .select('id, slug, metadata')
+    .eq('id', input.project.id)
+    .maybeSingle();
+
+  if (error || !project) {
+    return {
+      ...resultBase,
+      configured: true,
+      skippedReason: 'project_metadata_unavailable',
+      error: error?.message,
+    };
+  }
+
+  const metadata = project.metadata && typeof project.metadata === 'object'
+    ? project.metadata as Record<string, unknown>
+    : {};
+  const vercelProjectName = readMetadataString(metadata, 'vercelProject', 'vercel_project') || project.slug;
+  const lastDeploymentId = readMetadataString(
+    metadata,
+    'lastVercelDeploymentId',
+    'last_vercel_deployment_id'
+  );
+
+  if (!lastDeploymentId) {
+    return {
+      ...resultBase,
+      configured: true,
+      skippedReason: 'last_vercel_deployment_id_missing',
+    };
+  }
+
+  const apiUrl = new URL('https://api.vercel.com/v13/deployments');
+  apiUrl.searchParams.set('forceNew', '1');
+  if (teamId) apiUrl.searchParams.set('teamId', teamId);
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        deploymentId: lastDeploymentId,
+        meta: {
+          action: 'studio_publish_redeploy',
+          projectSlug: project.slug,
+        },
+        name: vercelProjectName,
+        target: 'production',
+      }),
+      cache: 'no-store',
+    });
+
+    const payload = await response.json().catch(() => null) as Record<string, any> | null;
+    if (!response.ok) {
+      return {
+        ...resultBase,
+        configured: true,
+        status: String(response.status),
+        error: getVercelErrorMessage(payload) || response.statusText || 'Vercel redeploy failed',
+      };
+    }
+
+    const deploymentId = typeof payload?.id === 'string' ? payload.id : undefined;
+    const deploymentUrl = typeof payload?.url === 'string' ? `https://${payload.url}` : undefined;
+    const readyState = typeof payload?.readyState === 'string' ? payload.readyState : undefined;
+
+    if (deploymentId || deploymentUrl) {
+      await input.client
+        .from('novum_projects')
+        .update({
+          metadata: {
+            ...metadata,
+            lastVercelDeploymentId: deploymentId || metadata.lastVercelDeploymentId,
+            lastVercelDeploymentUrl: deploymentUrl || metadata.lastVercelDeploymentUrl,
+            lastVercelDeploymentTriggeredAt: new Date().toISOString(),
+            lastVercelDeploymentSource: 'studio_publish',
+          },
+        })
+        .eq('id', project.id);
+    }
+
+    return {
+      ...resultBase,
+      configured: true,
+      triggered: true,
+      deploymentId,
+      deploymentUrl,
+      productionUrl: readMetadataString(metadata, 'productionUrl', 'production_url', 'vercelProductionUrl', 'vercel_production_url') || undefined,
+      status: readyState,
+    };
+  } catch (error) {
+    return {
+      ...resultBase,
+      configured: true,
+      error: error instanceof Error ? error.message : 'Vercel redeploy request failed',
+    };
+  }
 }
 
 export async function recordExplicitNovumPreviewApproval(request: NextRequest): Promise<Response> {

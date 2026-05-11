@@ -192,12 +192,21 @@ export default function PublishPopover({
         updateSetting('published_at', result.data.published_at_setting.value);
       }
 
-      toast.success('Website wurde live geschaltet', {
-        action: {
-          label: 'Öffnen',
-          onClick: () => window.open(baseUrl + publishedUrl, '_blank'),
-        },
-      });
+      if (result.data?.deployment && !result.data.deployment.triggered) {
+        toast.warning('Website wurde gespeichert, aber das Vercel Deployment wurde nicht gestartet');
+      } else {
+        toast.success(
+          result.data?.deployment?.triggered
+            ? 'Website wurde live geschaltet und Deployment gestartet'
+            : 'Website wurde live geschaltet',
+          {
+            action: {
+              label: 'Öffnen',
+              onClick: () => window.open(baseUrl + publishedUrl, '_blank'),
+            },
+          }
+        );
+      }
 
       setPublishSuccess(true);
       setTimeout(() => setPublishSuccess(false), 3000);

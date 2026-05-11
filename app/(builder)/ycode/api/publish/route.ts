@@ -14,7 +14,7 @@ import { getItemsByCollectionId } from '@/lib/repositories/collectionItemReposit
 import { publishAssets, getUnpublishedAssets, hardDeleteSoftDeletedAssets } from '@/lib/repositories/assetRepository';
 import { publishAssetFolders, getUnpublishedAssetFolders, hardDeleteSoftDeletedAssetFolders } from '@/lib/repositories/assetFolderRepository';
 import { publishFonts } from '@/lib/repositories/fontRepository';
-import { verifyNovumPublishGate, writeNovumAuditLog } from '@/lib/novum-platform';
+import { triggerNovumProductionDeployment, verifyNovumPublishGate, writeNovumAuditLog } from '@/lib/novum-platform';
 import type { Setting, PublishStats, PublishTableStats } from '@/types';
 
 // Disable caching for this route
@@ -48,6 +48,17 @@ interface PublishResult {
     css: boolean;
   };
   published_at_setting: Setting;
+  deployment: {
+    provider: 'vercel';
+    configured: boolean;
+    triggered: boolean;
+    deploymentId?: string;
+    deploymentUrl?: string;
+    productionUrl?: string;
+    status?: string;
+    skippedReason?: string;
+    error?: string;
+  };
   stats: PublishStats;
 }
 
@@ -136,6 +147,12 @@ export async function POST(request: NextRequest) {
         key: 'published_at',
         value: publishedAt,
       } as Setting,
+      deployment: {
+        provider: 'vercel',
+        configured: false,
+        triggered: false,
+        skippedReason: 'not_attempted',
+      },
       stats,
     };
 
@@ -448,6 +465,11 @@ export async function POST(request: NextRequest) {
       result.changes.locales +
       result.changes.translations;
 
+    result.deployment = await triggerNovumProductionDeployment({
+      client: novumGate.context.client,
+      project: novumGate.context.project,
+    });
+
     await writeNovumAuditLog({
       request,
       action: 'site.publish',
@@ -462,12 +484,15 @@ export async function POST(request: NextRequest) {
         actorRole: novumGate.context.role,
         draftHash: novumGate.draftHash,
         customCode: novumGate.customCode,
+        deployment: result.deployment,
       },
     });
 
     return noCache({
       data: result,
-      message: `Published a total of ${totalPublished} item(s) successfully`,
+      message: result.deployment.triggered
+        ? `Published a total of ${totalPublished} item(s) successfully and triggered deployment`
+        : `Published a total of ${totalPublished} item(s) successfully`,
     });
   } catch (error) {
     stats.totalDurationMs = Math.round(performance.now() - startTime);

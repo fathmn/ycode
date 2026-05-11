@@ -298,6 +298,17 @@ export const publishApi = {
       css: boolean;
     };
     published_at_setting: Setting;
+    deployment?: {
+      provider: 'vercel';
+      configured: boolean;
+      triggered: boolean;
+      deploymentId?: string;
+      deploymentUrl?: string;
+      productionUrl?: string;
+      status?: string;
+      skippedReason?: string;
+      error?: string;
+    };
   }>> {
     return apiRequest('/ycode/api/publish', {
       method: 'POST',
