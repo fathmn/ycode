@@ -1,7 +1,6 @@
 import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { NOVUM_PREVIEW_NONCE_COOKIE } from '@/lib/novum-preview-nonce';
 import { projectLookupFromHost } from '@/lib/project-host';
 import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
@@ -34,6 +33,10 @@ type ProjectIsolationCheck = {
   enabled: boolean;
   missingTables: string[];
 };
+
+type ApiAuthResult =
+  | { ok: true; requestHeaders?: Headers }
+  | { ok: false; response: NextResponse };
 
 const PROJECT_SCOPE_TABLES = [
   'pages',
@@ -73,6 +76,10 @@ let projectIsolationCache: Promise<ProjectIsolationCheck> | null = null;
 
 function isSharedDbProjectScopeRequired(): boolean {
   return process.env.STUDIO_REQUIRE_SHARED_DB_PROJECT_SCOPE === '1';
+}
+
+function isProjectScopedApiVerified(): boolean {
+  return process.env.STUDIO_PROJECT_SCOPED_API_VERIFIED === '1';
 }
 
 function isMissingColumnError(error: unknown): boolean {
@@ -249,6 +256,7 @@ function isStudioHost(request: NextRequest): boolean {
 
 const STUDIO_PUBLIC_ASSET_PATHS = new Set([
   '/canvas.css',
+  '/novum-partners-logo-black.png',
   '/swiper-minimal.css',
   '/y-filled.svg',
   '/ycode-webclip.png',
@@ -403,6 +411,39 @@ async function signPreviewNoncePayload(payload: string): Promise<string | null> 
   return Array.from(new Uint8Array(signature))
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
+}
+
+async function applyPreviewNonceCookie(
+  request: NextRequest,
+  response: NextResponse,
+  previewUrl: string
+): Promise<void> {
+  const nonceContext = await resolvePreviewNonceContext(request);
+  const noncePayload = [
+    Date.now(),
+    crypto.randomUUID(),
+    encodeNoncePart(nonceContext?.siteKey || ''),
+    encodeNoncePart(nonceContext?.actorUserId || ''),
+    encodeNoncePart(nonceContext?.projectId || ''),
+    encodeNoncePart(nonceContext?.draftHash || ''),
+    encodePreviewUrlForNonce(previewUrl),
+  ].join('.');
+  const nonceSignature = await signPreviewNoncePayload(noncePayload);
+  if (nonceContext && nonceSignature) {
+    response.cookies.set(
+      NOVUM_PREVIEW_NONCE_COOKIE,
+      `${noncePayload}.${nonceSignature}`,
+      {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        path: '/ycode',
+        maxAge: 30 * 60,
+      }
+    );
+  } else {
+    response.cookies.set(NOVUM_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
+  }
 }
 
 async function resolvePreviewNonceContext(request: NextRequest): Promise<{
@@ -673,9 +714,9 @@ function hasSameOriginMutationContext(request: NextRequest): boolean {
  * Verify Supabase session for protected API routes.
  * Returns a 401 response if not authenticated, or null to continue.
  */
-async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null> {
+async function verifyApiAuth(request: NextRequest): Promise<ApiAuthResult> {
   if (isPublicApiRoute(request.nextUrl.pathname, request.method)) {
-    return null;
+    return { ok: true };
   }
 
   const config = getSupabaseEnvConfig();
@@ -684,12 +725,15 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
   // In production this must fail closed to avoid unprotected API access.
   if (!config) {
     if (process.env.NODE_ENV === 'production') {
-      return NextResponse.json(
-        { error: 'Supabase is not configured' },
-        { status: 500 },
-      );
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: 'Supabase is not configured' },
+          { status: 500 },
+        ),
+      };
     }
-    return null;
+    return { ok: true };
   }
 
   const bearer = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
@@ -727,47 +771,72 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
   const { data: { user } } = await authClient.auth.getUser();
 
   if (!user) {
-    return NextResponse.json(
-      { error: 'Not authenticated' },
-      { status: 401 }
-    );
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Not authenticated' },
+        { status: 401 }
+      ),
+    };
   }
 
   const siteAdminRole = getConfiguredSiteAdminRoleForUser(user);
 
   if (isDevtoolsRoute(request.nextUrl.pathname) && !areDevtoolsEnabled()) {
-    return NextResponse.json(
-      { error: 'Not found' },
-      { status: 404 }
-    );
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Not found' },
+        { status: 404 }
+      ),
+    };
   }
 
   if (AUTH_ONLY_API_EXACT.includes(request.nextUrl.pathname)) {
-    return null;
+    return { ok: true };
   }
 
   const requiredRoles = getRequiredRoles(request.nextUrl.pathname, request.method);
 
   if (requiredRoles) {
     if (isGlobalSiteAdminRoute(request.nextUrl.pathname)) {
-      if (siteAdminRole) return null;
-      return NextResponse.json(
-        { error: 'Insufficient site admin role' },
-        { status: 403 }
-      );
+      if (siteAdminRole) return { ok: true };
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: 'Insufficient site admin role' },
+          { status: 403 }
+        ),
+      };
     }
 
     if (isSharedDbProjectScopeRequired()) {
       const isolation = await checkProjectIsolation(accessClient);
       if (!isolation.enabled) {
-        return NextResponse.json(
-          {
-            error: 'Project isolation schema is not enabled',
-            code: 'STUDIO_PROJECT_SCOPE_REQUIRED',
-            missingTables: isolation.missingTables,
-          },
-          { status: 409 }
-        );
+        return {
+          ok: false,
+          response: NextResponse.json(
+            {
+              error: 'Project isolation schema is not enabled',
+              code: 'STUDIO_PROJECT_SCOPE_REQUIRED',
+              missingTables: isolation.missingTables,
+            },
+            { status: 409 }
+          ),
+        };
+      }
+
+      if (!isProjectScopedApiVerified()) {
+        return {
+          ok: false,
+          response: NextResponse.json(
+            {
+              error: 'Project-scoped API handlers are not fully verified',
+              code: 'STUDIO_PROJECT_SCOPED_API_NOT_VERIFIED',
+            },
+            { status: 409 }
+          ),
+        };
       }
     }
 
@@ -780,10 +849,13 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
       const project = await findProjectBySlugOrDomain(accessClient, projectSlug);
 
       if (!project) {
-        return NextResponse.json(
-          { error: 'No assigned Novum project resolved' },
-          { status: 403 }
-        );
+        return {
+          ok: false,
+          response: NextResponse.json(
+            { error: 'No assigned Novum project resolved' },
+            { status: 403 }
+          ),
+        };
       }
 
       const membershipResult = await accessClient
@@ -801,10 +873,13 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
       }
     } else {
       if (siteAdminRole) {
-        return NextResponse.json(
-          { error: 'Project selection required' },
-          { status: 403 }
-        );
+        return {
+          ok: false,
+          response: NextResponse.json(
+            { error: 'Project selection required' },
+            { status: 403 }
+          ),
+        };
       }
 
       const membershipResult = await accessClient
@@ -818,10 +893,13 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
       });
 
       if (membershipResult.error || activeSiteMemberships.length !== 1) {
-        return NextResponse.json(
-          { error: 'Project selection required' },
-          { status: 403 }
-        );
+        return {
+          ok: false,
+          response: NextResponse.json(
+            { error: 'Project selection required' },
+            { status: 403 }
+          ),
+        };
       }
 
       membership = activeSiteMemberships[0];
@@ -830,10 +908,13 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
     }
 
     if (membershipError || !membership || !requiredRoles.includes(membership.role)) {
-      return NextResponse.json(
-        { error: 'Insufficient project role' },
-        { status: 403 }
-      );
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: 'Insufficient project role' },
+          { status: 403 }
+        ),
+      };
     }
 
     await writeProxyAuditLog({
@@ -843,13 +924,24 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
       role: membership.role,
       request,
     });
+
+    const requestHeaders = new Headers(request.headers);
+    if (resolvedProjectId) {
+      requestHeaders.set('x-novum-project-id', resolvedProjectId);
+    }
+    if (projectSlug) {
+      requestHeaders.set('x-novum-project-slug', projectSlug);
+    }
+
+    return { ok: true, requestHeaders };
   }
 
-  return null;
+  return { ok: true };
 }
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  let forwardedRequestHeaders: Headers | undefined;
 
   if (isStudioHost(request) && pathname === '/robots.txt') {
     return studioRobotsResponse();
@@ -865,10 +957,58 @@ export async function proxy(request: NextRequest) {
     const routeSuffix = segments.slice(1).join('/');
     const rewriteUrl = request.nextUrl.clone();
     rewriteUrl.pathname = routeSuffix ? `/ycode/${routeSuffix}` : '/ycode';
-    const response = NextResponse.rewrite(rewriteUrl);
+    const isProjectPrefixedPreview = rewriteUrl.pathname.startsWith('/ycode/preview');
+    if (isProjectPrefixedPreview && projectPathSlug) {
+      rewriteUrl.searchParams.set('project', projectPathSlug);
+    }
+
+    let requestHeaders = new Headers(request.headers);
+    if (projectPathSlug) {
+      requestHeaders.set('x-novum-project-slug', projectPathSlug);
+    }
+
+    const rewrittenRequest = new NextRequest(rewriteUrl, {
+      headers: requestHeaders,
+      method: request.method,
+    });
+
+    if (rewriteUrl.pathname.startsWith('/ycode/api') || rewriteUrl.pathname.startsWith('/ycode/preview')) {
+      const authResult = await verifyApiAuth(rewrittenRequest);
+      if (!authResult.ok) {
+        if (isProjectPrefixedPreview) {
+          const redirect = NextResponse.redirect(new URL(projectPathSlug ? `/${projectPathSlug}` : '/ycode', request.url));
+          redirect.cookies.set(NOVUM_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
+          return redirect;
+        }
+        return authResult.response;
+      }
+      requestHeaders = authResult.requestHeaders || requestHeaders;
+    }
+
+    if (isBuilderOnlyMutation(rewriteUrl.pathname, request.method) && !hasSameOriginMutationContext(rewrittenRequest)) {
+      return NextResponse.json(
+        { error: 'This Studio action must be initiated from the same origin.' },
+        { status: 403 }
+      );
+    }
+
+    const response = NextResponse.rewrite(rewriteUrl, {
+      request: { headers: requestHeaders },
+    });
     response.headers.set('x-pathname', rewriteUrl.pathname);
     if (projectPathSlug) {
       response.headers.set('x-novum-project-slug', projectPathSlug);
+    }
+    if (isProjectPrefixedPreview && request.method === 'GET') {
+      const canonicalPreviewUrl = new URL(`${rewriteUrl.pathname}${rewriteUrl.search}`, request.url);
+      if (projectPathSlug) {
+        canonicalPreviewUrl.searchParams.set('project', projectPathSlug);
+      }
+      await applyPreviewNonceCookie(
+        rewrittenRequest,
+        response,
+        `${canonicalPreviewUrl.pathname}${canonicalPreviewUrl.search}`
+      );
     }
     return response;
   }
@@ -883,15 +1023,16 @@ export async function proxy(request: NextRequest) {
 
   // Protect API and preview routes with auth
   if (pathname.startsWith('/ycode/api') || pathname.startsWith('/ycode/preview')) {
-    const authResponse = await verifyApiAuth(request);
-    if (authResponse) {
+    const authResult = await verifyApiAuth(request);
+    if (!authResult.ok) {
       if (pathname.startsWith('/ycode/preview')) {
         const redirect = NextResponse.redirect(new URL('/ycode', request.url));
         redirect.cookies.set(NOVUM_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
         return redirect;
       }
-      return authResponse;
+      return authResult.response;
     }
+    forwardedRequestHeaders = authResult.requestHeaders;
   }
 
   if (isBuilderOnlyMutation(pathname, request.method) && !hasSameOriginMutationContext(request)) {
@@ -918,38 +1059,15 @@ export async function proxy(request: NextRequest) {
   }
 
   // Create response
-  const response = NextResponse.next();
+  const response = forwardedRequestHeaders
+    ? NextResponse.next({ request: { headers: forwardedRequestHeaders } })
+    : NextResponse.next();
 
   // Add pathname header for layout to determine dark mode
   response.headers.set('x-pathname', pathname);
 
   if (pathname.startsWith('/ycode/preview') && request.method === 'GET') {
-    const nonceContext = await resolvePreviewNonceContext(request);
-    const noncePayload = [
-      Date.now(),
-      crypto.randomUUID(),
-      encodeNoncePart(nonceContext?.siteKey || ''),
-      encodeNoncePart(nonceContext?.actorUserId || ''),
-      encodeNoncePart(nonceContext?.projectId || ''),
-      encodeNoncePart(nonceContext?.draftHash || ''),
-      encodePreviewUrlForNonce(`${pathname}${request.nextUrl.search}`),
-    ].join('.');
-    const nonceSignature = await signPreviewNoncePayload(noncePayload);
-    if (nonceContext && nonceSignature) {
-      response.cookies.set(
-        NOVUM_PREVIEW_NONCE_COOKIE,
-        `${noncePayload}.${nonceSignature}`,
-        {
-          httpOnly: true,
-          sameSite: 'lax',
-          secure: process.env.NODE_ENV === 'production',
-          path: '/ycode',
-          maxAge: 30 * 60,
-        }
-      );
-    } else {
-      response.cookies.set(NOVUM_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
-    }
+    await applyPreviewNonceCookie(request, response, `${pathname}${request.nextUrl.search}`);
   }
 
   // Cache-Control for public pages is configured centrally via next.config.ts headers().

@@ -38,6 +38,46 @@ interface CollectedInteraction {
   interaction: LayerInteraction;
 }
 
+function isStudioHostForPreview(hostname: string): boolean {
+  return hostname === 'studio.novum-partners.de'
+    || hostname === 'localhost'
+    || hostname === '127.0.0.1';
+}
+
+function getStudioPreviewReportContext(location: Location, previewLocationKey: string): {
+  previewUrl: string;
+  previewProjectParam: string | null;
+} | null {
+  const previewUrl = previewLocationKey || `${location.pathname}${location.search}`;
+  const previewUrlObject = new URL(previewUrl, location.origin);
+  const currentPathname = previewUrlObject.pathname;
+
+  if (currentPathname === '/ycode/preview' || currentPathname.startsWith('/ycode/preview/')) {
+    return {
+      previewUrl: `${previewUrlObject.pathname}${previewUrlObject.search}`,
+      previewProjectParam: previewUrlObject.searchParams.get('project'),
+    };
+  }
+
+  if (!isStudioHostForPreview(location.hostname)) return null;
+
+  const segments = currentPathname.split('/').filter(Boolean);
+  if (segments.length < 2 || segments[1] !== 'preview') return null;
+
+  const canonicalUrl = new URL(`/ycode/${segments.slice(1).join('/')}`, location.origin);
+  previewUrlObject.searchParams.forEach((value, key) => {
+    canonicalUrl.searchParams.set(key, value);
+  });
+  if (segments[0]) {
+    canonicalUrl.searchParams.set('project', segments[0]);
+  }
+
+  return {
+    previewUrl: `${canonicalUrl.pathname}${canonicalUrl.search}`,
+    previewProjectParam: canonicalUrl.searchParams.get('project'),
+  };
+}
+
 /** Recursively collect all interactions from layers */
 function collectInteractions(layers: Layer[]): CollectedInteraction[] {
   const interactions: CollectedInteraction[] = [];
@@ -1244,11 +1284,9 @@ export default function AnimationInitializer({ layers, injectInitialCSS, initial
 
   useEffect(() => {
     if (!initializeGlobalRuntime || typeof window === 'undefined') return;
-    const previewUrl = previewLocationKey || `${window.location.pathname}${window.location.search}`;
-    const previewUrlObject = new URL(previewUrl, window.location.origin);
-    const currentPathname = previewUrlObject.pathname;
-    if (currentPathname !== '/ycode/preview' && !currentPathname.startsWith('/ycode/preview/')) return;
-    const previewProjectParam = previewUrlObject.searchParams.get('project');
+    const previewContext = getStudioPreviewReportContext(window.location, previewLocationKey);
+    if (!previewContext) return;
+    const { previewUrl, previewProjectParam } = previewContext;
 
     const controller = new AbortController();
     waitForStudioPreviewRenderedReady(controller.signal).then(() => {
