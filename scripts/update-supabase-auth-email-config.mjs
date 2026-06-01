@@ -56,7 +56,7 @@ async function main() {
     body: JSON.stringify({
       smtp_admin_email: senderEmail,
       smtp_sender_name: senderName,
-      mailer_subjects_recovery: 'Passwort fuer studio.novum partners zuruecksetzen',
+      mailer_subjects_recovery: 'Passwort für studio.novum partners zurücksetzen',
       mailer_templates_recovery_content: recoveryTemplate,
       uri_allow_list: Array.from(allowedRedirects).join(','),
     }),
