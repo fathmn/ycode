@@ -632,7 +632,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
       }
 
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/ycode/api/auth/callback?auth_flow=recovery`,
+        redirectTo: `${window.location.origin}/ycode?auth_flow=recovery`,
       });
 
       if (error) {
@@ -640,7 +640,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         return;
       }
 
-      setLoginNotice('Link zum Zurücksetzen wurde versendet. Bitte öffnen Sie die E-Mail auf diesem Gerät.');
+      setLoginNotice('Link zum Zurücksetzen wurde versendet. Bitte öffnen Sie die E-Mail und vergeben Sie ein neues Passwort.');
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : 'Passwort-Reset konnte nicht gestartet werden.');
     } finally {

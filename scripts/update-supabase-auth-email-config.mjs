@@ -8,6 +8,7 @@ import process from 'node:process';
 const DEFAULT_PROJECT_REF = 'ueeecqiswvxpfpmujrtj';
 const DEFAULT_SENDER_EMAIL = 'no-reply@novum-partners.de';
 const DEFAULT_SENDER_NAME = 'studio.novum partners';
+const DEFAULT_SITE_URL = 'https://studio.novum-partners.de';
 
 function readArg(name) {
   const prefix = `--${name}=`;
@@ -24,20 +25,40 @@ async function main() {
   const projectRef = readArg('project-ref') || process.env.SUPABASE_PROJECT_REF || DEFAULT_PROJECT_REF;
   const senderEmail = readArg('sender-email') || DEFAULT_SENDER_EMAIL;
   const senderName = readArg('sender-name') || DEFAULT_SENDER_NAME;
+  const siteUrl = readArg('site-url') || DEFAULT_SITE_URL;
   const templatePath = path.join(process.cwd(), 'supabase', 'auth-email-templates', 'recovery.html');
   const recoveryTemplate = await fs.readFile(templatePath, 'utf8');
+  const endpoint = `https://api.supabase.com/v1/projects/${projectRef}/config/auth`;
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+  };
 
-  const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/config/auth`, {
+  const currentResponse = await fetch(endpoint, { headers });
+  const currentText = await currentResponse.text();
+  if (!currentResponse.ok) {
+    throw new Error(`Supabase Auth config read failed (${currentResponse.status}): ${currentText}`);
+  }
+
+  const currentConfig = JSON.parse(currentText);
+  const allowedRedirects = new Set(
+    String(currentConfig.uri_allow_list || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+  allowedRedirects.add(`${siteUrl}/ycode`);
+  allowedRedirects.add(`${siteUrl}/ycode/api/auth/confirm`);
+
+  const response = await fetch(endpoint, {
     method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({
       smtp_admin_email: senderEmail,
       smtp_sender_name: senderName,
       mailer_subjects_recovery: 'Passwort fuer studio.novum partners zuruecksetzen',
       mailer_templates_recovery_content: recoveryTemplate,
+      uri_allow_list: Array.from(allowedRedirects).join(','),
     }),
   });
 
@@ -51,11 +72,13 @@ async function main() {
     projectRef,
     senderEmail,
     senderName,
+    siteUrl,
     updated: [
       'smtp_admin_email',
       'smtp_sender_name',
       'mailer_subjects_recovery',
       'mailer_templates_recovery_content',
+      'uri_allow_list',
     ],
   }, null, 2));
 }
