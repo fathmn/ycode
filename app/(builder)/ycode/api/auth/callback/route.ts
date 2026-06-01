@@ -13,6 +13,10 @@ import { cookies } from 'next/headers';
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get('code');
+  const requestedFlow = requestUrl.searchParams.get('auth_flow') || requestUrl.searchParams.get('type');
+  const authFlow = requestedFlow === 'invite' || requestedFlow === 'magiclink' || requestedFlow === 'recovery'
+    ? requestedFlow
+    : null;
 
   if (code) {
     try {
@@ -60,8 +64,14 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      // Redirect to builder
-      return NextResponse.redirect(new URL('/ycode', request.url));
+      // Redirect to builder while preserving the email auth intent. Recovery
+      // and invite links must show password setup instead of behaving like a
+      // plain magic-link login after the server has already exchanged the code.
+      const redirectUrl = new URL('/ycode', request.url);
+      if (authFlow) {
+        redirectUrl.searchParams.set('auth_flow', authFlow);
+      }
+      return NextResponse.redirect(redirectUrl);
     } catch (error) {
       console.error('Auth callback failed:', error);
       return NextResponse.redirect(

@@ -6,7 +6,11 @@
 
 import { create } from 'zustand';
 import { createBrowserClient } from '../lib/supabase-browser';
-import { applySupabaseEmailAuthUrlSession } from '../lib/supabase-email-auth-url';
+import {
+  applySupabaseEmailAuthUrlSession,
+  clearSupabaseEmailAuthFlowIntent,
+  hasSupabaseEmailAuthUrl,
+} from '../lib/supabase-email-auth-url';
 import type { User, Session } from '@supabase/supabase-js';
 
 type PasswordSetupType = 'invite' | 'recovery';
@@ -56,7 +60,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
    * Gracefully handles missing Supabase config (expected during setup)
    */
   initialize: async () => {
-    if (get().initialized) return;
+    if (get().initialized && !hasSupabaseEmailAuthUrl()) return;
 
     try {
       const supabase = await createBrowserClient();
@@ -96,24 +100,25 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         return;
       }
 
-      const passwordSetupType = authUrlResult.sessionApplied
-        ? passwordSetupTypeFromFlow(authUrlResult.flow)
-        : null;
-      if (passwordSetupType) {
-        set({
-          passwordSetupRequired: true,
-          passwordSetupType,
-        });
-      }
-
       // Validate session server-side (getUser verifies the JWT, unlike getSession)
       const { data: { user } } = await supabase.auth.getUser();
       const { data: { session } } = await supabase.auth.getSession();
+      const passwordSetupType = passwordSetupTypeFromFlow(authUrlResult.flow);
+      const shouldRequirePasswordSetup = Boolean(
+        passwordSetupType
+        && (authUrlResult.sessionApplied || (user && session))
+      );
 
       set({
         user: user ?? null,
         session: user ? session : null,
         initialized: true,
+        ...(shouldRequirePasswordSetup
+          ? {
+            passwordSetupRequired: true,
+            passwordSetupType,
+          }
+          : {}),
       });
     } catch (error) {
       console.error('Failed to initialize auth:', error);
@@ -161,6 +166,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         return { error: message };
       }
 
+      clearSupabaseEmailAuthFlowIntent();
       set({
         user: data.user,
         session: data.session,
@@ -201,6 +207,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         return { error: error.message };
       }
 
+      clearSupabaseEmailAuthFlowIntent();
       set({
         user: data.user,
         session: data.session,
@@ -231,10 +238,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         return { error: 'Supabase not configured. Please complete setup first.' };
       }
 
+      clearSupabaseEmailAuthFlowIntent();
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
-          emailRedirectTo: `${window.location.origin}/ycode/api/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/ycode/api/auth/callback?auth_flow=magiclink`,
           shouldCreateUser: false,
         },
       });
@@ -264,6 +272,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
       if (!supabase) {
         // If Supabase is not configured, just clear local state
+        clearSupabaseEmailAuthFlowIntent();
         set({
           user: null,
           session: null,
@@ -274,6 +283,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         return;
       }
 
+      clearSupabaseEmailAuthFlowIntent();
       const { error } = await supabase.auth.signOut();
 
       if (error) {
@@ -332,6 +342,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   clearPasswordSetup: () => {
+    clearSupabaseEmailAuthFlowIntent();
     set({
       passwordSetupRequired: false,
       passwordSetupType: null,

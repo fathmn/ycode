@@ -86,6 +86,27 @@ function isSafeInlineSvg(svg: string): boolean {
   return true;
 }
 
+const EDIT_MODE_NATIVE_ACTION_SELECTOR = [
+  'a[href]',
+  'button',
+  'input',
+  'select',
+  'textarea',
+  'label',
+  'summary',
+  '[role="button"]',
+  '[role="link"]',
+].join(',');
+
+function shouldPreventEditModeNativeAction(event: React.MouseEvent): boolean {
+  const target = event.target;
+  const currentTarget = event.currentTarget;
+  if (!(target instanceof Element) || !(currentTarget instanceof Element)) return false;
+
+  const interactiveTarget = target.closest(EDIT_MODE_NATIVE_ACTION_SELECTOR);
+  return Boolean(interactiveTarget && currentTarget.contains(interactiveTarget));
+}
+
 const ALLOWED_IFRAME_HOSTS = [
   'youtube.com',
   'www.youtube.com',
@@ -1984,20 +2005,17 @@ const LayerItem: React.FC<{
         }
         // Only handle if not a context menu trigger
         if (e.button !== 2) {
-          e.stopPropagation();
-          // Prevent default behavior for form elements in edit mode
-          // - labels: would focus the associated input
-          // - inputs (checkbox, radio): would toggle checked state
-          // - select: would open the dropdown
-          if (htmlTag === 'label' || htmlTag === 'input' || htmlTag === 'select') {
+          const blocksNativeAction = shouldPreventEditModeNativeAction(e);
+          if (blocksNativeAction) {
             e.preventDefault();
           }
+          e.stopPropagation();
           // If this layer is inside a component, select the component layer instead
           const layerIdToSelect = parentComponentLayerId || layer.id;
 
           onLayerClick?.(layerIdToSelect, e);
         }
-        if (originalOnClick) {
+        if (originalOnClick && !shouldPreventEditModeNativeAction(e)) {
           originalOnClick(e);
         }
       };

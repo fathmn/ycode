@@ -10,11 +10,52 @@ type ApplyEmailAuthUrlSessionResult = {
   user: User | null;
 };
 
+const PASSWORD_SETUP_FLOW_STORAGE_KEY = 'novum-studio:password-setup-flow';
+
 function supportedFlow(value: string | null): SupabaseEmailAuthFlow | null {
   if (value === 'invite' || value === 'magiclink' || value === 'recovery') {
     return value;
   }
   return null;
+}
+
+function passwordSetupFlow(value: SupabaseEmailAuthFlow | null): 'invite' | 'recovery' | null {
+  if (value === 'invite' || value === 'recovery') return value;
+  return null;
+}
+
+function readStoredPasswordSetupFlow(): 'invite' | 'recovery' | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const value = window.sessionStorage.getItem(PASSWORD_SETUP_FLOW_STORAGE_KEY);
+    return value === 'invite' || value === 'recovery' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function storePasswordSetupFlow(flow: SupabaseEmailAuthFlow | null): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    const setupFlow = passwordSetupFlow(flow);
+    if (setupFlow) {
+      window.sessionStorage.setItem(PASSWORD_SETUP_FLOW_STORAGE_KEY, setupFlow);
+    } else if (flow === 'magiclink') {
+      window.sessionStorage.removeItem(PASSWORD_SETUP_FLOW_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage failures; the URL still carries the flow for this request.
+  }
+}
+
+export function clearSupabaseEmailAuthFlowIntent(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(PASSWORD_SETUP_FLOW_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures; auth state remains the source of truth.
+  }
 }
 
 export function resolveSupabaseEmailAuthFlow(defaultCodeFlow?: SupabaseEmailAuthFlow | null): SupabaseEmailAuthFlow | null {
@@ -37,7 +78,33 @@ export function resolveSupabaseEmailAuthFlow(defaultCodeFlow?: SupabaseEmailAuth
     if (window.location.pathname === '/ycode/accept-invite') return 'invite';
   }
 
-  return null;
+  return readStoredPasswordSetupFlow();
+}
+
+export function hasSupabaseEmailAuthUrl(): boolean {
+  if (typeof window === 'undefined') return false;
+
+  const searchParams = new URLSearchParams(window.location.search);
+  if (
+    searchParams.has('code')
+    || searchParams.has('auth_flow')
+    || searchParams.has('type')
+    || searchParams.has('auth_error')
+  ) {
+    return true;
+  }
+
+  const hash = window.location.hash.replace(/^#/, '');
+  if (!hash) return false;
+
+  const hashParams = new URLSearchParams(hash);
+  return (
+    hashParams.has('access_token')
+    || hashParams.has('refresh_token')
+    || hashParams.has('type')
+    || hashParams.has('error')
+    || hashParams.has('error_description')
+  );
 }
 
 function readAuthCode(): string | null {
@@ -91,11 +158,13 @@ export async function applySupabaseEmailAuthUrlSession(
   options: { defaultCodeFlow?: SupabaseEmailAuthFlow | null } = {}
 ): Promise<ApplyEmailAuthUrlSessionResult> {
   const flow = resolveSupabaseEmailAuthFlow(options.defaultCodeFlow);
+  storePasswordSetupFlow(flow);
   const code = readAuthCode();
   const hashSession = readHashSessionParams();
   const hashError = readHashAuthError();
 
   if (hashError) {
+    clearSupabaseEmailAuthFlowIntent();
     cleanSupabaseEmailAuthUrl();
     return {
       error: hashError,
@@ -108,6 +177,9 @@ export async function applySupabaseEmailAuthUrlSession(
 
   if (code) {
     const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+    if (error) {
+      clearSupabaseEmailAuthFlowIntent();
+    }
     cleanSupabaseEmailAuthUrl();
 
     return {
@@ -124,6 +196,9 @@ export async function applySupabaseEmailAuthUrlSession(
       access_token: hashSession.accessToken,
       refresh_token: hashSession.refreshToken,
     });
+    if (error) {
+      clearSupabaseEmailAuthFlowIntent();
+    }
     cleanSupabaseEmailAuthUrl();
 
     return {
