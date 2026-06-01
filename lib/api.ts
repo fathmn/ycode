@@ -36,6 +36,13 @@ export function setSelectedStudioProjectSlug(slug: string): void {
   window.dispatchEvent(new CustomEvent(STUDIO_PROJECT_SELECTION_EVENT, { detail: { slug } }));
 }
 
+export function clearSelectedStudioProjectSlug(): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(STUDIO_PROJECT_STORAGE_KEY);
+  window.localStorage.removeItem(LEGACY_NOVUM_PROJECT_STORAGE_KEY);
+  window.dispatchEvent(new CustomEvent(STUDIO_PROJECT_SELECTION_EVENT, { detail: { slug: null } }));
+}
+
 export async function studioFetch(input: RequestInfo | URL, options: RequestInit = {}): Promise<Response> {
   const token = await getAuthToken();
   const selectedProjectSlug = getSelectedStudioProjectSlug();
@@ -113,6 +120,8 @@ export const novumProjectsApi = {
   async getAssigned(): Promise<ApiResponse<Array<{
     id: string;
     slug: string;
+    studio_path_slug: string | null;
+    studio_path: string | null;
     name: string;
     primary_domain: string | null;
     production_url: string | null;

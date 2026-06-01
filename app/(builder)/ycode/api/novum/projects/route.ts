@@ -2,12 +2,18 @@ import { NextRequest } from 'next/server';
 import { noCache } from '@/lib/api-response';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { extractSupabaseAccessToken } from '@/lib/supabase-cookie-token';
+import { findDuplicateStudioProjectPathSlugs, studioProjectPathSlug } from '@/lib/studio-project-path';
+import { getConfiguredSiteAdminRoleForUser } from '@/lib/novum-site-admin';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 function getCurrentSiteKey(): string {
   return process.env.STUDIO_YCODE_SITE_KEY || 'default';
+}
+
+function shouldScopeStudioProjectListToCurrentSiteKey(): boolean {
+  return process.env.STUDIO_SCOPE_PROJECT_LIST_TO_CURRENT_SITE_KEY === '1';
 }
 
 function normalizePublicUrl(value: unknown): string | null {
@@ -80,22 +86,98 @@ export async function GET(request: NextRequest) {
     return noCache({ error: error.message }, 500);
   }
 
-  const projects = (data || [])
+  const activeMemberships = (data || [])
     .map((membership: any) => {
       const project = Array.isArray(membership.project)
         ? membership.project[0]
         : membership.project;
+      if (
+        !project?.id ||
+        !project?.slug ||
+        project.status !== 'active' ||
+        (
+          shouldScopeStudioProjectListToCurrentSiteKey() &&
+          project.ycode_site_key !== getCurrentSiteKey()
+        )
+      ) return null;
+      return { role: membership.role, project };
+    })
+    .filter((membership): membership is { role: string; project: any } => Boolean(membership));
+
+  const siteAdminRole = getConfiguredSiteAdminRoleForUser(user);
+
+  let projectRows: Array<{ role: string; project: any }> = activeMemberships;
+  let activeSiteProjectsForPathCheck = activeMemberships.map((membership: any) => membership.project);
+
+  if (siteAdminRole) {
+    let allProjectsQuery = client
+      .from('novum_projects')
+      .select('id, slug, name, primary_domain, metadata, status, ycode_site_key')
+      .eq('status', 'active');
+    if (shouldScopeStudioProjectListToCurrentSiteKey()) {
+      allProjectsQuery = allProjectsQuery.eq('ycode_site_key', getCurrentSiteKey());
+    }
+    const { data: allProjects, error: allProjectsError } = await allProjectsQuery;
+
+    if (allProjectsError) {
+      return noCache({ error: allProjectsError.message }, 500);
+    }
+
+    activeSiteProjectsForPathCheck = allProjects || [];
+    projectRows = (allProjects || []).map((project: any) => ({
+      role: siteAdminRole,
+      project,
+    }));
+  } else {
+    let allActiveProjectsQuery = client
+      .from('novum_projects')
+      .select('id, slug, metadata')
+      .eq('status', 'active');
+    if (shouldScopeStudioProjectListToCurrentSiteKey()) {
+      allActiveProjectsQuery = allActiveProjectsQuery.eq('ycode_site_key', getCurrentSiteKey());
+    }
+    const { data: allActiveProjects, error: allActiveProjectsError } = await allActiveProjectsQuery;
+
+    if (allActiveProjectsError) {
+      return noCache({ error: allActiveProjectsError.message }, 500);
+    }
+
+    activeSiteProjectsForPathCheck = allActiveProjects || [];
+  }
+
+  const duplicatePathSlugs = findDuplicateStudioProjectPathSlugs(
+    activeSiteProjectsForPathCheck
+  );
+  if (duplicatePathSlugs.length > 0) {
+    return noCache(
+      {
+        error: 'Duplicate Studio project path aliases detected',
+        code: 'NOVUM_DUPLICATE_STUDIO_PROJECT_PATH',
+        ...(siteAdminRole ? { pathSlugs: duplicatePathSlugs } : {}),
+      },
+      409
+    );
+  }
+
+  const projects = projectRows
+    .map((membership: any) => {
+      const project = membership.project;
 
       if (
         !project?.id ||
         !project?.slug ||
         project.status !== 'active' ||
-        project.ycode_site_key !== getCurrentSiteKey()
+        (
+          shouldScopeStudioProjectListToCurrentSiteKey() &&
+          project.ycode_site_key !== getCurrentSiteKey()
+        )
       ) return null;
 
       return {
         id: project.id,
         slug: project.slug,
+        studio_path_slug: studioProjectPathSlug(project),
+        studio_path: studioProjectPathSlug(project) ? `/${studioProjectPathSlug(project)}` : null,
         name: project.name,
         primary_domain: project.primary_domain,
         production_url: getProjectProductionUrl(project),

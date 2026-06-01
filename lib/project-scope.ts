@@ -1,5 +1,7 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { getAuthUser } from '@/lib/supabase-auth';
+import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
+import { getConfiguredSiteAdminRoleForUser } from '@/lib/novum-site-admin';
 export { projectLookupFromHost } from '@/lib/project-host';
 
 const projectScopeColumnCache = new Set<string>();
@@ -63,10 +65,23 @@ export function getCurrentYcodeSiteKey(): string {
   return process.env.STUDIO_YCODE_SITE_KEY || 'default';
 }
 
+async function hasSiteAdminRole(client: any, userId: string): Promise<boolean> {
+  const { data, error } = await client.auth.admin.getUserById(userId);
+  if (error) return false;
+  return Boolean(getConfiguredSiteAdminRoleForUser(data?.user));
+}
+
 export async function resolveNovumProjectId(value: string | null | undefined): Promise<string | null> {
   if (!value || !isSafeProjectLookupValue(value)) return null;
   const client = await getSupabaseAdmin();
   if (!client) return null;
+
+  const activeProjects = await client
+    .from('novum_projects')
+    .select('id, slug, metadata')
+    .eq('status', 'active');
+  if (activeProjects.error || !Array.isArray(activeProjects.data)) return null;
+  const aliasMatches = findStudioProjectPathMatches(activeProjects.data, value);
 
   const baseSelect = 'id';
   const bySlug = await client
@@ -74,18 +89,22 @@ export async function resolveNovumProjectId(value: string | null | undefined): P
     .select(baseSelect)
     .eq('slug', value)
     .eq('status', 'active')
-    .eq('ycode_site_key', getCurrentYcodeSiteKey())
     .maybeSingle();
-  if (!bySlug.error && bySlug.data?.id) return bySlug.data.id;
+  if (bySlug.error) return null;
+  if (bySlug.data?.id) {
+    return bySlug.data.id;
+  }
 
   const byDomain = await client
     .from('novum_projects')
     .select(baseSelect)
     .eq('primary_domain', value)
     .eq('status', 'active')
-    .eq('ycode_site_key', getCurrentYcodeSiteKey())
     .maybeSingle();
   if (!byDomain.error && byDomain.data?.id) return byDomain.data.id;
+
+  const match = aliasMatches.length === 1 ? aliasMatches[0] : null;
+  if (match?.id) return match.id;
 
   return null;
 }
@@ -100,6 +119,7 @@ export async function resolveSingleNovumProjectIdForUser(userId: string): Promis
   if (!userId) return null;
   const client = await getSupabaseAdmin();
   if (!client) return null;
+  if (await hasSiteAdminRole(client, userId)) return null;
 
   const { data, error } = await client
     .from('novum_project_memberships')
@@ -109,7 +129,7 @@ export async function resolveSingleNovumProjectIdForUser(userId: string): Promis
 
   const matchingMemberships = data.filter((membership: any) => {
     const project = Array.isArray(membership.project) ? membership.project[0] : membership.project;
-    return project?.status === 'active' && project?.ycode_site_key === getCurrentYcodeSiteKey();
+    return project?.status === 'active';
   });
   if (matchingMemberships.length !== 1) return null;
   return matchingMemberships[0].project_id || null;

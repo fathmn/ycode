@@ -10,6 +10,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@/lib/supabase-browser';
+import { applySupabaseEmailAuthUrlSession } from '@/lib/supabase-email-auth-url';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -48,36 +49,21 @@ export default function AcceptInvitePage() {
         const supabase = await createBrowserClient();
 
         if (!supabase) {
-          setError('Application not configured. Please contact the administrator.');
+          setError('Studio ist nicht konfiguriert. Bitte wenden Sie sich an den Administrator.');
           setVerifying(false);
           return;
         }
 
-        // Get hash parameters from URL (Supabase sends token in hash)
-        const hashParams = new URLSearchParams(window.location.hash.substring(1));
-        const accessToken = hashParams.get('access_token');
-        const refreshToken = hashParams.get('refresh_token');
-        const type = hashParams.get('type');
-
-        // Check if this is an invite flow
-        if (type === 'invite' && accessToken && refreshToken) {
-          // Set the session with the tokens from the URL
-          const { data, error: sessionError } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-          });
-
-          if (sessionError) {
-            console.error('Session error:', sessionError);
-            setError('Invalid or expired invitation link. Please request a new invite.');
-            setVerifying(false);
-            return;
-          }
-
-          if (data.user) {
-            setUserEmail(data.user.email || null);
-          }
-
+        const authUrlResult = await applySupabaseEmailAuthUrlSession(supabase, {
+          defaultCodeFlow: 'invite',
+        });
+        if (authUrlResult.error) {
+          setError('Ungültiger oder abgelaufener Einladungslink. Bitte fordern Sie eine neue Einladung an.');
+          setVerifying(false);
+          return;
+        }
+        if (authUrlResult.sessionApplied) {
+          setUserEmail(authUrlResult.user?.email || null);
           setVerifying(false);
           return;
         }
@@ -92,11 +78,11 @@ export default function AcceptInvitePage() {
         }
 
         // No valid token found
-        setError('Invalid invitation link. Please check your email for the correct link or request a new invite.');
+        setError('Ungültiger Einladungslink. Bitte prüfen Sie die E-Mail oder fordern Sie eine neue Einladung an.');
         setVerifying(false);
       } catch (err) {
         console.error('Error verifying invite:', err);
-        setError('Failed to verify invitation. Please try again.');
+        setError('Einladung konnte nicht geprüft werden. Bitte versuchen Sie es erneut.');
         setVerifying(false);
       }
     };
@@ -110,17 +96,17 @@ export default function AcceptInvitePage() {
 
     // Validate passwords
     if (!password || !confirmPassword) {
-      setError('Please fill in all fields');
+      setError('Bitte füllen Sie alle Felder aus.');
       return;
     }
 
     if (password !== confirmPassword) {
-      setError('Passwords do not match');
+      setError('Die Passwörter stimmen nicht überein.');
       return;
     }
 
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
+    if (password.length < 8) {
+      setError('Das Passwort muss mindestens 8 Zeichen lang sein.');
       return;
     }
 
@@ -130,7 +116,7 @@ export default function AcceptInvitePage() {
       const supabase = await createBrowserClient();
 
       if (!supabase) {
-        setError('Application not configured');
+        setError('Studio ist nicht konfiguriert.');
         setLoading(false);
         return;
       }
@@ -150,7 +136,7 @@ export default function AcceptInvitePage() {
       router.push('/ycode');
     } catch (err) {
       console.error('Error setting password:', err);
-      setError('Failed to set password. Please try again.');
+      setError('Passwort konnte nicht gespeichert werden. Bitte versuchen Sie es erneut.');
       setLoading(false);
     }
   };
@@ -161,7 +147,7 @@ export default function AcceptInvitePage() {
       <div className="min-h-screen flex items-center justify-center bg-neutral-950">
         <div className="flex flex-col items-center gap-4">
           <Spinner />
-          <Label variant="muted">Verifying invitation...</Label>
+          <Label variant="muted">Einladung wird geprüft...</Label>
         </div>
       </div>
     );
@@ -207,7 +193,7 @@ export default function AcceptInvitePage() {
               variant="secondary"
               onClick={() => router.push('/login')}
             >
-              Go to Login
+              Zum Login
             </Button>
           </div>
         </div>
@@ -256,7 +242,7 @@ export default function AcceptInvitePage() {
               {userEmail && (
                 <div className="text-center mb-6">
                   <Label variant="muted" size="sm">
-                    Setting up account for {userEmail}
+                    Konto einrichten für {userEmail}
                   </Label>
                 </div>
               )}
@@ -271,7 +257,7 @@ export default function AcceptInvitePage() {
 
                   <Field>
                     <FieldLabel htmlFor="password" size="sm">
-                      Password
+                      Passwort
                     </FieldLabel>
                     <Input
                       type="password"
@@ -282,12 +268,12 @@ export default function AcceptInvitePage() {
                       size="sm"
                       autoFocus
                     />
-                    <FieldDescription>At least 6 characters</FieldDescription>
+                    <FieldDescription>Mindestens 8 Zeichen</FieldDescription>
                   </Field>
 
                   <Field>
                     <FieldLabel htmlFor="confirmPassword" size="sm">
-                      Confirm password
+                      Passwort bestätigen
                     </FieldLabel>
                     <Input
                       type="password"
@@ -304,7 +290,7 @@ export default function AcceptInvitePage() {
                     disabled={loading}
                     className="w-full mt-4"
                   >
-                    {loading ? <Spinner /> : 'Create account'}
+                    {loading ? <Spinner /> : 'Konto erstellen'}
                   </Button>
                 </FieldGroup>
               </FieldSet>

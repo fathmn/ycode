@@ -97,7 +97,7 @@ export default function UsersSettingsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: inviteEmail.trim(),
-          redirectTo: window.location.origin + '/ycode/accept-invite',
+          redirectTo: window.location.origin + '/ycode?auth_flow=invite',
         }),
       });
 
@@ -164,7 +164,7 @@ export default function UsersSettingsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email,
-          redirectTo: window.location.origin + '/ycode/accept-invite',
+          redirectTo: window.location.origin + '/ycode?auth_flow=invite',
         }),
       });
 

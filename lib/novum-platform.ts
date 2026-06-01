@@ -5,6 +5,8 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { extractSupabaseAccessToken } from '@/lib/supabase-cookie-token';
 import { NOVUM_PREVIEW_NONCE_COOKIE } from '@/lib/novum-preview-nonce';
 import { getAuthUser } from '@/lib/supabase-auth';
+import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
+import { getConfiguredSiteAdminRoleForUser } from '@/lib/novum-site-admin';
 
 const PREVIEW_MAX_AGE_HOURS = Number(process.env.NOVUM_PREVIEW_MAX_AGE_HOURS || 24);
 const PREVIEW_NONCE_MAX_AGE_MINUTES = Number(process.env.NOVUM_PREVIEW_NONCE_MAX_AGE_MINUTES || 30);
@@ -80,6 +82,27 @@ function getCurrentSiteKey(): string {
   return process.env.STUDIO_YCODE_SITE_KEY || 'default';
 }
 
+async function getSiteAdminRole(client: any, actorUserId: string): Promise<NovumRole | null> {
+  const { data, error } = await client.auth.admin.getUserById(actorUserId);
+  if (error) return null;
+  return getConfiguredSiteAdminRoleForUser(data?.user);
+}
+
+async function getProjectRoleForUser(client: any, projectId: string, actorUserId: string): Promise<NovumRole | null> {
+  const siteAdminRole = await getSiteAdminRole(client, actorUserId);
+  if (siteAdminRole) return siteAdminRole;
+
+  const { data: membership, error } = await client
+    .from('novum_project_memberships')
+    .select('role')
+    .eq('project_id', projectId)
+    .eq('user_id', actorUserId)
+    .maybeSingle();
+
+  if (!error && membership?.role) return membership.role;
+  return null;
+}
+
 function readMetadataString(metadata: Record<string, unknown>, ...keys: string[]): string | null {
   for (const key of keys) {
     const value = metadata[key];
@@ -115,14 +138,9 @@ export async function requireNovumProjectRole(
     return { ok: false, response: noCache({ error: 'No Novum project resolved for request' }, 403) };
   }
 
-  const { data: membership, error } = await client
-    .from('novum_project_memberships')
-    .select('role')
-    .eq('project_id', project.id)
-    .eq('user_id', actorUserId)
-    .maybeSingle();
+  const role = await getProjectRoleForUser(client, project.id, actorUserId);
 
-  if (error || !membership || !allowedRoles.includes(membership.role)) {
+  if (!role || !allowedRoles.includes(role)) {
     return { ok: false, response: noCache({ error: 'Insufficient project role' }, 403) };
   }
 
@@ -132,7 +150,7 @@ export async function requireNovumProjectRole(
       client,
       project,
       actorUserId,
-      role: membership.role,
+      role,
     },
   };
 }
@@ -157,14 +175,9 @@ async function requireNovumProjectRoleForProject(
     return { ok: false, response: noCache({ error: 'No Novum project resolved for request' }, 403) };
   }
 
-  const { data: membership, error } = await client
-    .from('novum_project_memberships')
-    .select('role')
-    .eq('project_id', project.id)
-    .eq('user_id', actorUserId)
-    .maybeSingle();
+  const role = await getProjectRoleForUser(client, project.id, actorUserId);
 
-  if (error || !membership || !allowedRoles.includes(membership.role)) {
+  if (!role || !allowedRoles.includes(role)) {
     return { ok: false, response: noCache({ error: 'Insufficient project role' }, 403) };
   }
 
@@ -174,7 +187,7 @@ async function requireNovumProjectRoleForProject(
       client,
       project,
       actorUserId,
-      role: membership.role,
+      role,
     },
   };
 }
@@ -200,14 +213,8 @@ export async function canAccessNovumProjectForUser(
   const project = await getProjectById(client, projectId);
   if (!project) return false;
 
-  const { data: membership, error } = await client
-    .from('novum_project_memberships')
-    .select('role')
-    .eq('project_id', project.id)
-    .eq('user_id', actorUserId)
-    .maybeSingle();
-
-  return !error && !!membership && allowedRoles.includes(membership.role);
+  const role = await getProjectRoleForUser(client, project.id, actorUserId);
+  return !!role && allowedRoles.includes(role);
 }
 
 export async function writeNovumAuditLog(input: AuditInput): Promise<void> {
@@ -635,9 +642,17 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
     && previewNonce.previewUrl === previewUrl
     && previewNonce.siteKey === getCurrentSiteKey()
   ) ? previewNonce : null;
-  const roleCheck = matchedPreviewNonce
-    ? await requireNovumProjectRoleForProject(request, matchedPreviewNonce.projectId, allowedPreviewRoles)
-    : await requireNovumProjectRole(request, allowedPreviewRoles);
+  if (!matchedPreviewNonce) {
+    return noCache(
+      {
+        error: 'Open this Studio preview before recording a rendered draft',
+        code: 'NOVUM_PREVIEW_RENDER_REQUIRED',
+      },
+      409
+    );
+  }
+
+  const roleCheck = await requireNovumProjectRoleForProject(request, matchedPreviewNonce.projectId, allowedPreviewRoles);
   if (!roleCheck.ok) return roleCheck.response;
 
   const { context } = roleCheck;
@@ -652,7 +667,7 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
   }
 
   const currentDraftFingerprint = await getCurrentDraftFingerprint(context.client, context.project.id);
-  if (matchedPreviewNonce && currentDraftFingerprint !== matchedPreviewNonce.draftHash) {
+  if (currentDraftFingerprint !== matchedPreviewNonce.draftHash) {
     return noCache(
       {
         error: 'Open this Studio preview again before recording a rendered draft',
@@ -663,55 +678,35 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
   }
 
   const draftHash = await getCurrentDraftHash(context.client, context.project.id);
-  const serverRenderProof = matchedPreviewNonce
-    ? null
-    : await verifyStudioPreviewServerRender(request, previewUrl, context.project.slug);
-  if (!matchedPreviewNonce && !serverRenderProof) {
-    return noCache(
-      {
-        error: 'Open this Studio preview before recording a rendered draft',
-        code: 'NOVUM_PREVIEW_RENDER_REQUIRED',
-      },
-      409
-    );
-  }
-  const rawNonceHash = matchedPreviewNonce ? hashPreviewNonce(matchedPreviewNonce.raw) : null;
-  const previewNonceHash = matchedPreviewNonce
-    ? crypto
-      .createHash('sha256')
-      .update([
-        matchedPreviewNonce.raw,
-        context.project.id,
-        context.actorUserId,
-        draftHash,
-        previewUrl,
-      ].join(':'))
-      .digest('hex')
-    : null;
+  const rawNonceHash = hashPreviewNonce(matchedPreviewNonce.raw);
+  const previewNonceHash = crypto
+    .createHash('sha256')
+    .update([
+      matchedPreviewNonce.raw,
+      context.project.id,
+      context.actorUserId,
+      draftHash,
+      previewUrl,
+    ].join(':'))
+    .digest('hex');
   const trustedMetadata = {
     clientHeartbeat: true,
     clientHeartbeatMetrics: clientHeartbeat,
-    ...(rawNonceHash ? { rawNonceHash } : {}),
+    rawNonceHash,
     role: context.role,
-    ...(previewNonceHash ? { previewNonceHash } : {}),
-    ...(matchedPreviewNonce ? {
-      previewNonceDraftHash: matchedPreviewNonce.draftHash,
-      previewNonceIssuedAt: new Date(matchedPreviewNonce.issuedAt).toISOString(),
-    } : {}),
+    previewNonceHash,
+    previewNonceDraftHash: matchedPreviewNonce.draftHash,
+    previewNonceIssuedAt: new Date(matchedPreviewNonce.issuedAt).toISOString(),
     clientVisibilityProof: true,
     serverSideRenderProof: true,
     renderArtifact: {
-      kind: matchedPreviewNonce ? 'studio-preview-nonce-heartbeat' : 'studio-preview-server-render',
+      kind: 'studio-preview-nonce-heartbeat',
       reportPath: previewUrl,
       generatedAt: new Date().toISOString(),
-      pairCount: Number(serverRenderProof?.markerCount || clientHeartbeat.visibleLayerCount) || 1,
+      pairCount: Number(clientHeartbeat.visibleLayerCount) || 1,
       failingPairs: [],
-      ...(previewNonceHash ? { previewNonceHash } : {}),
+      previewNonceHash,
       draftHash,
-      ...(serverRenderProof ? {
-        status: serverRenderProof.status,
-        contentLength: serverRenderProof.contentLength,
-      } : {}),
     },
   };
 
@@ -847,7 +842,6 @@ async function getProjectBySlug(client: any, slug: string): Promise<NovumProject
     .select('id, slug')
     .eq('slug', slug)
     .eq('status', 'active')
-    .eq('ycode_site_key', getCurrentSiteKey())
     .maybeSingle();
 
   if (error || !data) return null;
@@ -862,7 +856,6 @@ async function getProjectById(client: any, projectId: string): Promise<NovumProj
     .select('id, slug')
     .eq('id', projectId)
     .eq('status', 'active')
-    .eq('ycode_site_key', getCurrentSiteKey())
     .maybeSingle();
 
   if (error || !data) return null;
@@ -872,30 +865,43 @@ async function getProjectById(client: any, projectId: string): Promise<NovumProj
 async function getProjectByDomainOrSlug(client: any, value: string): Promise<NovumProject | null> {
   if (!isSafeProjectLookupValue(value)) return null;
 
+  const activeProjects = await client
+    .from('novum_projects')
+    .select('id, slug, metadata')
+    .eq('status', 'active');
+
+  if (activeProjects.error || !Array.isArray(activeProjects.data)) return null;
+  const aliasMatches = findStudioProjectPathMatches(activeProjects.data, value);
+
   const bySlug = await client
     .from('novum_projects')
     .select('id, slug')
     .eq('slug', value)
     .eq('status', 'active')
-    .eq('ycode_site_key', getCurrentSiteKey())
     .maybeSingle();
 
   if (bySlug.error) return null;
-  if (bySlug.data) return bySlug.data;
+  if (bySlug.data) {
+    return bySlug.data;
+  }
 
   const byDomain = await client
     .from('novum_projects')
     .select('id, slug')
     .eq('primary_domain', value)
     .eq('status', 'active')
-    .eq('ycode_site_key', getCurrentSiteKey())
     .maybeSingle();
 
-  if (byDomain.error || !byDomain.data) return null;
-  return byDomain.data;
+  if (byDomain.error) return null;
+  if (byDomain.data) return byDomain.data;
+
+  const match = aliasMatches.length === 1 ? aliasMatches[0] : null;
+  return match?.id && match?.slug ? { id: match.id, slug: match.slug } : null;
 }
 
 async function getSingleProjectByMembership(client: any, actorUserId: string): Promise<NovumProject | null> {
+  if (await getSiteAdminRole(client, actorUserId)) return null;
+
   const { data, error } = await client
     .from('novum_project_memberships')
     .select('project:novum_projects(id, slug, status, ycode_site_key)')
@@ -904,7 +910,7 @@ async function getSingleProjectByMembership(client: any, actorUserId: string): P
   if (error || !Array.isArray(data)) return null;
   const matchingMemberships = data.filter((membership: any) => {
     const project = Array.isArray(membership.project) ? membership.project[0] : membership.project;
-    return project?.status === 'active' && project?.ycode_site_key === getCurrentSiteKey();
+    return project?.status === 'active';
   });
   if (matchingMemberships.length !== 1) return null;
 
@@ -1557,11 +1563,16 @@ function hasPreviewRenderProof(metadata: Record<string, unknown> | null | undefi
     const artifact = metadata.renderArtifact;
     if (!artifact || typeof artifact !== 'object') return false;
     const typedArtifact = artifact as Record<string, unknown>;
-    if (typeof typedArtifact.kind !== 'string' || !typedArtifact.kind.trim()) return false;
+    if (typedArtifact.kind !== 'studio-preview-nonce-heartbeat') return false;
     if (typeof typedArtifact.reportPath !== 'string' || !typedArtifact.reportPath.trim()) return false;
     if (typeof typedArtifact.generatedAt !== 'string' || !typedArtifact.generatedAt.trim()) return false;
     if (typeof typedArtifact.pairCount !== 'number' || typedArtifact.pairCount <= 0) return false;
     if (!Array.isArray(typedArtifact.failingPairs) || typedArtifact.failingPairs.length !== 0) return false;
+    if (typeof metadata.rawNonceHash !== 'string' || !/^[a-f0-9]{64}$/i.test(metadata.rawNonceHash)) return false;
+    if (typeof metadata.previewNonceHash !== 'string' || !/^[a-f0-9]{64}$/i.test(metadata.previewNonceHash)) return false;
+    if (typedArtifact.previewNonceHash !== metadata.previewNonceHash) return false;
+    if (typeof metadata.previewNonceDraftHash !== 'string' || !/^[a-f0-9]{64}$/i.test(metadata.previewNonceDraftHash)) return false;
+    if (typeof metadata.previewNonceIssuedAt !== 'string' || !metadata.previewNonceIssuedAt.trim()) return false;
     return true;
   }
 

@@ -64,7 +64,7 @@ export const InviteUserButton: React.FC<InviteUserButtonProps> = ({
         },
         body: JSON.stringify({
           email: email.trim(),
-          redirectTo: window.location.origin + '/ycode/accept-invite',
+          redirectTo: window.location.origin + '/ycode?auth_flow=invite',
         }),
       });
 

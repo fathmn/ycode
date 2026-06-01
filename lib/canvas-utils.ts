@@ -15,7 +15,9 @@ export const CANVAS_BORDER = 20;
 export const CANVAS_PADDING = CANVAS_BORDER * 2;
 
 const VIEWPORT_HEIGHT_UNITS = ['vh', 'svh', 'dvh', 'lvh'] as const;
-const CANVAS_CSS_VERSION = '0.2.1.9';
+// 0.2.1.10 was used in a prior Studio CSS deploy; bump again to invalidate
+// cached canvas.css for the footer and metrics responsive fixes.
+const CANVAS_CSS_VERSION = '0.2.1.11';
 
 const VIEWPORT_HEIGHT_PATTERN = new RegExp(
   `^(min-h|max-h|h)-\\[(\\d+(?:\\.\\d+)?)(${VIEWPORT_HEIGHT_UNITS.join('|')})\\]$`

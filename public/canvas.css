@@ -98,6 +98,11 @@
     gap: clamp(20px, 5vw, 48px) !important;
   }
 
+  [data-studio-responsive~="stack-grid"] > * {
+    grid-column: auto !important;
+    grid-row: auto !important;
+  }
+
   [data-studio-responsive~="stack-cards"] {
     grid-template-columns: 1fr !important;
   }
@@ -122,6 +127,11 @@
   [data-studio-responsive~="stack-grid-md"] {
     grid-template-columns: 1fr !important;
     gap: clamp(20px, 5vw, 48px) !important;
+  }
+
+  [data-studio-responsive~="stack-grid-md"] > * {
+    grid-column: auto !important;
+    grid-row: auto !important;
   }
 
   [data-studio-responsive~="stack-cards-md"] {
@@ -412,6 +422,42 @@ body [data-studio-mobile-drawer-link] {
   [data-studio-section-pad] {
     padding-top: 100px !important;
     padding-bottom: 100px !important;
+  }
+}
+
+/* Studio footer md layout mirrors source site-footer:
+   shell gutter 40px, CTA row py-24, footer grid py-20 and wordmark pb-16. */
+@media (min-width: 810px) {
+  [data-studio-footer-shell] {
+    padding-left: 40px !important;
+    padding-right: 40px !important;
+  }
+
+  [data-studio-footer-cta] {
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    padding-top: 96px !important;
+    padding-bottom: 96px !important;
+  }
+
+  [data-studio-footer-cta-heading] {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+  }
+
+  [data-studio-footer-cta-link] {
+    align-self: center !important;
+    flex: 0 0 auto !important;
+  }
+
+  [data-studio-footer-main] {
+    padding-top: 80px !important;
+    padding-bottom: 80px !important;
+  }
+
+  [data-studio-footer-wordmark] {
+    padding-bottom: 64px !important;
   }
 }
 
@@ -892,21 +938,22 @@ body [data-studio-mobile-drawer-link] {
 /* Home Metrics: mirror app/globals.css `.metrics-grid` and `.metric-item`
    from hr-interim-solutions-studio-designmigration. Source uses
    --color-line-light = rgba(8,8,8,0.10) for the dividers, NOT 0.14. */
-[data-studio-metric-item]:nth-child(even) {
-  border-left: 1px solid rgba(8, 8, 8, 0.10);
+[data-studio-metric-item] {
+  border-left: none !important;
+  border-top: none !important;
 }
 
-[data-studio-metric-item]:nth-child(n+3) {
-  border-top: 1px solid rgba(8, 8, 8, 0.10);
+[data-studio-metric-item]:not(:first-child) {
+  border-top: 1px solid rgba(8, 8, 8, 0.10) !important;
 }
 
 [data-studio-metrics-grid] {
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  grid-template-columns: minmax(0, 1fr) !important;
 }
 
 @media (min-width: 810px) {
   [data-studio-metrics-grid] {
-    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
   }
 
   [data-studio-metric-item] {
@@ -915,7 +962,12 @@ body [data-studio-mobile-drawer-link] {
   }
 
   [data-studio-metric-item]:not(:first-child) {
+    border-top: none !important;
     border-left: 1px solid rgba(8, 8, 8, 0.10) !important;
+  }
+
+  [data-studio-metric-item]:nth-child(3n+1) {
+    border-left: none !important;
   }
 
   /* Source: `mt-4 md:mt-6` and `text-[11px] md:text-[12px]`. */

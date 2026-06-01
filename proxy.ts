@@ -4,6 +4,8 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { NOVUM_PREVIEW_NONCE_COOKIE } from '@/lib/novum-preview-nonce';
 import { projectLookupFromHost } from '@/lib/project-host';
+import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
+import { getConfiguredSiteAdminRoleForUser } from '@/lib/novum-site-admin';
 
 /**
  * Public API routes that skip authentication.
@@ -22,6 +24,7 @@ const PUBLIC_COLLECTION_ITEM_SUFFIXES = ['/items/filter', '/items/load-more'];
 const PUBLIC_API_EXACT = [
   '/ycode/api/revalidate', // Cache revalidation — has own secret token auth
   '/ycode/api/setup/status', // Read-only setup status — required before login
+  '/ycode/api/setup/check-email-confirm', // Read-only setup check — required before first admin exists
   '/ycode/api/auth/callback', // Auth callback
   '/ycode/api/auth/session', // Session read for browser auth state
 ];
@@ -152,6 +155,12 @@ const ADMIN_DEVELOPER_API_PREFIXES = [
   '/ycode/api/webhooks',
 ];
 
+const GLOBAL_SITE_ADMIN_API_PREFIXES = [
+  '/ycode/api/setup/connect',
+  '/ycode/api/setup/migrate',
+  '/ycode/api/updates',
+];
+
 /**
  * Derive the Supabase project URL and anon key from environment variables.
  * Returns null if env vars are not set (pre-setup or local dev without .env.local).
@@ -199,6 +208,10 @@ function getRequiredRoles(pathname: string, method: string): string[] | null {
   }
 
   return null;
+}
+
+function isGlobalSiteAdminRoute(pathname: string): boolean {
+  return GLOBAL_SITE_ADMIN_API_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
 function isDevtoolsRoute(pathname: string): boolean {
@@ -433,7 +446,10 @@ async function resolvePreviewNonceContext(request: NextRequest): Promise<{
       .eq('project_id', project.id)
       .eq('user_id', user.id)
       .maybeSingle();
-    if (membershipResult.error || !membershipResult.data) return null;
+    if (membershipResult.error || !membershipResult.data) {
+      const siteAdminRole = getConfiguredSiteAdminRoleForUser(user);
+      if (!siteAdminRole) return null;
+    }
     const draftHash = await computeDraftFingerprint(fingerprintClient || supabase, project.id);
     if (!draftHash) return null;
     return { actorUserId: user.id, projectId: project.id, siteKey, draftHash };
@@ -447,7 +463,7 @@ async function resolvePreviewNonceContext(request: NextRequest): Promise<{
 
   const activeSiteMemberships = (membershipResult.data || []).filter((item: any) => {
     const project = Array.isArray(item.project) ? item.project[0] : item.project;
-    return project?.status === 'active' && project?.ycode_site_key === siteKey;
+    return project?.status === 'active';
   });
   if (activeSiteMemberships.length !== 1 || !activeSiteMemberships[0].project_id) return null;
   const draftHash = await computeDraftFingerprint(fingerprintClient || supabase, activeSiteMemberships[0].project_id);
@@ -458,27 +474,38 @@ async function resolvePreviewNonceContext(request: NextRequest): Promise<{
 async function findProjectBySlugOrDomain(client: any, value: string): Promise<{ id: string } | null> {
   if (!isSafeProjectLookupValue(value)) return null;
 
+  const activeProjects = await client
+    .from('novum_projects')
+    .select('id, slug, metadata')
+    .eq('status', 'active');
+
+  if (activeProjects.error || !Array.isArray(activeProjects.data)) return null;
+  const aliasMatches = findStudioProjectPathMatches(activeProjects.data, value);
+
   const bySlug = await client
     .from('novum_projects')
     .select('id')
     .eq('slug', value)
     .eq('status', 'active')
-    .eq('ycode_site_key', getCurrentSiteKey())
     .maybeSingle();
 
   if (bySlug.error) return null;
-  if (bySlug.data) return bySlug.data;
+  if (bySlug.data) {
+    return bySlug.data;
+  }
 
   const byDomain = await client
     .from('novum_projects')
     .select('id')
     .eq('primary_domain', value)
     .eq('status', 'active')
-    .eq('ycode_site_key', getCurrentSiteKey())
     .maybeSingle();
 
-  if (byDomain.error || !byDomain.data) return null;
-  return byDomain.data;
+  if (byDomain.error) return null;
+  if (byDomain.data) return byDomain.data;
+
+  const match = aliasMatches.length === 1 ? aliasMatches[0] : null;
+  return match?.id ? { id: match.id } : null;
 }
 
 function getAuditDescriptor(pathname: string, method: string): { action: string; entityType: string } | null {
@@ -646,6 +673,10 @@ function hasSameOriginMutationContext(request: NextRequest): boolean {
  * Returns a 401 response if not authenticated, or null to continue.
  */
 async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null> {
+  if (isPublicApiRoute(request.nextUrl.pathname, request.method)) {
+    return null;
+  }
+
   const config = getSupabaseEnvConfig();
 
   // If env vars aren't set (pre-setup or local dev without .env.local), allow only in non-production.
@@ -657,10 +688,6 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
         { status: 500 },
       );
     }
-    return null;
-  }
-
-  if (isPublicApiRoute(request.nextUrl.pathname, request.method)) {
     return null;
   }
 
@@ -690,6 +717,11 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
       auth: { autoRefreshToken: false, persistSession: false },
     })
     : supabase;
+  const accessClient = config.secretKey
+    ? createClient(config.url, config.secretKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
+    : authClient;
 
   const { data: { user } } = await authClient.auth.getUser();
 
@@ -699,6 +731,8 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
       { status: 401 }
     );
   }
+
+  const siteAdminRole = getConfiguredSiteAdminRoleForUser(user);
 
   if (isDevtoolsRoute(request.nextUrl.pathname) && !areDevtoolsEnabled()) {
     return NextResponse.json(
@@ -714,8 +748,16 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
   const requiredRoles = getRequiredRoles(request.nextUrl.pathname, request.method);
 
   if (requiredRoles) {
+    if (isGlobalSiteAdminRoute(request.nextUrl.pathname)) {
+      if (siteAdminRole) return null;
+      return NextResponse.json(
+        { error: 'Insufficient site admin role' },
+        { status: 403 }
+      );
+    }
+
     if (isSharedDbProjectScopeRequired()) {
-      const isolation = await checkProjectIsolation(authClient);
+      const isolation = await checkProjectIsolation(accessClient);
       if (!isolation.enabled) {
         return NextResponse.json(
           {
@@ -734,7 +776,7 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
     let membershipError: { message?: string } | null = null;
 
     if (projectSlug) {
-      const project = await findProjectBySlugOrDomain(authClient, projectSlug);
+      const project = await findProjectBySlugOrDomain(accessClient, projectSlug);
 
       if (!project) {
         return NextResponse.json(
@@ -743,7 +785,7 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
         );
       }
 
-      const membershipResult = await authClient
+      const membershipResult = await accessClient
         .from('novum_project_memberships')
         .select('role, project_id')
         .eq('project_id', project.id)
@@ -752,15 +794,26 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
       membership = membershipResult.data;
       membershipError = membershipResult.error;
       resolvedProjectId = project.id;
+
+      if (siteAdminRole) {
+        membership = { role: siteAdminRole, project_id: project.id };
+      }
     } else {
-      const membershipResult = await authClient
+      if (siteAdminRole) {
+        return NextResponse.json(
+          { error: 'Project selection required' },
+          { status: 403 }
+        );
+      }
+
+      const membershipResult = await accessClient
         .from('novum_project_memberships')
         .select('role, project_id, project:novum_projects(status, ycode_site_key)')
         .eq('user_id', user.id);
 
       const activeSiteMemberships = (membershipResult.data || []).filter((item: any) => {
         const project = Array.isArray(item.project) ? item.project[0] : item.project;
-        return project?.status === 'active' && project?.ycode_site_key === getCurrentSiteKey();
+        return project?.status === 'active';
       });
 
       if (membershipResult.error || activeSiteMemberships.length !== 1) {

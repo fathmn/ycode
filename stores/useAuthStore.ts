@@ -6,7 +6,10 @@
 
 import { create } from 'zustand';
 import { createBrowserClient } from '../lib/supabase-browser';
+import { applySupabaseEmailAuthUrlSession } from '../lib/supabase-email-auth-url';
 import type { User, Session } from '@supabase/supabase-js';
+
+type PasswordSetupType = 'invite' | 'recovery';
 
 interface AuthState {
   user: User | null;
@@ -14,6 +17,8 @@ interface AuthState {
   loading: boolean;
   initialized: boolean;
   error: string | null;
+  passwordSetupRequired: boolean;
+  passwordSetupType: PasswordSetupType | null;
 }
 
 interface AuthActions {
@@ -24,9 +29,18 @@ interface AuthActions {
   signOut: () => Promise<void>;
   checkSession: () => Promise<void>;
   setError: (error: string | null) => void;
+  startPasswordSetup: (type: PasswordSetupType) => void;
+  clearPasswordSetup: () => void;
 }
 
 type AuthStore = AuthState & AuthActions;
+
+function passwordSetupTypeFromFlow(flow: string | null): PasswordSetupType | null {
+  if (flow === 'invite' || flow === 'recovery') {
+    return flow;
+  }
+  return null;
+}
 
 export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
@@ -34,6 +48,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   loading: false,
   initialized: false,
   error: null,
+  passwordSetupRequired: false,
+  passwordSetupType: null,
 
   /**
    * Initialize auth state and listen for auth changes
@@ -54,6 +70,42 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         return;
       }
 
+      // Listen for auth changes
+      supabase.auth.onAuthStateChange((event, session) => {
+        set({
+          user: session?.user ?? null,
+          session,
+          ...(event === 'PASSWORD_RECOVERY'
+            ? {
+              passwordSetupRequired: true,
+              passwordSetupType: 'recovery' as const,
+            }
+            : {}),
+        });
+      });
+
+      const authUrlResult = await applySupabaseEmailAuthUrlSession(supabase);
+      if (authUrlResult.error) {
+        set({
+          user: null,
+          session: null,
+          loading: false,
+          initialized: true,
+          error: authUrlResult.error,
+        });
+        return;
+      }
+
+      const passwordSetupType = authUrlResult.sessionApplied
+        ? passwordSetupTypeFromFlow(authUrlResult.flow)
+        : null;
+      if (passwordSetupType) {
+        set({
+          passwordSetupRequired: true,
+          passwordSetupType,
+        });
+      }
+
       // Validate session server-side (getUser verifies the JWT, unlike getSession)
       const { data: { user } } = await supabase.auth.getUser();
       const { data: { session } } = await supabase.auth.getSession();
@@ -62,14 +114,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         user: user ?? null,
         session: user ? session : null,
         initialized: true,
-      });
-
-      // Listen for auth changes
-      supabase.auth.onAuthStateChange((_event, session) => {
-        set({
-          user: session?.user ?? null,
-          session,
-        });
       });
     } catch (error) {
       console.error('Failed to initialize auth:', error);
@@ -98,7 +142,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/ycode`,
+          emailRedirectTo: `${window.location.origin}/ycode?auth_flow=magiclink`,
           // Note: Email confirmation should be disabled in Supabase Dashboard
           // (Authentication → Providers → Email → Disable "Confirm email")
           // This is recommended for self-hosted single-admin setups
@@ -121,6 +165,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         user: data.user,
         session: data.session,
         loading: false,
+        passwordSetupRequired: false,
+        passwordSetupType: null,
       });
 
       return { error: null };
@@ -159,6 +205,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         user: data.user,
         session: data.session,
         loading: false,
+        passwordSetupRequired: false,
+        passwordSetupType: null,
       });
 
       return { error: null };
@@ -220,6 +268,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
           user: null,
           session: null,
           loading: false,
+          passwordSetupRequired: false,
+          passwordSetupType: null,
         });
         return;
       }
@@ -235,6 +285,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         user: null,
         session: null,
         loading: false,
+        passwordSetupRequired: false,
+        passwordSetupType: null,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sign out failed';
@@ -253,11 +305,12 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         return;
       }
 
+      const { data: { user } } = await supabase.auth.getUser();
       const { data: { session } } = await supabase.auth.getSession();
 
       set({
-        user: session?.user ?? null,
-        session,
+        user: user ?? null,
+        session: user ? session : null,
       });
     } catch (error) {
       console.error('Failed to check session:', error);
@@ -269,5 +322,19 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
    */
   setError: (error) => {
     set({ error });
+  },
+
+  startPasswordSetup: (type) => {
+    set({
+      passwordSetupRequired: true,
+      passwordSetupType: type,
+    });
+  },
+
+  clearPasswordSetup: () => {
+    set({
+      passwordSetupRequired: false,
+      passwordSetupType: null,
+    });
   },
 }));

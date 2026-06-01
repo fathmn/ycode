@@ -1,4 +1,8 @@
 import type { NextConfig } from 'next';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
   experimental: {
@@ -32,6 +36,7 @@ const nextConfig: NextConfig = {
   // Map unused database drivers to stub modules (we only use PostgreSQL)
   // This prevents Turbopack from trying to resolve packages that aren't installed
   turbopack: {
+    root: projectRoot,
     resolveAlias: {
       // Map unused database drivers to stub module to prevent resolution errors
       'oracledb': './lib/stubs/db-driver-stub.ts',

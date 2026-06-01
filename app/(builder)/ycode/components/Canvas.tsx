@@ -634,11 +634,26 @@ export default function Canvas({
     };
   }, []); // Empty deps - only run once on mount
 
-  // Notify parent when iframe is ready
+  // Notify parent when iframe content has painted at least once. Keeping this
+  // separate from the render effect avoids scheduling readiness work on every
+  // layer update while still preventing a transient blank iframe reveal.
   useEffect(() => {
-    if (iframeReady && iframeRef.current && onIframeReady) {
-      onIframeReady(iframeRef.current);
-    }
+    if (!iframeReady || !iframeRef.current || !onIframeReady) return;
+
+    const iframe = iframeRef.current;
+    let cancelled = false;
+    let innerFrame = 0;
+    const outerFrame = requestAnimationFrame(() => {
+      innerFrame = requestAnimationFrame(() => {
+        if (!cancelled) onIframeReady(iframe);
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(outerFrame);
+      if (innerFrame) cancelAnimationFrame(innerFrame);
+    };
   }, [iframeReady, onIframeReady]);
 
   // Inject font CSS into the canvas iframe when fonts change

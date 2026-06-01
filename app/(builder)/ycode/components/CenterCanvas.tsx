@@ -616,6 +616,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [previewContentHeight, setPreviewContentHeight] = useState(0);
+  const previousCanvasScopeRef = useRef<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // State for iframe element (for SelectionOverlay)
@@ -1176,6 +1177,27 @@ const CenterCanvas = React.memo(function CenterCanvas({
     if (!currentPageId) return false;
     return !currentDraft;
   }, [editingComponentId, currentPageId, currentDraft]);
+
+  useEffect(() => {
+    const canvasScope = `${currentPageId || ''}:${editingComponentId || ''}`;
+    if (previousCanvasScopeRef.current === null) {
+      previousCanvasScopeRef.current = canvasScope;
+      return;
+    }
+    if (previousCanvasScopeRef.current !== canvasScope) {
+      previousCanvasScopeRef.current = canvasScope;
+      setCanvasIframeElement(null);
+    }
+  }, [currentPageId, editingComponentId]);
+
+  const isEditorCanvasVisible = useMemo(() => {
+    if (isPreviewMode) return true;
+    if (!isCanvasReady || isDraftLoading) return false;
+    // Empty pages do not mount an iframe payload that can signal readiness.
+    // Show the editor canvas shell immediately for that valid empty state.
+    if (layers.length === 0 && currentPageId) return true;
+    return canvasIframeElement !== null;
+  }, [canvasIframeElement, currentPageId, isCanvasReady, isDraftLoading, isPreviewMode, layers.length]);
 
   // Check if canvas is empty (only Body layer with no children)
   const isCanvasEmpty = useMemo(() => {
@@ -2447,12 +2469,13 @@ const CenterCanvas = React.memo(function CenterCanvas({
         ref={canvasContainerRef}
         className="flex-1 relative overflow-hidden bg-neutral-50 dark:bg-neutral-950/80 select-none"
       >
-        {/* Loading skeleton overlay when draft is being fetched */}
-        {isDraftLoading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-neutral-50/80 dark:bg-neutral-950/80 backdrop-blur-sm">
+        {/* Loading skeleton overlay while draft and iframe content are being prepared. */}
+        {!isEditorCanvasVisible && !isPreviewMode && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-neutral-50/90 dark:bg-neutral-950/90 backdrop-blur-sm">
             <div className="flex flex-col items-center gap-3 text-muted-foreground">
               <div className="w-8 h-8 border-2 border-current border-t-transparent rounded-full animate-spin" />
-              <span className="text-sm">Loading page...</span>
+              {/* Customer-facing Studio UI is localized in German. */}
+              <span className="text-sm">Seite wird geladen...</span>
             </div>
           </div>
         )}
@@ -2485,7 +2508,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
             elementPicker?.active && 'cursor-crosshair'
           )}
           style={{
-            opacity: isCanvasReady ? 1 : 0,
+            opacity: isEditorCanvasVisible ? 1 : 0,
             scrollbarWidth: 'none', // Firefox
             msOverflowStyle: 'none', // IE/Edge
             WebkitOverflowScrolling: 'touch',

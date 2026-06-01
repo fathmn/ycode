@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
 
       if (!config) {
         return NextResponse.redirect(
-          new URL('/login?error=config', request.url)
+          new URL('/ycode?auth_error=config', request.url)
         );
       }
 
@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
       if (error) {
         console.error('Auth callback error:', error);
         return NextResponse.redirect(
-          new URL('/login?error=auth', request.url)
+          new URL('/ycode?auth_error=auth', request.url)
         );
       }
 
@@ -65,11 +65,11 @@ export async function GET(request: NextRequest) {
     } catch (error) {
       console.error('Auth callback failed:', error);
       return NextResponse.redirect(
-        new URL('/login?error=server', request.url)
+        new URL('/ycode?auth_error=server', request.url)
       );
     }
   }
 
-  // No code provided - redirect to login
-  return NextResponse.redirect(new URL('/login', request.url));
+  // No code provided - return to the Studio auth surface.
+  return NextResponse.redirect(new URL('/ycode', request.url));
 }
