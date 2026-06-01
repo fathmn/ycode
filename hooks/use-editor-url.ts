@@ -4,6 +4,7 @@ import { usePathname, useSearchParams, useRouter } from 'next/navigation';
 import { useCallback, useMemo } from 'react';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
+import { ycodePathnameFromStudioProjectPath } from '@/lib/studio-project-path';
 
 /**
  * Update URL query parameter using browser history API
@@ -79,14 +80,18 @@ export function useEditorUrl() {
     // - /ycode/collections/[id] → specific collection view (with optional ?new or ?edit=itemId query params)
     // - /ycode/components/[id] → component editing
 
-    const layersMatch = pathname?.match(/^\/ycode\/layers\/([^/]+)$/);
-    const pageMatch = pathname?.match(/^\/ycode\/pages\/([^/]+)$/);
-    const collectionsBaseMatch = pathname?.match(/^\/ycode\/collections$/);
-    const collectionMatch = pathname?.match(/^\/ycode\/collections\/([^/]+)$/);
-    const componentMatch = pathname?.match(/^\/ycode\/components\/([^/]+)$/);
-    const settingsMatch = pathname?.match(/^\/ycode\/settings(?:\/([^/]+))?$/);
-    const localizationMatch = pathname?.match(/^\/ycode\/localization(?:\/([^/]+))?$/);
-    const profileMatch = pathname?.match(/^\/ycode\/profile(?:\/([^/]+))?$/);
+    const editorPathname = ycodePathnameFromStudioProjectPath(pathname, {
+      rootIsYcode: true,
+      projectRootIsYcode: true,
+    });
+    const layersMatch = editorPathname.match(/^\/ycode\/layers\/([^/]+)$/);
+    const pageMatch = editorPathname.match(/^\/ycode\/pages\/([^/]+)$/);
+    const collectionsBaseMatch = editorPathname.match(/^\/ycode\/collections$/);
+    const collectionMatch = editorPathname.match(/^\/ycode\/collections\/([^/]+)$/);
+    const componentMatch = editorPathname.match(/^\/ycode\/components\/([^/]+)$/);
+    const settingsMatch = editorPathname.match(/^\/ycode\/settings(?:\/([^/]+))?$/);
+    const localizationMatch = editorPathname.match(/^\/ycode\/localization(?:\/([^/]+))?$/);
+    const profileMatch = editorPathname.match(/^\/ycode\/profile(?:\/([^/]+))?$/);
 
     if (layersMatch) {
       const viewParam = normalizeViewportMode(searchParams?.get('view'));
@@ -189,7 +194,7 @@ export function useEditorUrl() {
     }
 
     // Forms route matching
-    const formsMatch = pathname?.match(/^\/ycode\/forms(?:\/([^/]+))?$/);
+    const formsMatch = editorPathname.match(/^\/ycode\/forms(?:\/([^/]+))?$/);
     if (formsMatch) {
       return {
         type: 'forms',
@@ -201,7 +206,7 @@ export function useEditorUrl() {
     }
 
     // Integrations route matching
-    const integrationsMatch = pathname?.match(/^\/ycode\/integrations(?:\/([^/]+))?$/);
+    const integrationsMatch = editorPathname.match(/^\/ycode\/integrations(?:\/([^/]+))?$/);
     if (integrationsMatch) {
       return {
         type: 'integrations',

@@ -31,7 +31,7 @@ import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useLocalisationStore } from '@/stores/useLocalisationStore';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page-utils';
 import { isNovumOperatorRole } from '@/lib/settings-nav-items';
-import { studioProjectRoutePathFromSlug } from '@/lib/studio-project-path';
+import { studioProjectRoutePathFromSlug, ycodePathnameFromStudioProjectPath } from '@/lib/studio-project-path';
 
 // 5. Types
 import type { Page } from '@/types';
@@ -105,6 +105,10 @@ export default function HeaderBar({
 }: HeaderBarProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const editorPathname = ycodePathnameFromStudioProjectPath(pathname, {
+    rootIsYcode: true,
+    projectRootIsYcode: true,
+  });
   const pageDropdownRef = useRef<HTMLDivElement>(null);
   const { currentPageCollectionItemId, currentPageId: storeCurrentPageId, isPreviewMode, setPreviewMode, openFileManager, setKeyboardShortcutsOpen, setActiveSidebarTab, lastDesignUrl, setLastDesignUrl, previewReturnUrl, previewReturnTab, setPreviewReturn } = useEditorStore();
   const { folders, pages: storePages } = usePagesStore();
@@ -551,7 +555,7 @@ export default function HeaderBar({
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
-            {!pathname?.startsWith('/ycode/localization') && (
+            {!editorPathname.startsWith('/ycode/localization') && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

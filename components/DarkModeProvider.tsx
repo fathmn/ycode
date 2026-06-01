@@ -2,6 +2,7 @@
 
 import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
+import { ycodePathnameFromStudioProjectPath } from '@/lib/studio-project-path';
 
 /**
  * Resolves whether dark mode should be active based on the user's
@@ -31,8 +32,14 @@ export default function DarkModeProvider({ children }: { children: React.ReactNo
   const pathname = usePathname();
   
   useEffect(() => {
-    const isPreviewRoute = pathname?.startsWith('/ycode/preview');
-    const isBuilderRoute = !isPreviewRoute && pathname?.startsWith('/ycode');
+    const hostname = window.location.hostname.toLowerCase();
+    const isStudioHost = hostname === 'studio.novum-partners.de' || hostname === 'localhost' || hostname === '127.0.0.1';
+    const editorPathname = ycodePathnameFromStudioProjectPath(pathname, {
+      rootIsYcode: isStudioHost,
+      projectRootIsYcode: isStudioHost,
+    });
+    const isPreviewRoute = editorPathname.startsWith('/ycode/preview');
+    const isBuilderRoute = !isPreviewRoute && editorPathname.startsWith('/ycode');
     
     if (isBuilderRoute) {
       if (shouldApplyDark()) {

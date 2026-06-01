@@ -4,6 +4,11 @@ type ProjectPathInput = {
   metadata?: Record<string, unknown> | null;
 };
 
+type StudioProjectPathOptions = {
+  rootIsYcode?: boolean;
+  projectRootIsYcode?: boolean;
+};
+
 const RESERVED_STUDIO_PATH_SLUGS = new Set([
   '_next',
   'a',
@@ -15,6 +20,18 @@ const RESERVED_STUDIO_PATH_SLUGS = new Set([
   'robots',
   'sitemap',
   'ycode',
+]);
+
+const STUDIO_BUILDER_ROUTE_SEGMENTS = new Set([
+  'collections',
+  'components',
+  'forms',
+  'integrations',
+  'layers',
+  'localization',
+  'pages',
+  'profile',
+  'settings',
 ]);
 
 export function normalizeStudioProjectPathSlug(value: unknown): string | null {
@@ -70,6 +87,26 @@ export function studioProjectPathSlugFromPathname(pathname: string | null | unde
   if (!pathname) return null;
   const firstSegment = pathname.split('?')[0].split('#')[0].split('/').filter(Boolean)[0];
   return normalizeStudioProjectPathSlug(firstSegment);
+}
+
+export function ycodePathnameFromStudioProjectPath(
+  pathname: string | null | undefined,
+  options: StudioProjectPathOptions = {}
+): string {
+  if (!pathname) return options.rootIsYcode ? '/ycode' : '';
+  const [pathWithoutQuery] = pathname.split(/[?#]/);
+  if (!pathWithoutQuery || pathWithoutQuery === '/') return options.rootIsYcode ? '/ycode' : (pathWithoutQuery || '/');
+  if (pathWithoutQuery === '/ycode' || pathWithoutQuery.startsWith('/ycode/')) return pathWithoutQuery;
+
+  const segments = pathWithoutQuery.split('/').filter(Boolean);
+  const projectPathSlug = normalizeStudioProjectPathSlug(segments[0]);
+  if (!projectPathSlug) return pathWithoutQuery;
+
+  const routeSegments = segments.slice(1);
+  if (routeSegments.length === 0) return options.projectRootIsYcode ? '/ycode' : pathWithoutQuery;
+  if (!STUDIO_BUILDER_ROUTE_SEGMENTS.has(routeSegments[0])) return pathWithoutQuery;
+
+  return `/ycode/${routeSegments.join('/')}`;
 }
 
 export function findUniqueStudioProjectPathMatch<T extends ProjectPathInput>(
