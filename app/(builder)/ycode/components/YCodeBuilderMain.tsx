@@ -632,7 +632,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
       }
 
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/ycode?auth_flow=recovery`,
+        redirectTo: `${window.location.origin}/ycode/api/auth/callback?auth_flow=recovery`,
       });
 
       if (error) {
