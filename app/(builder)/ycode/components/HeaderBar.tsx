@@ -3,7 +3,6 @@
 import {
   STUDIO_PROJECT_SELECTION_EVENT,
   getSelectedStudioProjectSlug,
-  novumFetch,
   studioProjectsApi,
 } from '@/lib/api';
 import { useRef, useEffect, useState, useMemo } from 'react';
@@ -158,7 +157,6 @@ export default function HeaderBar({
   });
   const [baseUrl, setBaseUrl] = useState<string>('');
   const [selectedProjectBaseUrl, setSelectedProjectBaseUrl] = useState<string>('');
-  const [hasUpdate, setHasUpdate] = useState(false);
   const [showTransferDialog, setShowTransferDialog] = useState(false);
 
   // Get current host after mount
@@ -201,33 +199,6 @@ export default function HeaderBar({
       isMounted = false;
       window.removeEventListener(STUDIO_PROJECT_SELECTION_EVENT, resolveProjectBaseUrl);
       window.removeEventListener('storage', handleStorage);
-    };
-  }, []);
-
-  // Check for updates on mount
-  useEffect(() => {
-    let isMounted = true;
-
-    const checkForUpdates = async () => {
-      try {
-        const projectsResponse = await studioProjectsApi.getAssigned();
-        const canCheckUpdates = projectsResponse.data?.some((project) =>
-          project.role === 'novum_admin' || project.role === 'novum_developer'
-        );
-        if (!canCheckUpdates) return;
-
-        const response = await novumFetch('/ycode/api/updates/check');
-        if (response.ok) {
-          const data = await response.json();
-          if (isMounted) setHasUpdate(data.available === true);
-        }
-      } catch (error) {
-        console.error('Failed to check for updates:', error);
-      }
-    };
-    checkForUpdates();
-    return () => {
-      isMounted = false;
     };
   }, []);
 
@@ -594,22 +565,6 @@ export default function HeaderBar({
           </a>
         </Button>
 
-        {hasUpdate && (
-          <>
-            <div className="h-5">
-              <Separator orientation="vertical" />
-            </div>
-
-            <Button
-              size="xs"
-              variant="default"
-              className="bg-primary/20 hover:bg-primary/30 text-blue-400 hover:text-blue-300"
-              onClick={() => router.push('/ycode/settings/updates')}
-            >
-              Update available
-            </Button>
-          </>
-        )}
       </div>
 
       {/* Right: User & Actions */}

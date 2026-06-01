@@ -838,7 +838,17 @@ export default function Canvas({
     const doc = iframeRef.current.contentDocument;
     if (!doc) return;
 
-    const handleClick = () => {
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target;
+      const iframeWindow = doc.defaultView;
+      if (iframeWindow && target instanceof iframeWindow.Element) {
+        const nativeActionTarget = target.closest(
+          'a[href], button[type="submit"], input[type="submit"], input[type="image"]'
+        );
+        if (nativeActionTarget) {
+          event.preventDefault();
+        }
+      }
       onCanvasClick?.();
     };
 

@@ -1817,8 +1817,11 @@ const LayerItem: React.FC<{
       ...(!isEditMode && { suppressHydrationWarning: true }),
     };
 
-    // Apply link attributes for elements rendered as <a> (buttons with links or <a> layers)
-    if (htmlTag === 'a' && layer.variables?.link) {
+    // Apply link attributes for elements rendered as <a> (buttons with links or <a> layers).
+    // In edit mode the canvas must never expose a navigable href: clicking a
+    // customer CTA should select the layer, not navigate the editor iframe into
+    // another Studio instance.
+    if (!isEditMode && htmlTag === 'a' && layer.variables?.link) {
       if (isButtonWithLink) {
         elementProps.role = 'button';
         delete elementProps.type;
@@ -1963,6 +1966,14 @@ const LayerItem: React.FC<{
     ) {
       elementProps.href = prefixPreviewHref(elementProps.href, previewProjectParam);
     }
+    if (isEditMode && htmlTag === 'a') {
+      delete elementProps.href;
+      delete elementProps.target;
+      delete elementProps.rel;
+      elementProps['aria-disabled'] = 'true';
+      elementProps['data-link-disabled'] = 'true';
+    }
+
     if (htmlTag === 'a' && typeof elementProps.href === 'string') {
       const safeHref = sanitizeHrefForAttribute(elementProps.href);
       if (safeHref) {
