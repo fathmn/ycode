@@ -65,6 +65,32 @@ function getProjectPreviewUrl(): string {
   return `/ycode/preview?${params.toString()}`;
 }
 
+function displayUrl(value: string): string {
+  if (!value) return '';
+  try {
+    const url = new URL(value, typeof window === 'undefined' ? 'https://studio.novum-partners.de' : window.location.origin);
+    return url.host + url.pathname.replace(/\/$/, '') + url.search;
+  } catch {
+    return value.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+  }
+}
+
+function normalizeBaseUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+function absoluteUrl(baseUrl: string, path: string): string {
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  if (!normalizedBaseUrl) return path || '/';
+  try {
+    return new URL(path || '/', normalizedBaseUrl).toString();
+  } catch {
+    return `${normalizedBaseUrl.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`;
+  }
+}
+
 function isRenderedPreviewForSelectedProject(value: string | null): boolean {
   if (typeof window === 'undefined' || !value) return false;
   try {
@@ -83,6 +109,7 @@ interface PublishPopoverProps {
   isPublishing: boolean;
   setIsPublishing: (isPublishing: boolean) => void;
   baseUrl: string;
+  primaryDomain?: string | null;
   publishedUrl: string;
   isDisabled?: boolean;
   onPublishSuccess: () => void;
@@ -92,6 +119,7 @@ export default function PublishPopover({
   isPublishing,
   setIsPublishing,
   baseUrl,
+  primaryDomain,
   publishedUrl,
   isDisabled = false,
   onPublishSuccess,
@@ -118,6 +146,10 @@ export default function PublishPopover({
     || 'Live-Schaltung ist blockiert, bis projektgebundenes Publishing verfügbar ist.';
   const previewApproved = publishReadiness?.previewApproved === true;
   const hasRenderedPreviewForSelectedProject = isRenderedPreviewForSelectedProject(lastRenderedPreviewUrl);
+  const liveUrl = absoluteUrl(baseUrl, publishedUrl);
+  const primaryDomainUrl = primaryDomain ? absoluteUrl(primaryDomain, publishedUrl) : null;
+  const showPrimaryDomain = Boolean(primaryDomainUrl && displayUrl(primaryDomainUrl) !== displayUrl(liveUrl));
+  const previewDisplayUrl = displayUrl(getProjectPreviewUrl());
 
   const loadChangesCount = useCallback(async (readinessOverride: PublishReadiness | null) => {
     setIsLoadingCount(true);
@@ -209,6 +241,7 @@ export default function PublishPopover({
   const handlePublishAll = useCallback(async () => {
     try {
       setIsPublishing(true);
+      toast.loading('Live-Update wird verarbeitet...', { id: 'publish-live-update' });
 
       const result = await publishApi.publish({ publishAll: true });
 
@@ -222,8 +255,10 @@ export default function PublishPopover({
       }
 
       if (result.data?.deployment && !result.data.deployment.triggered) {
+        toast.dismiss('publish-live-update');
         toast.warning('Website wurde gespeichert, aber das Vercel Deployment wurde nicht gestartet');
       } else {
+        toast.dismiss('publish-live-update');
         toast.success(
           result.data?.deployment?.triggered
             ? 'Website wurde live geschaltet und Deployment gestartet'
@@ -231,7 +266,7 @@ export default function PublishPopover({
           {
             action: {
               label: 'Öffnen',
-              onClick: () => window.open(baseUrl + publishedUrl, '_blank'),
+              onClick: () => window.open(liveUrl, '_blank'),
             },
           }
         );
@@ -245,10 +280,12 @@ export default function PublishPopover({
       loadPublishReadiness();
     } catch (error) {
       console.error('Failed to publish all:', error);
+      toast.dismiss('publish-live-update');
+      toast.error(error instanceof Error ? error.message : 'Live-Update konnte nicht gestartet werden');
     } finally {
       setIsPublishing(false);
     }
-  }, [baseUrl, publishedUrl, loadPublishReadiness, onPublishSuccess, setIsPublishing, updateSetting]);
+  }, [liveUrl, loadPublishReadiness, onPublishSuccess, setIsPublishing, updateSetting]);
 
   const handleApprovePreview = useCallback(async () => {
     try {
@@ -307,15 +344,16 @@ export default function PublishPopover({
         <Button size="sm" disabled={isDisabled || requiresProjectSelection}>Live schalten</Button>
       </PopoverTrigger>
 
-      <PopoverContent className="mr-4 mt-0.5 w-64">
-        <div>
-          <Label>
+      <PopoverContent className="mr-4 mt-0.5 w-72">
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Live-Domain</span>
+          <Label className="break-all leading-tight">
             <a
-              href={baseUrl + publishedUrl}
+              href={liveUrl}
               target="_blank"
               rel="noopener noreferrer"
             >
-              {baseUrl}
+              {displayUrl(liveUrl)}
             </a>
           </Label>
           <span className="text-popover-foreground text-[10px]">
@@ -323,9 +361,27 @@ export default function PublishPopover({
           </span>
         </div>
 
+        {showPrimaryDomain && primaryDomainUrl && (
+          <div className="mt-2 rounded-lg bg-muted/50 px-3 py-2">
+            <span className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Kundendomain</span>
+            <a
+              href={primaryDomainUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block break-all text-xs text-popover-foreground hover:underline"
+            >
+              {displayUrl(primaryDomainUrl)}
+            </a>
+          </div>
+        )}
+
         <hr className="my-3" />
 
         <div className="flex flex-col gap-2">
+          <div className="rounded-lg bg-muted/50 px-3 py-2">
+            <span className="block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Vorschau</span>
+            <span className="block break-all text-xs text-popover-foreground">{previewDisplayUrl}</span>
+          </div>
           <Button
             size="sm"
             variant="secondary"
@@ -381,13 +437,24 @@ export default function PublishPopover({
           disabled={requiresProjectSelection || livePublishBlocked || isPublishing || publishSuccess}
         >
           {isPublishing ? (
-            <Spinner />
+            <>
+              <Spinner />
+              {publishedAt ? 'Aktualisierung läuft...' : 'Live-Schaltung läuft...'}
+            </>
           ) : publishSuccess ? (
-            <Icon name="check" />
+            <>
+              <Icon name="check" />
+              Aktualisiert
+            </>
           ) : (
             publishedAt ? 'Aktualisieren' : 'Live schalten'
           )}
         </Button>
+        {isPublishing && (
+          <span className="mt-1 block text-[10px] text-muted-foreground">
+            Live-Update wird gespeichert und Deployment wird angestoßen. Das kann kurz dauern.
+          </span>
+        )}
         {livePublishBlocked && (
           <span className="text-[10px] text-muted-foreground">
             {livePublishBlockerMessage}

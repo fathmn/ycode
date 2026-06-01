@@ -165,6 +165,7 @@ export default function HeaderBar({
   });
   const [baseUrl, setBaseUrl] = useState<string>('');
   const [selectedProjectBaseUrl, setSelectedProjectBaseUrl] = useState<string>('');
+  const [selectedProjectPrimaryDomain, setSelectedProjectPrimaryDomain] = useState<string | null>(null);
   const [selectedProjectPathSlug, setSelectedProjectPathSlug] = useState<string | null>(null);
   const [selectedProjectRole, setSelectedProjectRole] = useState<string | null>(null);
   const [showTransferDialog, setShowTransferDialog] = useState(false);
@@ -193,12 +194,16 @@ export default function HeaderBar({
 
         if (isMounted) {
           setSelectedProjectBaseUrl(publicBaseUrlForProject(selectedProject, fallbackBaseUrl));
+          setSelectedProjectPrimaryDomain(selectedProject?.primary_domain || null);
           setSelectedProjectPathSlug(selectedProject?.studio_path_slug || null);
           setSelectedProjectRole(selectedProject?.role || null);
         }
       } catch (error) {
         console.error('Failed to resolve selected project base URL:', error);
-        if (isMounted) setSelectedProjectBaseUrl(fallbackBaseUrl);
+        if (isMounted) {
+          setSelectedProjectBaseUrl(fallbackBaseUrl);
+          setSelectedProjectPrimaryDomain(null);
+        }
       }
     };
 
@@ -681,6 +686,7 @@ export default function HeaderBar({
           isPublishing={isPublishing}
           setIsPublishing={setIsPublishing}
           baseUrl={selectedProjectBaseUrl || baseUrl}
+          primaryDomain={selectedProjectPrimaryDomain}
           publishedUrl={publishedUrl}
           onPublishSuccess={onPublishSuccess}
         />
