@@ -26,6 +26,7 @@ const PUBLIC_API_EXACT = [
   '/ycode/api/setup/status', // Read-only setup status — required before login
   '/ycode/api/setup/check-email-confirm', // Read-only setup check — required before first admin exists
   '/ycode/api/auth/callback', // Auth callback
+  '/ycode/api/auth/confirm', // Auth email token confirmation
   '/ycode/api/auth/session', // Session read for browser auth state
 ];
 
