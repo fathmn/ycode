@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
-import { CookieOptions } from '@supabase/ssr';
 import { credentials } from '@/lib/credentials';
-import { cookies } from 'next/headers';
+import { parseSupabaseConfig } from '@/lib/supabase-config-parser';
+import type { SupabaseConfig } from '@/types';
 
 /**
  * GET /ycode/api/auth/callback
@@ -21,11 +21,7 @@ export async function GET(request: NextRequest) {
   if (code) {
     try {
       // Get Supabase config
-      const config = await credentials.get<{
-        url: string;
-        anonKey: string;
-        serviceRoleKey: string;
-      }>('supabase_config');
+      const config = await credentials.get<SupabaseConfig>('supabase_config');
 
       if (!config) {
         return NextResponse.redirect(
@@ -33,22 +29,26 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      const cookieStore = await cookies();
+      const parsed = parseSupabaseConfig(config);
+      const redirectUrl = new URL('/ycode', request.url);
+      if (authFlow) {
+        redirectUrl.searchParams.set('auth_flow', authFlow);
+      }
+      const response = NextResponse.redirect(redirectUrl);
 
       // Create Supabase client
       const supabase = createServerClient(
-        config.url,
-        config.anonKey,
+        parsed.projectUrl,
+        parsed.anonKey,
         {
           cookies: {
-            get(name: string) {
-              return cookieStore.get(name)?.value;
+            getAll() {
+              return request.cookies.getAll();
             },
-            set(name: string, value: string, options: CookieOptions) {
-              cookieStore.set({ name, value, ...options });
-            },
-            remove(name: string, options: CookieOptions) {
-              cookieStore.set({ name, value: '', ...options });
+            setAll(cookiesToSet) {
+              cookiesToSet.forEach(({ name, value, options }) => {
+                response.cookies.set(name, value, options);
+              });
             },
           },
         }
@@ -64,14 +64,7 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      // Redirect to builder while preserving the email auth intent. Recovery
-      // and invite links must show password setup instead of behaving like a
-      // plain magic-link login after the server has already exchanged the code.
-      const redirectUrl = new URL('/ycode', request.url);
-      if (authFlow) {
-        redirectUrl.searchParams.set('auth_flow', authFlow);
-      }
-      return NextResponse.redirect(redirectUrl);
+      return response;
     } catch (error) {
       console.error('Auth callback failed:', error);
       return NextResponse.redirect(
