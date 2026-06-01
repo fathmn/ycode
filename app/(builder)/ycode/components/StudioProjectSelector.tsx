@@ -84,6 +84,13 @@ export default function StudioProjectSelector() {
   }, [projects, selectedSlug]);
 
   if (projects.length === 0) return null;
+  if (projects.length === 1 && selectedProject && !hasSiteAdminProjectRole(projects)) {
+    return (
+      <div className="max-w-48 truncate rounded-md bg-secondary px-3 py-1.5 text-xs text-secondary-foreground">
+        {selectedProject.name}
+      </div>
+    );
+  }
 
   const handleSelect = (project: StudioProject) => {
     if (!project.studio_path_slug) return;

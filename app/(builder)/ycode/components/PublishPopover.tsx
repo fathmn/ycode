@@ -65,6 +65,20 @@ function getProjectPreviewUrl(): string {
   return `/ycode/preview?${params.toString()}`;
 }
 
+function isRenderedPreviewForSelectedProject(value: string | null): boolean {
+  if (typeof window === 'undefined' || !value) return false;
+  try {
+    const url = new URL(value, window.location.origin);
+    if (url.pathname !== '/ycode/preview' && !url.pathname.startsWith('/ycode/preview/')) {
+      return false;
+    }
+    const projectSlug = getSelectedStudioProjectSlug();
+    return !projectSlug || url.searchParams.get('project') === projectSlug;
+  } catch {
+    return false;
+  }
+}
+
 interface PublishPopoverProps {
   isPublishing: boolean;
   setIsPublishing: (isPublishing: boolean) => void;
@@ -92,6 +106,9 @@ export default function PublishPopover({
   const [previewApprovedAt, setPreviewApprovedAt] = useState<string | null>(null);
   const [publishReadiness, setPublishReadiness] = useState<PublishReadiness | null>(null);
   const [selectedProjectSlug, setSelectedProjectSlug] = useState<string | null>(() => getSelectedStudioProjectSlug());
+  const [lastRenderedPreviewUrl, setLastRenderedPreviewUrl] = useState<string | null>(() => (
+    typeof window === 'undefined' ? null : window.localStorage?.getItem('novum:last-rendered-preview-url')
+  ));
 
   const { getSettingByKey, updateSetting } = useSettingsStore();
   const publishedAt = getSettingByKey('published_at');
@@ -100,42 +117,26 @@ export default function PublishPopover({
   const livePublishBlockerMessage = publishReadiness?.blockerMessage
     || 'Live-Schaltung ist blockiert, bis projektgebundenes Publishing verfügbar ist.';
   const previewApproved = publishReadiness?.previewApproved === true;
+  const hasRenderedPreviewForSelectedProject = isRenderedPreviewForSelectedProject(lastRenderedPreviewUrl);
 
-  // Load changes count when popover opens
-  useEffect(() => {
-    if (isOpen) {
-      loadPublishReadiness();
-    }
-  }, [isOpen]);
-
-  useEffect(() => {
-    const updateSelectedProject = () => setSelectedProjectSlug(getSelectedStudioProjectSlug());
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === 'studio:selected-project-slug' || event.key === 'novum:selected-project-slug') {
-        updateSelectedProject();
+  const loadChangesCount = useCallback(async (readinessOverride: PublishReadiness | null) => {
+    setIsLoadingCount(true);
+    try {
+      if (readinessOverride?.projectScopedPublishAvailable !== true) {
+        setChangeCounts(null);
+        return;
       }
-    };
-    window.addEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
-    window.addEventListener('storage', handleStorage);
-    updateSelectedProject();
-    return () => {
-      window.removeEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
-      window.removeEventListener('storage', handleStorage);
-    };
+      const response = await publishApi.getPreview();
+      setChangeCounts(response.data ?? null);
+    } catch (error) {
+      console.error('Failed to load changes count:', error);
+      setChangeCounts(null);
+    } finally {
+      setIsLoadingCount(false);
+    }
   }, []);
 
-  useEffect(() => {
-    setPreviewApprovedAt(null);
-    setPublishSuccess(false);
-    setPublishReadiness(null);
-    setChangeCounts(null);
-    if (isOpen && selectedProjectSlug) {
-      loadPublishReadiness();
-      loadChangesCount();
-    }
-  }, [selectedProjectSlug, isOpen]);
-
-  const loadPublishReadiness = async (): Promise<PublishReadiness | null> => {
+  const loadPublishReadiness = useCallback(async (): Promise<PublishReadiness | null> => {
     const response = await publishApi.getReadiness();
     if (response.data) {
       setPublishReadiness(response.data);
@@ -158,24 +159,52 @@ export default function PublishPopover({
       setPreviewApprovedAt(null);
       return null;
     }
-  };
+  }, [loadChangesCount]);
 
-  const loadChangesCount = async (readinessOverride: PublishReadiness | null = publishReadiness) => {
-    setIsLoadingCount(true);
-    try {
-      if (readinessOverride?.projectScopedPublishAvailable !== true) {
-        setChangeCounts(null);
-        return;
-      }
-      const response = await publishApi.getPreview();
-      setChangeCounts(response.data ?? null);
-    } catch (error) {
-      console.error('Failed to load changes count:', error);
-      setChangeCounts(null);
-    } finally {
-      setIsLoadingCount(false);
+  // Load changes count when popover opens
+  useEffect(() => {
+    if (isOpen) {
+      loadPublishReadiness();
     }
-  };
+  }, [isOpen, loadPublishReadiness]);
+
+  useEffect(() => {
+    const updateSelectedProject = () => setSelectedProjectSlug(getSelectedStudioProjectSlug());
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === 'studio:selected-project-slug' || event.key === 'novum:selected-project-slug') {
+        updateSelectedProject();
+      }
+      if (event.key === 'novum:last-rendered-preview-url') {
+        setLastRenderedPreviewUrl(event.newValue);
+        if (isOpen) loadPublishReadiness();
+      }
+    };
+    const handlePreviewRendered = () => {
+      setLastRenderedPreviewUrl(window.localStorage?.getItem('novum:last-rendered-preview-url'));
+      if (isOpen) loadPublishReadiness();
+    };
+    window.addEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener('novum:preview-rendered', handlePreviewRendered);
+    updateSelectedProject();
+    return () => {
+      window.removeEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('novum:preview-rendered', handlePreviewRendered);
+    };
+  }, [isOpen, loadPublishReadiness]);
+
+  useEffect(() => {
+    setPreviewApprovedAt(null);
+    setPublishSuccess(false);
+    setPublishReadiness(null);
+    setChangeCounts(null);
+    if (isOpen && selectedProjectSlug) {
+      setLastRenderedPreviewUrl(window.localStorage?.getItem('novum:last-rendered-preview-url'));
+      loadPublishReadiness();
+      loadChangesCount(null);
+    }
+  }, [selectedProjectSlug, isOpen, loadPublishReadiness, loadChangesCount]);
 
   const handlePublishAll = useCallback(async () => {
     try {
@@ -219,7 +248,7 @@ export default function PublishPopover({
     } finally {
       setIsPublishing(false);
     }
-  }, [baseUrl, publishedUrl, onPublishSuccess, setIsPublishing, updateSetting]);
+  }, [baseUrl, publishedUrl, loadPublishReadiness, onPublishSuccess, setIsPublishing, updateSetting]);
 
   const handleApprovePreview = useCallback(async () => {
     try {
@@ -247,7 +276,7 @@ export default function PublishPopover({
     } finally {
       setIsApprovingPreview(false);
     }
-  }, []);
+  }, [loadPublishReadiness]);
 
   const handleRevertConfirm = useCallback(async () => {
     try {
@@ -301,7 +330,11 @@ export default function PublishPopover({
             size="sm"
             variant="secondary"
             className="w-full"
-            onClick={() => window.open(getProjectPreviewUrl(), '_blank')}
+            onClick={() => {
+              window.localStorage?.removeItem('novum:last-rendered-preview-url');
+              setLastRenderedPreviewUrl(null);
+              window.open(getProjectPreviewUrl(), '_blank');
+            }}
             disabled={requiresProjectSelection}
           >
             Vorschau öffnen
@@ -311,7 +344,7 @@ export default function PublishPopover({
             variant="secondary"
             className="w-full"
             onClick={handleApprovePreview}
-            disabled={requiresProjectSelection || isApprovingPreview || isPublishing}
+            disabled={requiresProjectSelection || !hasRenderedPreviewForSelectedProject || isApprovingPreview || isPublishing}
           >
             {isApprovingPreview ? (
               <>
@@ -327,6 +360,11 @@ export default function PublishPopover({
               'Vorschau freigeben'
             )}
           </Button>
+          {!previewApproved && !hasRenderedPreviewForSelectedProject && (
+            <span className="text-[10px] text-muted-foreground">
+              Vorschau zuerst öffnen und vollständig laden lassen.
+            </span>
+          )}
           {previewApprovedAt && (
             <span className="text-[10px] text-muted-foreground">
               Freigegeben {formatRelativeTime(previewApprovedAt, false)}

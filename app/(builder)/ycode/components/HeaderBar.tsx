@@ -5,7 +5,7 @@ import {
   getSelectedStudioProjectSlug,
   studioProjectsApi,
 } from '@/lib/api';
-import { useRef, useEffect, useState, useMemo } from 'react';
+import { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useEditorUrl } from '@/hooks/use-editor-url';
 import { findHomepage } from '@/lib/page-utils';
@@ -30,6 +30,8 @@ import { usePagesStore } from '@/stores/usePagesStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useLocalisationStore } from '@/stores/useLocalisationStore';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page-utils';
+import { isNovumOperatorRole } from '@/lib/settings-nav-items';
+import { studioProjectRoutePathFromSlug } from '@/lib/studio-project-path';
 
 // 5. Types
 import type { Page } from '@/types';
@@ -47,8 +49,10 @@ import { toast } from 'sonner';
 
 type StudioProject = {
   slug: string;
+  studio_path_slug: string | null;
   primary_domain: string | null;
   production_url: string | null;
+  role: string;
 };
 
 function publicBaseUrlForProject(project: StudioProject | null, fallbackBaseUrl: string): string {
@@ -157,7 +161,13 @@ export default function HeaderBar({
   });
   const [baseUrl, setBaseUrl] = useState<string>('');
   const [selectedProjectBaseUrl, setSelectedProjectBaseUrl] = useState<string>('');
+  const [selectedProjectPathSlug, setSelectedProjectPathSlug] = useState<string | null>(null);
+  const [selectedProjectRole, setSelectedProjectRole] = useState<string | null>(null);
   const [showTransferDialog, setShowTransferDialog] = useState(false);
+  const isNovumOperator = isNovumOperatorRole(selectedProjectRole);
+  const studioRoute = useCallback((routePath: string) => (
+    studioProjectRoutePathFromSlug(selectedProjectPathSlug, routePath)
+  ), [selectedProjectPathSlug]);
 
   // Get current host after mount
   useEffect(() => {
@@ -179,6 +189,8 @@ export default function HeaderBar({
 
         if (isMounted) {
           setSelectedProjectBaseUrl(publicBaseUrlForProject(selectedProject, fallbackBaseUrl));
+          setSelectedProjectPathSlug(selectedProject?.studio_path_slug || null);
+          setSelectedProjectRole(selectedProject?.role || null);
         }
       } catch (error) {
         console.error('Failed to resolve selected project base URL:', error);
@@ -377,7 +389,7 @@ export default function HeaderBar({
               </>
             )}
             <DropdownMenuItem
-              onClick={() => router.push('/ycode/settings/general')}
+              onClick={() => router.push(studioRoute('/settings/general'))}
             >
               Einstellungen
             </DropdownMenuItem>
@@ -388,17 +400,21 @@ export default function HeaderBar({
               Dateien
             </DropdownMenuItem>
 
-            <DropdownMenuItem
-              onClick={() => router.push('/ycode/integrations/apps')}
-            >
-              Integrationen
-            </DropdownMenuItem>
+            {isNovumOperator && (
+              <>
+                <DropdownMenuItem
+                  onClick={() => router.push('/ycode/integrations/apps')}
+                >
+                  Integrationen
+                </DropdownMenuItem>
 
-            <DropdownMenuItem
-              onClick={() => setShowTransferDialog(true)}
-            >
-              Backup &amp; Restore
-            </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setShowTransferDialog(true)}
+                >
+                  Backup &amp; Restore
+                </DropdownMenuItem>
+              </>
+            )}
 
             <DropdownMenuSeparator />
 
@@ -500,7 +516,7 @@ export default function HeaderBar({
                 setLastDesignUrl(window.location.pathname + window.location.search);
               }
               setOptimisticNav('forms');
-              router.push('/ycode/forms');
+              router.push(studioRoute('/forms'));
             }}
           >
             <Icon name="form" />
@@ -514,7 +530,7 @@ export default function HeaderBar({
           <DropdownMenuTrigger asChild>
             <Button size="xs" variant="ghost">
               <Icon name="globe" />
-              {selectedLocale ? selectedLocale.code.toUpperCase() : 'EN'}
+              {selectedLocale ? selectedLocale.code.toUpperCase() : 'DE'}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">

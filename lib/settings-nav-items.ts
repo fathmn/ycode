@@ -7,13 +7,23 @@ export interface SettingsNavItem {
   id: string;
   label: string;
   path: string;
+  operatorOnly?: boolean;
 }
 
 export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
-  { id: 'general', label: 'General', path: '/ycode/settings/general' },
-  { id: 'users', label: 'Users', path: '/ycode/settings/users' },
-  { id: 'redirects', label: 'Redirects', path: '/ycode/settings/redirects' },
-  { id: 'email', label: 'Email', path: '/ycode/settings/email' },
-  { id: 'templates', label: 'Templates', path: '/ycode/settings/templates' },
-  { id: 'updates', label: 'Updates', path: '/ycode/settings/updates' },
+  { id: 'general', label: 'Allgemein', path: '/ycode/settings/general' },
+  { id: 'users', label: 'Benutzer', path: '/ycode/settings/users' },
+  { id: 'redirects', label: 'Weiterleitungen', path: '/ycode/settings/redirects' },
+  { id: 'email', label: 'E-Mail', path: '/ycode/settings/email', operatorOnly: true },
+  { id: 'templates', label: 'Templates', path: '/ycode/settings/templates', operatorOnly: true },
+  { id: 'updates', label: 'Updates', path: '/ycode/settings/updates', operatorOnly: true },
 ];
+
+export function isNovumOperatorRole(role: string | null | undefined): boolean {
+  return role === 'novum_admin' || role === 'novum_developer';
+}
+
+export function visibleSettingsNavItems(roles: Array<string | null | undefined>): SettingsNavItem[] {
+  const isOperator = roles.some(isNovumOperatorRole);
+  return SETTINGS_NAV_ITEMS.filter((item) => !item.operatorOnly || isOperator);
+}

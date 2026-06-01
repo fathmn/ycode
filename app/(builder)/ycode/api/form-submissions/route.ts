@@ -10,10 +10,18 @@ import { dispatchFormSubmittedEvent } from '@/lib/services/webhookService';
 import { sendFormSubmissionEmail, extractReplyToEmail } from '@/lib/services/emailService';
 import { processAppIntegrations } from '@/lib/apps/integration-service';
 import { noCache } from '@/lib/api-response';
+import { resolveNovumProjectId, resolveSingleNovumProjectIdForCurrentUser } from '@/lib/project-scope';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+async function resolveRequestProjectId(request: NextRequest): Promise<string | null> {
+  const { searchParams } = new URL(request.url);
+  const projectLookup = request.headers.get('x-novum-project-slug') || searchParams.get('project');
+  if (projectLookup) return resolveNovumProjectId(projectLookup);
+  return resolveSingleNovumProjectIdForCurrentUser();
+}
 
 /**
  * GET /ycode/api/form-submissions
@@ -30,13 +38,14 @@ export async function GET(request: NextRequest) {
     const formId = searchParams.get('form_id') || undefined;
     const status = searchParams.get('status') as 'new' | 'read' | 'archived' | 'spam' | undefined;
     const summary = searchParams.get('summary') === 'true';
+    const projectId = await resolveRequestProjectId(request);
 
     if (summary) {
-      const summaries = await getFormSummaries();
+      const summaries = await getFormSummaries(projectId);
       return noCache({ data: summaries });
     }
 
-    const submissions = await getAllFormSubmissions(formId, status);
+    const submissions = await getAllFormSubmissions(formId, status, projectId);
     return noCache({ data: submissions });
   } catch (error) {
     console.error('Error fetching form submissions:', error);

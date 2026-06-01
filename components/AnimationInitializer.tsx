@@ -1266,6 +1266,7 @@ export default function AnimationInitializer({ layers, injectInitialCSS, initial
       }).then((response) => {
         if (response.ok) {
           window.localStorage?.setItem('novum:last-rendered-preview-url', previewUrl);
+          window.dispatchEvent(new CustomEvent('novum:preview-rendered', { detail: { previewUrl } }));
         }
       }).catch(() => {
         // The publish gate reports a clear error if no rendered preview is recorded.

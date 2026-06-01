@@ -50,6 +50,22 @@ export function studioProjectPathFromSlug(pathSlug: string | null | undefined): 
   return normalized ? `/${normalized}` : '/ycode';
 }
 
+export function studioProjectRoutePathFromSlug(
+  pathSlug: string | null | undefined,
+  routePath: string
+): string {
+  const normalizedRoute = routePath.startsWith('/') ? routePath : `/${routePath}`;
+  const normalizedSlug = normalizeStudioProjectPathSlug(pathSlug);
+  if (!normalizedSlug) {
+    return normalizedRoute.startsWith('/ycode') ? normalizedRoute : `/ycode${normalizedRoute}`;
+  }
+  if (normalizedRoute === '/' || normalizedRoute === '/ycode') return `/${normalizedSlug}`;
+  if (normalizedRoute.startsWith('/ycode/')) {
+    return `/${normalizedSlug}${normalizedRoute.slice('/ycode'.length)}`;
+  }
+  return `/${normalizedSlug}${normalizedRoute}`;
+}
+
 export function studioProjectPathSlugFromPathname(pathname: string | null | undefined): string | null {
   if (!pathname) return null;
   const firstSegment = pathname.split('?')[0].split('#')[0].split('/').filter(Boolean)[0];

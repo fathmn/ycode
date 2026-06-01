@@ -860,10 +860,16 @@ export async function proxy(request: NextRequest) {
   }
 
   if (isStudioAppRequest(request, pathname)) {
+    const segments = pathname.split('/').filter(Boolean);
+    const projectPathSlug = segments[0] || '';
+    const routeSuffix = segments.slice(1).join('/');
     const rewriteUrl = request.nextUrl.clone();
-    rewriteUrl.pathname = '/ycode';
+    rewriteUrl.pathname = routeSuffix ? `/ycode/${routeSuffix}` : '/ycode';
     const response = NextResponse.rewrite(rewriteUrl);
-    response.headers.set('x-pathname', '/ycode');
+    response.headers.set('x-pathname', rewriteUrl.pathname);
+    if (projectPathSlug) {
+      response.headers.set('x-novum-project-slug', projectPathSlug);
+    }
     return response;
   }
 

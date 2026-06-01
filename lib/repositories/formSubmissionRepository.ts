@@ -1,5 +1,7 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import type {
+  Layer,
   FormSubmission,
   FormSummary,
   CreateFormSubmissionData,
@@ -19,7 +21,8 @@ import type {
  */
 export async function getAllFormSubmissions(
   formId?: string,
-  status?: FormSubmissionStatus
+  status?: FormSubmissionStatus,
+  _projectId?: string | null
 ): Promise<FormSubmission[]> {
   const client = await getSupabaseAdmin();
 
@@ -75,31 +78,79 @@ export async function getFormSubmissionById(id: string): Promise<FormSubmission 
 /**
  * Get all unique forms with submission counts
  */
-export async function getFormSummaries(): Promise<FormSummary[]> {
+function collectFormIdsFromLayers(layers: Layer[] | unknown, formIds: Set<string>): void {
+  if (!Array.isArray(layers)) return;
+
+  for (const layer of layers as Layer[]) {
+    if (!layer || typeof layer !== 'object') continue;
+    if (layer.name === 'form') {
+      const configuredId = typeof layer.settings?.id === 'string'
+        ? layer.settings.id.trim()
+        : '';
+      formIds.add(configuredId || 'unnamed-form');
+    }
+    collectFormIdsFromLayers(layer.children, formIds);
+  }
+}
+
+async function getDefinedFormIds(client: any, projectId?: string | null): Promise<Set<string>> {
+  let query = client
+    .from('page_layers')
+    .select('layers')
+    .eq('is_published', false)
+    .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'page_layers', projectId)).query;
+
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(`Failed to fetch defined forms: ${error.message}`);
+  }
+
+  const formIds = new Set<string>();
+  for (const row of data || []) {
+    collectFormIdsFromLayers(row.layers, formIds);
+  }
+  return formIds;
+}
+
+/**
+ * Get all forms with submission counts.
+ *
+ * Forms are defined by draft form layers. Submissions are merged onto those
+ * definitions so newly migrated forms appear before the first visitor submits.
+ */
+export async function getFormSummaries(projectId?: string | null): Promise<FormSummary[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  // Get all submissions grouped by form_id
-  const { data, error } = await client
+  const definedFormIds = await getDefinedFormIds(client, projectId);
+
+  const submissionsQuery = client
     .from('form_submissions')
     .select('form_id, status, created_at')
     .order('created_at', { ascending: false });
+  const { data, error } = await submissionsQuery;
 
   if (error) {
     throw new Error(`Failed to fetch form summaries: ${error.message}`);
   }
 
-  if (!data || data.length === 0) {
-    return [];
-  }
-
   // Group by form_id and calculate counts
   const formMap = new Map<string, FormSummary>();
 
-  for (const submission of data) {
+  for (const formId of definedFormIds) {
+    formMap.set(formId, {
+      form_id: formId,
+      submission_count: 0,
+      new_count: 0,
+      latest_submission: null,
+    });
+  }
+
+  for (const submission of data || []) {
     const existing = formMap.get(submission.form_id);
 
     if (existing) {
@@ -117,7 +168,14 @@ export async function getFormSummaries(): Promise<FormSummary[]> {
     }
   }
 
-  return Array.from(formMap.values());
+  return Array.from(formMap.values()).sort((a, b) => {
+    if (a.latest_submission && b.latest_submission) {
+      return new Date(b.latest_submission).getTime() - new Date(a.latest_submission).getTime();
+    }
+    if (a.latest_submission) return -1;
+    if (b.latest_submission) return 1;
+    return a.form_id.localeCompare(b.form_id);
+  });
 }
 
 /**
