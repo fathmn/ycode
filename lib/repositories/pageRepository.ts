@@ -5,6 +5,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import { reorderSiblings } from '@/lib/repositories/pageFolderRepository';
 import type { Page, PageSettings } from '../../types';
 import { isHomepage } from '../page-utils';
@@ -69,6 +70,31 @@ function normalizePageFolderId(folderId?: string | null): string | null {
   return folderId;
 }
 
+async function assertPageFolderInProject(
+  client: any,
+  folderId: string | null,
+  isPublished: boolean,
+  projectId?: string | null
+): Promise<void> {
+  if (!folderId) return;
+
+  let query = client
+    .from('page_folders')
+    .select('id')
+    .eq('id', folderId)
+    .eq('is_published', isPublished)
+    .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
+
+  const { data, error } = await query.maybeSingle();
+  if (error) {
+    throw new Error(`Failed to validate page folder: ${error.message}`);
+  }
+  if (!data) {
+    throw new Error('Page folder not found for this project');
+  }
+}
+
 /**
  * Retrieves all pages from the database
  *
@@ -80,7 +106,7 @@ function normalizePageFolderId(folderId?: string | null): string | null {
  * const allPages = await getAllPages();
  * const publishedPages = await getAllPages({ is_published: true });
  */
-export async function getAllPages(filters?: QueryFilters): Promise<Page[]> {
+export async function getAllPages(filters?: QueryFilters, projectId?: string | null): Promise<Page[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -99,6 +125,7 @@ export async function getAllPages(filters?: QueryFilters): Promise<Page[]> {
       query = query.eq(column, value);
     });
   }
+  query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
 
   const { data, error } = await query.order('order', { ascending: true });
 
@@ -115,20 +142,22 @@ export async function getAllPages(filters?: QueryFilters): Promise<Page[]> {
  * @param id - Page ID
  * @param isPublished - Get draft (false) or published (true) version. Defaults to false (draft).
  */
-export async function getPageById(id: string, isPublished: boolean = false): Promise<Page | null> {
+export async function getPageById(id: string, isPublished: boolean = false, projectId?: string | null): Promise<Page | null> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('pages')
     .select('*')
     .eq('id', id)
     .eq('is_published', isPublished)
-    .is('deleted_at', null)
-    .single();
+    .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
+
+  const { data, error } = await query.single();
 
   if (error) {
     if (error.code === 'PGRST116') {
@@ -145,7 +174,7 @@ export async function getPageById(id: string, isPublished: boolean = false): Pro
  * @param slug - Page slug
  * @param filters - Optional additional filters
  */
-export async function getPageBySlug(slug: string, filters?: QueryFilters): Promise<Page | null> {
+export async function getPageBySlug(slug: string, filters?: QueryFilters, projectId?: string | null): Promise<Page | null> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -164,6 +193,7 @@ export async function getPageBySlug(slug: string, filters?: QueryFilters): Promi
       query = query.eq(column, value);
     });
   }
+  query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
 
   const { data, error } = await query.single();
 
@@ -203,7 +233,8 @@ async function transferIndexPage(
   client: any,
   newIndexPageId: string,
   pageFolderId: string | null,
-  isPublished: boolean = false
+  isPublished: boolean = false,
+  projectId?: string | null
 ): Promise<void> {
   // Find existing index page in the same folder WITH THE SAME is_published status
   // This prevents draft pages from being modified when creating published index pages
@@ -221,6 +252,7 @@ async function transferIndexPage(
   } else {
     query = query.eq('page_folder_id', pageFolderId);
   }
+  query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
 
   const { data: existingIndex, error } = await query.limit(1).single();
 
@@ -237,7 +269,7 @@ async function transferIndexPage(
     // If the existing index page already has a slug (shouldn't happen but might in edge cases),
     // we don't need to generate a new one - just unset is_index
     if (existingIndex.slug && existingIndex.slug.trim() !== '') {
-      const { error: updateError } = await client
+      let updateQuery = client
         .from('pages')
         .update({
           is_index: false,
@@ -245,6 +277,8 @@ async function transferIndexPage(
         })
         .eq('id', existingIndex.id)
         .eq('is_published', isPublished); // Must filter by is_published for composite key
+      updateQuery = (await applyProjectScopeToQuery(updateQuery, client, 'pages', projectId)).query;
+      const { error: updateError } = await updateQuery;
 
       if (updateError) {
         throw new Error(`Failed to transfer index from existing page: ${updateError.message}`);
@@ -258,28 +292,30 @@ async function transferIndexPage(
     let newSlug = generateSlugFromName(existingIndex.name);
 
     // Check if slug already exists (regardless of published state)
-    const { data: duplicateCheck } = await client
+    let duplicateQuery = client
       .from('pages')
       .select('id')
       .eq('slug', newSlug)
       .is('deleted_at', null)
       .neq('id', existingIndex.id)
-      .limit(1)
-      .single();
+      .limit(1);
+    duplicateQuery = (await applyProjectScopeToQuery(duplicateQuery, client, 'pages', projectId)).query;
+    const { data: duplicateCheck } = await duplicateQuery.single();
 
     // If slug exists, add timestamp
     if (duplicateCheck) {
       newSlug = generateSlugFromName(existingIndex.name, timestamp);
 
       // Double-check the timestamped slug doesn't exist either
-      const { data: timestampedDuplicateCheck } = await client
+      let timestampedDuplicateQuery = client
         .from('pages')
         .select('id')
         .eq('slug', newSlug)
         .is('deleted_at', null)
         .neq('id', existingIndex.id)
-        .limit(1)
-        .single();
+        .limit(1);
+      timestampedDuplicateQuery = (await applyProjectScopeToQuery(timestampedDuplicateQuery, client, 'pages', projectId)).query;
+      const { data: timestampedDuplicateCheck } = await timestampedDuplicateQuery.single();
 
       // If still duplicate, add random suffix
       if (timestampedDuplicateCheck) {
@@ -288,7 +324,7 @@ async function transferIndexPage(
     }
 
     // Update the old index page: unset is_index and set slug
-    const { error: updateError } = await client
+    let updateQuery = client
       .from('pages')
       .update({
         is_index: false,
@@ -297,6 +333,8 @@ async function transferIndexPage(
       })
       .eq('id', existingIndex.id)
       .eq('is_published', isPublished); // Must filter by is_published for composite key
+    updateQuery = (await applyProjectScopeToQuery(updateQuery, client, 'pages', projectId)).query;
+    const { error: updateError } = await updateQuery;
 
     if (updateError) {
       throw new Error(`Failed to transfer index from existing page: ${updateError.message}`);
@@ -317,7 +355,8 @@ async function validateIndexPageConstraints(
   client: any,
   pageData: { is_index?: boolean; slug: string; page_folder_id?: string | null; error_page?: number | null; is_dynamic?: boolean },
   excludePageId?: string,
-  currentPageData?: { is_index: boolean; page_folder_id: string | null; is_dynamic?: boolean }
+  currentPageData?: { is_index: boolean; page_folder_id: string | null; is_dynamic?: boolean },
+  projectId?: string | null
 ): Promise<void> {
   // Rule 1: Index pages must have empty slug
   if (pageData.is_index && pageData.slug.trim() !== '') {
@@ -354,6 +393,7 @@ async function validateIndexPageConstraints(
     if (excludePageId) {
       query = query.neq('id', excludePageId);
     }
+    query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
 
     const { data: otherRootIndexPages, error } = await query;
 
@@ -373,18 +413,26 @@ async function validateIndexPageConstraints(
  * @param pageData - Page data to create
  * @param additionalData - Optional additional fields (e.g., metadata, tags)
  */
-export async function createPage(pageData: CreatePageData, additionalData?: Record<string, any>): Promise<Page> {
+export async function createPage(pageData: CreatePageData, additionalData?: Record<string, any>, projectId?: string | null): Promise<Page> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'pages', projectId);
   const normalizedPageFolderId = normalizePageFolderId(pageData.page_folder_id);
   const normalizedPageData: CreatePageData = {
     ...pageData,
     page_folder_id: normalizedPageFolderId,
+    is_published: false,
   };
+  await assertPageFolderInProject(
+    client,
+    normalizedPageFolderId,
+    false,
+    projectId
+  );
 
   // Validate index page constraints (no current page data for new pages)
   await validateIndexPageConstraints(
@@ -397,7 +445,8 @@ export async function createPage(pageData: CreatePageData, additionalData?: Reco
       is_dynamic: normalizedPageData.is_dynamic || false,
     },
     undefined,
-    undefined
+    undefined,
+    projectId
   );
 
   // Calculate content hash for page metadata
@@ -418,6 +467,7 @@ export async function createPage(pageData: CreatePageData, additionalData?: Reco
     ...(additionalData || {}),
     ...pageDataWithoutHash,
     content_hash: contentHash,
+    ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
   };
 
   const { data, error } = await client
@@ -432,7 +482,7 @@ export async function createPage(pageData: CreatePageData, additionalData?: Reco
 
   // If setting as index page, transfer from existing index page
   if (normalizedPageData.is_index) {
-    await transferIndexPage(client, data.id, normalizedPageFolderId, normalizedPageData.is_published || false);
+    await transferIndexPage(client, data.id, normalizedPageFolderId, false, projectId);
   }
 
   return data;
@@ -441,7 +491,7 @@ export async function createPage(pageData: CreatePageData, additionalData?: Reco
 /**
  * Update page
  */
-export async function updatePage(id: string, updates: UpdatePageData): Promise<Page> {
+export async function updatePage(id: string, updates: UpdatePageData, projectId?: string | null): Promise<Page> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -450,7 +500,7 @@ export async function updatePage(id: string, updates: UpdatePageData): Promise<P
 
   // Get current draft page data to merge with updates for validation
   // Repository update functions always update draft versions (users edit drafts)
-  const currentPage = await getPageById(id, false);
+  const currentPage = await getPageById(id, false, projectId);
   if (!currentPage) {
     throw new Error('Page not found');
   }
@@ -462,6 +512,14 @@ export async function updatePage(id: string, updates: UpdatePageData): Promise<P
         page_folder_id: normalizePageFolderId(updates.page_folder_id),
       }
       : updates;
+  if (normalizedUpdates.page_folder_id !== undefined) {
+    await assertPageFolderInProject(
+      client,
+      normalizedUpdates.page_folder_id,
+      currentPage.is_published,
+      projectId
+    );
+  }
 
   // Merge current data with updates for validation
   const mergedData = {
@@ -478,7 +536,8 @@ export async function updatePage(id: string, updates: UpdatePageData): Promise<P
       client,
       mergedData,
       id,
-      { is_index: currentPage.is_index, page_folder_id: currentPage.page_folder_id }
+      { is_index: currentPage.is_index, page_folder_id: currentPage.page_folder_id },
+      projectId
     );
   }
 
@@ -491,19 +550,21 @@ export async function updatePage(id: string, updates: UpdatePageData): Promise<P
 
     // FIRST: Clean up any orphaned pages with empty slugs that are NOT index pages
     // This can happen if a previous operation failed mid-way
-    const { data: orphanedPages } = await client
+    let orphanedQuery = client
       .from('pages')
       .select('id, name, slug, is_index, page_folder_id')
       .eq('slug', '')
       .eq('is_index', false)
       .is('deleted_at', null);
+    orphanedQuery = (await applyProjectScopeToQuery(orphanedQuery, client, 'pages', projectId)).query;
+    const { data: orphanedPages } = await orphanedQuery;
 
     if (orphanedPages && orphanedPages.length > 0) {
       // Fix all orphaned pages in a single batch operation
-      await fixOrphanedPageSlugs(orphanedPages);
+      await fixOrphanedPageSlugs(orphanedPages, projectId);
     }
 
-    await transferIndexPage(client, id, folderIdForTransfer, currentPage.is_published);
+    await transferIndexPage(client, id, folderIdForTransfer, currentPage.is_published, projectId);
   }
 
   // Calculate new content hash based on merged data
@@ -519,7 +580,7 @@ export async function updatePage(id: string, updates: UpdatePageData): Promise<P
   const contentHash = generatePageMetadataHash(finalData);
 
   // Remove any content_hash from updates to prevent override, then add our calculated one
-  const { content_hash: _, ...updatesWithoutHash } = normalizedUpdates as any;
+  const { content_hash: _, is_published: _ignoredIsPublished, ...updatesWithoutHash } = normalizedUpdates as any;
 
   const updatesWithHash = {
     ...updatesWithoutHash,
@@ -527,13 +588,14 @@ export async function updatePage(id: string, updates: UpdatePageData): Promise<P
   };
 
   // Repository update functions always update DRAFT versions (users edit drafts)
-  const { data, error } = await client
+  let updateQuery = client
     .from('pages')
     .update(updatesWithHash)
     .eq('id', id)
-    .eq('is_published', false)
-    .select()
-    .single();
+    .eq('is_published', false);
+  updateQuery = (await applyProjectScopeToQuery(updateQuery, client, 'pages', projectId)).query;
+
+  const { data, error } = await updateQuery.select().single();
 
   if (error) {
     throw new Error(`Failed to update page: ${error.message}`);
@@ -546,7 +608,7 @@ export async function updatePage(id: string, updates: UpdatePageData): Promise<P
  * Batch update order for multiple pages
  * @param updates - Array of { id, order } objects
  */
-export async function batchUpdatePageOrder(updates: Array<{ id: string; order: number }>): Promise<void> {
+export async function batchUpdatePageOrder(updates: Array<{ id: string; order: number }>, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -554,14 +616,16 @@ export async function batchUpdatePageOrder(updates: Array<{ id: string; order: n
   }
 
   // Update each page's order (drafts only - users edit drafts)
-  const promises = updates.map(({ id, order }) =>
-    client
+  const promises = updates.map(async ({ id, order }) => {
+    let query = client
       .from('pages')
       .update({ order })
       .eq('id', id)
       .eq('is_published', false)
-      .is('deleted_at', null)
-  );
+      .is('deleted_at', null);
+    query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
+    return query;
+  });
 
   const results = await Promise.all(promises);
 
@@ -577,7 +641,7 @@ export async function batchUpdatePageOrder(updates: Array<{ id: string; order: n
  * Also deletes all page_layers (draft and published) for this page
  * After deletion, reorders remaining pages with the same parent_id
  */
-export async function deletePage(id: string): Promise<void> {
+export async function deletePage(id: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -588,7 +652,7 @@ export async function deletePage(id: string): Promise<void> {
 
   // Get the draft page before deletion to know its parent_id and depth
   // Repository delete functions always delete draft versions
-  const pageToDelete = await getPageById(id, false);
+  const pageToDelete = await getPageById(id, false, projectId);
   if (!pageToDelete) {
     throw new Error('Page not found');
   }
@@ -596,13 +660,15 @@ export async function deletePage(id: string): Promise<void> {
   // Prevent deleting the homepage
   if (isHomepage(pageToDelete)) {
     // Check if there are other index pages in root folder
-    const { data: otherRootIndexPages, error: checkError } = await client
+    let rootIndexQuery = client
       .from('pages')
       .select('id')
       .eq('is_index', true)
       .is('page_folder_id', null)
       .is('deleted_at', null)
       .neq('id', id);
+    rootIndexQuery = (await applyProjectScopeToQuery(rootIndexQuery, client, 'pages', projectId)).query;
+    const { data: otherRootIndexPages, error: checkError } = await rootIndexQuery;
 
     if (checkError) {
       throw new Error(`Failed to check for other root index pages: ${checkError.message}`);
@@ -614,24 +680,28 @@ export async function deletePage(id: string): Promise<void> {
   }
 
   // Soft-delete draft page layers (publishing service will handle published versions)
-  const { error: layersError } = await client
+  let layersQuery = client
     .from('page_layers')
     .update({ deleted_at: deletedAt })
     .eq('page_id', id)
     .eq('is_published', false)
     .is('deleted_at', null);
+  layersQuery = (await applyProjectScopeToQuery(layersQuery, client, 'page_layers', projectId)).query;
+  const { error: layersError } = await layersQuery;
 
   if (layersError) {
     throw new Error(`Failed to delete page layers: ${layersError.message}`);
   }
 
   // Soft-delete the draft page (publishing service will handle published version)
-  const { error } = await client
+  let deleteQuery = client
     .from('pages')
     .update({ deleted_at: deletedAt })
     .eq('id', id)
     .eq('is_published', false)
     .is('deleted_at', null);
+  deleteQuery = (await applyProjectScopeToQuery(deleteQuery, client, 'pages', projectId)).query;
+  const { error } = await deleteQuery;
 
   if (error) {
     throw new Error(`Failed to delete page: ${error.message}`);
@@ -639,7 +709,7 @@ export async function deletePage(id: string): Promise<void> {
 
   // Reorder remaining siblings (both pages and folders) with the same parent_id and depth
   try {
-    await reorderSiblings(pageToDelete.page_folder_id, pageToDelete.depth);
+    await reorderSiblings(pageToDelete.page_folder_id, pageToDelete.depth, projectId);
   } catch (reorderError) {
     console.error('[deletePage] Failed to reorder siblings:', reorderError);
     // Don't fail the deletion if reordering fails
@@ -694,7 +764,7 @@ export async function forceDeletePage(id: string): Promise<void> {
  * Get all draft pages
  * @param includeDeleted - If true, includes soft-deleted drafts
  */
-export async function getAllDraftPages(includeDeleted = false): Promise<Page[]> {
+export async function getAllDraftPages(includeDeleted = false, projectId?: string | null): Promise<Page[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -710,6 +780,7 @@ export async function getAllDraftPages(includeDeleted = false): Promise<Page[]> 
   if (!includeDeleted) {
     query = query.is('deleted_at', null);
   }
+  query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
 
   const { data, error } = await query.order('created_at', { ascending: false });
 
@@ -753,17 +824,18 @@ export async function getPublishedPagesByIds(ids: string[]): Promise<Page[]> {
  * Get all pages in a specific folder
  * @param folderId - Folder ID (null for root/unorganized pages)
  */
-export async function getPagesByFolder(folderId: string | null): Promise<Page[]> {
+export async function getPagesByFolder(folderId: string | null, projectId?: string | null): Promise<Page[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const query = client
+  let query = client
     .from('pages')
     .select('*')
     .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
 
   // Handle null vs non-null folder_id
   const finalQuery = folderId === null
@@ -786,7 +858,7 @@ export async function getPagesByFolder(folderId: string | null): Promise<Page[]>
  * @param pageId - ID of the page to duplicate
  * @returns Promise resolving to the new duplicated page
  */
-export async function duplicatePage(pageId: string): Promise<Page> {
+export async function duplicatePage(pageId: string, projectId?: string | null): Promise<Page> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -794,7 +866,7 @@ export async function duplicatePage(pageId: string): Promise<Page> {
   }
 
   // Get the original draft page
-  const originalPage = await getPageById(pageId, false);
+  const originalPage = await getPageById(pageId, false, projectId);
   if (!originalPage) {
     throw new Error('Page not found');
   }
@@ -826,6 +898,7 @@ export async function duplicatePage(pageId: string): Promise<Page> {
   } else {
     query = query.eq('page_folder_id', originalPage.page_folder_id);
   }
+  query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
 
   const { data: existingPages } = await query;
 
@@ -846,9 +919,10 @@ export async function duplicatePage(pageId: string): Promise<Page> {
   const newOrder = originalPage.order + 1;
 
   // Increment order for all siblings (pages and folders) that come after the original page
-  await incrementSiblingOrders(newOrder, originalPage.depth, originalPage.page_folder_id);
+  await incrementSiblingOrders(newOrder, originalPage.depth, originalPage.page_folder_id, projectId);
 
   // Create the new page
+  const hasPageProjectScope = await resolveProjectScopeForWrite(client, 'pages', projectId);
   const { data: newPage, error: pageError } = await client
     .from('pages')
     .insert({
@@ -862,6 +936,7 @@ export async function duplicatePage(pageId: string): Promise<Page> {
       is_dynamic: originalPage.is_dynamic,
       error_page: originalPage.error_page,
       settings: originalPage.settings || {},
+      ...(hasPageProjectScope && projectId ? { project_id: projectId } : {}),
     })
     .select()
     .single();
@@ -871,24 +946,27 @@ export async function duplicatePage(pageId: string): Promise<Page> {
   }
 
   // Get the original page's draft layers
-  const { data: originalLayers, error: layersError } = await client
+  let originalLayersQuery = client
     .from('page_layers')
     .select('*')
     .eq('page_id', pageId)
     .eq('is_published', false)
     .is('deleted_at', null)
     .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
+    .limit(1);
+  originalLayersQuery = (await applyProjectScopeToQuery(originalLayersQuery, client, 'page_layers', projectId)).query;
+  const { data: originalLayers, error: layersError } = await originalLayersQuery.single();
 
   // If there are draft layers, duplicate them for the new page
   if (!layersError && originalLayers) {
+    const hasLayerProjectScope = await resolveProjectScopeForWrite(client, 'page_layers', projectId);
     const { error: newLayersError } = await client
       .from('page_layers')
       .insert({
         page_id: newPage.id,
         layers: originalLayers.layers,
         is_published: false,
+        ...(hasLayerProjectScope && projectId ? { project_id: projectId } : {}),
       });
 
     if (newLayersError) {
@@ -905,7 +983,7 @@ export async function duplicatePage(pageId: string): Promise<Page> {
  * Get count of unpublished pages efficiently.
  * Uses 2 bulk queries instead of N+1 per-page lookups.
  */
-export async function getUnpublishedPagesCount(): Promise<number> {
+export async function getUnpublishedPagesCount(projectId?: string | null): Promise<number> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -913,21 +991,27 @@ export async function getUnpublishedPagesCount(): Promise<number> {
   }
 
   // 2 bulk queries: all draft pages with layers + all published pages with layers
+  let draftQuery = client
+    .from('pages')
+    .select('id, content_hash, page_folder_id, page_layers!inner(content_hash)')
+    .eq('is_published', false)
+    .eq('page_layers.is_published', false)
+    .is('deleted_at', null)
+    .is('page_layers.deleted_at', null);
+  draftQuery = (await applyProjectScopeToQuery(draftQuery, client, 'pages', projectId)).query;
+
+  let publishedQuery = client
+    .from('pages')
+    .select('id, content_hash, page_folder_id, page_layers!inner(content_hash)')
+    .eq('is_published', true)
+    .eq('page_layers.is_published', true)
+    .is('deleted_at', null)
+    .is('page_layers.deleted_at', null);
+  publishedQuery = (await applyProjectScopeToQuery(publishedQuery, client, 'pages', projectId)).query;
+
   const [draftResult, publishedResult] = await Promise.all([
-    client
-      .from('pages')
-      .select('id, content_hash, page_folder_id, page_layers!inner(content_hash)')
-      .eq('is_published', false)
-      .eq('page_layers.is_published', false)
-      .is('deleted_at', null)
-      .is('page_layers.deleted_at', null),
-    client
-      .from('pages')
-      .select('id, content_hash, page_folder_id, page_layers!inner(content_hash)')
-      .eq('is_published', true)
-      .eq('page_layers.is_published', true)
-      .is('deleted_at', null)
-      .is('page_layers.deleted_at', null),
+    draftQuery,
+    publishedQuery,
   ]);
 
   if (draftResult.error) {
@@ -985,7 +1069,7 @@ export async function getUnpublishedPagesCount(): Promise<number> {
  *
  * Uses content_hash for efficient change detection
  */
-export async function getUnpublishedPages(): Promise<Page[]> {
+export async function getUnpublishedPages(projectId?: string | null): Promise<Page[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -993,7 +1077,7 @@ export async function getUnpublishedPages(): Promise<Page[]> {
   }
 
   // Get all draft pages with their layers' content_hash in a single efficient query
-  const { data: draftPagesWithLayers, error } = await client
+  let draftQuery = client
     .from('pages')
     .select(`
       *,
@@ -1002,8 +1086,10 @@ export async function getUnpublishedPages(): Promise<Page[]> {
     .eq('is_published', false)
     .eq('page_layers.is_published', false)
     .is('deleted_at', null)
-    .is('page_layers.deleted_at', null)
-    .order('created_at', { ascending: false });
+    .is('page_layers.deleted_at', null);
+  draftQuery = (await applyProjectScopeToQuery(draftQuery, client, 'pages', projectId)).query;
+
+  const { data: draftPagesWithLayers, error } = await draftQuery.order('created_at', { ascending: false });
 
   if (error) {
     throw new Error(`Failed to fetch draft pages: ${error.message}`);
@@ -1018,7 +1104,7 @@ export async function getUnpublishedPages(): Promise<Page[]> {
   // Check each draft page
   for (const draftPage of draftPagesWithLayers) {
     // Check if a published version exists
-    const { data: publishedPageWithLayers } = await client
+    let publishedQuery = client
       .from('pages')
       .select(`
         id,
@@ -1030,8 +1116,9 @@ export async function getUnpublishedPages(): Promise<Page[]> {
       .eq('is_published', true)
       .eq('page_layers.is_published', true)
       .is('deleted_at', null)
-      .is('page_layers.deleted_at', null)
-      .single();
+      .is('page_layers.deleted_at', null);
+    publishedQuery = (await applyProjectScopeToQuery(publishedQuery, client, 'pages', projectId)).query;
+    const { data: publishedPageWithLayers } = await publishedQuery.single();
 
     // If no published version exists, needs first-time publishing
     if (!publishedPageWithLayers) {

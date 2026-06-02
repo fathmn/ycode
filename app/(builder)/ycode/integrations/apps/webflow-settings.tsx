@@ -416,8 +416,7 @@ export default function WebflowSettings({
             </div>
 
             <FieldDescription>
-              Pick a site to import its CMS collections, items and assets into Ycode. Items
-              that are live in Webflow will be auto-published in Ycode.
+              Pick a site to import its CMS collections, items and assets into Studio. Live content from Webflow will be published automatically in Studio.
             </FieldDescription>
 
             <Field>
@@ -540,7 +539,7 @@ export default function WebflowSettings({
         open={showDisconnect}
         onOpenChange={setShowDisconnect}
         title="Disconnect Webflow?"
-        description="This removes your token and all import records. The Ycode collections created by past migrations will remain."
+        description="This removes your token and all import records. Studio collections created by past migrations will remain."
         confirmLabel="Disconnect"
         cancelLabel="Cancel"
         confirmVariant="destructive"
@@ -553,7 +552,7 @@ export default function WebflowSettings({
         open={!!importToRemove}
         onOpenChange={(open: boolean) => { if (!open) setImportToRemove(null); }}
         title="Remove import?"
-        description={`Removes the link to "${importToRemove?.siteName}". Re-sync won't be possible, but the Ycode collections themselves will stay.`}
+        description={`Removes the link to "${importToRemove?.siteName}". Re-sync won't be possible, but the Studio collections themselves will stay.`}
         confirmLabel="Remove"
         cancelLabel="Cancel"
         confirmVariant="destructive"

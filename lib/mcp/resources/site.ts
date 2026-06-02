@@ -6,8 +6,16 @@ import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepos
 import { getAllColorVariables } from '@/lib/repositories/colorVariableRepository';
 import { getAllFonts } from '@/lib/repositories/fontRepository';
 import { getAllLocales } from '@/lib/repositories/localeRepository';
+import { resolveStudioProjectId } from '@/lib/project-scope';
+import type { McpProjectContext } from '@/lib/mcp/project-context';
 
-export function registerSiteResources(server: McpServer) {
+async function resolveMcpResourceProjectId(context: McpProjectContext): Promise<string | null> {
+  if (context.projectId) return context.projectId;
+  const projectLookup = process.env.STUDIO_MCP_PROJECT || process.env.STUDIO_PROJECT;
+  return projectLookup ? resolveStudioProjectId(projectLookup) : null;
+}
+
+export function registerSiteResources(server: McpServer, projectContext: McpProjectContext = {}) {
   server.resource(
     'site-pages',
     'ycode://site/pages',
@@ -16,9 +24,10 @@ export function registerSiteResources(server: McpServer) {
       mimeType: 'application/json',
     },
     async () => {
+      const projectId = await resolveMcpResourceProjectId(projectContext);
       const [pages, folders] = await Promise.all([
-        getAllPages(),
-        getAllPageFolders(),
+        getAllPages(undefined, projectId),
+        getAllPageFolders(undefined, projectId),
       ]);
 
       return {

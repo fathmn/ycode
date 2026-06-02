@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 
 import { useState, useEffect, useRef } from 'react';
 import {
@@ -71,7 +71,7 @@ export default function EmailSettingsPage() {
       try {
         setIsLoading(true);
         setError(null);
-        const response = await novumFetch('/ycode/api/settings/email');
+        const response = await studioFetch('/ycode/api/settings/email');
         if (response.ok) {
           const result = await response.json();
           if (result.data) {
@@ -148,7 +148,7 @@ export default function EmailSettingsPage() {
         enabled: selectedMode === 'custom',
       };
 
-      const response = await novumFetch('/ycode/api/settings/email', {
+      const response = await studioFetch('/ycode/api/settings/email', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ value: savePayload }),
@@ -176,7 +176,7 @@ export default function EmailSettingsPage() {
       setError(null);
       setTestResult(null);
 
-      const response = await novumFetch('/ycode/api/settings/email/test', {
+      const response = await studioFetch('/ycode/api/settings/email/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),
@@ -235,13 +235,13 @@ export default function EmailSettingsPage() {
             </div>
             <div className="flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-muted-foreground">Ycode</span>
+                <span className="text-sm font-medium text-muted-foreground">Studio</span>
                 <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                   Only available on Cloud
                 </span>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Managed email delivery powered by Ycode — no configuration required
+                Managed email delivery powered by Studio — no configuration required
               </p>
             </div>
           </div>

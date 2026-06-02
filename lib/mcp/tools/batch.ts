@@ -18,6 +18,7 @@ import {
 import type { RichTextBlock } from '@/lib/mcp/utils';
 import { broadcastLayersChanged } from '@/lib/mcp/broadcast';
 import { designSchema } from './shared-schemas';
+import type { McpProjectContext } from '@/lib/mcp/project-context';
 
 const templateEnum = z.enum(
   Object.keys(ELEMENT_TEMPLATES) as [string, ...string[]],
@@ -96,7 +97,7 @@ function resolveId(id: string, refMap: Map<string, string>): string {
   return refMap.get(id) || id;
 }
 
-export function registerBatchTools(server: McpServer) {
+export function registerBatchTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
     'batch_operations',
     `Execute multiple layer operations in a single call. Fetches the layer tree
@@ -118,7 +119,7 @@ EXAMPLE:
       operations: z.array(operationSchema).min(1).max(50).describe('Array of operations to execute in order'),
     },
     async ({ page_id, operations }) => {
-      const pageLayers = await getDraftLayers(page_id);
+      const pageLayers = await getDraftLayers(page_id, projectContext.projectId);
       let layers = (pageLayers?.layers as Layer[]) || [];
 
       const refMap = new Map<string, string>();
@@ -256,7 +257,7 @@ EXAMPLE:
         return { content: [{ type: 'text' as const, text: JSON.stringify({ message: 'All operations failed', results }, null, 2) }], isError: true };
       }
 
-      await upsertDraftLayers(page_id, layers);
+      await upsertDraftLayers(page_id, layers, undefined, projectContext.projectId);
       broadcastLayersChanged(page_id, layers).catch(() => {});
 
       const refEntries = Object.fromEntries(refMap);

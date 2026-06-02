@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { randomUUID } from 'crypto';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { validateToken } from '@/lib/repositories/mcpTokenRepository';
+import { validateToken, type McpToken } from '@/lib/repositories/mcpTokenRepository';
 import { createMcpServer } from '@/lib/mcp/server';
 
 export const dynamic = 'force-dynamic';
@@ -11,6 +11,8 @@ export const revalidate = 0;
 interface McpSession {
   transport: WebStandardStreamableHTTPServerTransport;
   server: McpServer;
+  tokenId: string;
+  projectId: string | null;
   lastActivity: number;
 }
 
@@ -28,12 +30,11 @@ function cleanupStaleSessions() {
   }
 }
 
-async function authenticateToken(token: string): Promise<boolean> {
+async function authenticateToken(token: string): Promise<McpToken | null> {
   try {
-    const result = await validateToken(token);
-    return result !== null;
+    return validateToken(token);
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -51,13 +52,19 @@ function addCorsHeaders(response: Response): Response {
   });
 }
 
-function createSessionTransport() {
-  const server = createMcpServer();
+function createSessionTransport(token: McpToken) {
+  const server = createMcpServer({ projectId: token.project_id || null });
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     enableJsonResponse: true,
     onsessioninitialized: (newSessionId) => {
-      sessions.set(newSessionId, { transport, server, lastActivity: Date.now() });
+      sessions.set(newSessionId, {
+        transport,
+        server,
+        tokenId: token.id,
+        projectId: token.project_id || null,
+        lastActivity: Date.now(),
+      });
     },
   });
 
@@ -136,12 +143,22 @@ function ensureAcceptHeader(request: Request): Request {
   });
 }
 
-async function handleMcpRequest(request: Request): Promise<Response> {
+async function handleMcpRequest(request: Request, token: McpToken): Promise<Response> {
   const normalized = ensureAcceptHeader(request);
   const sessionId = normalized.headers.get('mcp-session-id');
 
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
+    if (session.tokenId !== token.id || session.projectId !== (token.project_id || null)) {
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        error: { code: -32001, message: 'MCP session does not belong to this token.' },
+        id: null,
+      }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
     session.lastActivity = Date.now();
     return session.transport.handleRequest(normalized);
   }
@@ -160,7 +177,7 @@ async function handleMcpRequest(request: Request): Promise<Response> {
   const body = await normalized.json();
   const isInit = !Array.isArray(body) && body.method === 'initialize';
 
-  const { server, transport } = createSessionTransport();
+  const { server, transport } = createSessionTransport(token);
   await server.connect(transport);
 
   if (isInit) {
@@ -193,8 +210,8 @@ export async function POST(
   const { token } = await params;
 
   try {
-    const isValid = await authenticateToken(token);
-    if (!isValid) {
+    const mcpToken = await authenticateToken(token);
+    if (!mcpToken) {
       return new Response(JSON.stringify({ error: 'Invalid MCP token' }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' },
@@ -202,7 +219,7 @@ export async function POST(
     }
 
     cleanupStaleSessions();
-    const response = await handleMcpRequest(request);
+    const response = await handleMcpRequest(request, mcpToken);
     return addCorsHeaders(response);
   } catch (error) {
     console.error('[MCP POST] Error:', error);
@@ -224,8 +241,8 @@ export async function GET(
   const { token } = await params;
 
   try {
-    const isValid = await authenticateToken(token);
-    if (!isValid) {
+    const mcpToken = await authenticateToken(token);
+    if (!mcpToken) {
       return new Response(JSON.stringify({ error: 'Invalid MCP token' }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' },
@@ -245,6 +262,16 @@ export async function GET(
     }
 
     const session = sessions.get(sessionId)!;
+    if (session.tokenId !== mcpToken.id || session.projectId !== (mcpToken.project_id || null)) {
+      return addCorsHeaders(new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        error: { code: -32001, message: 'MCP session does not belong to this token.' },
+        id: null,
+      }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    }
     session.lastActivity = Date.now();
     const response = await session.transport.handleRequest(request);
     return addCorsHeaders(response);

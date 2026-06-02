@@ -3,7 +3,7 @@ import { noCache } from '@/lib/api-response';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { extractSupabaseAccessToken } from '@/lib/supabase-cookie-token';
 import { findDuplicateStudioProjectPathSlugs, studioProjectPathSlug } from '@/lib/studio-project-path';
-import { getConfiguredSiteAdminRoleForUser } from '@/lib/novum-site-admin';
+import { getConfiguredSiteAdminRoleForUser } from '@/lib/studio-site-admin';
 import { type StudioRole, normalizeStudioRole } from '@/lib/studio-roles';
 
 export const dynamic = 'force-dynamic';
@@ -68,10 +68,10 @@ export async function GET(request: NextRequest) {
   }
 
   const { data, error } = await client
-    .from('novum_project_memberships')
+    .from('studio_project_memberships')
     .select(`
       role,
-      project:novum_projects (
+      project:studio_projects (
         id,
         slug,
         name,
@@ -114,7 +114,7 @@ export async function GET(request: NextRequest) {
 
   if (siteAdminRole) {
     let allProjectsQuery = client
-      .from('novum_projects')
+      .from('studio_projects')
       .select('id, slug, name, primary_domain, metadata, status, ycode_site_key')
       .eq('status', 'active');
     if (shouldScopeStudioProjectListToCurrentSiteKey()) {
@@ -133,7 +133,7 @@ export async function GET(request: NextRequest) {
     }));
   } else {
     let allActiveProjectsQuery = client
-      .from('novum_projects')
+      .from('studio_projects')
       .select('id, slug, metadata')
       .eq('status', 'active');
     if (shouldScopeStudioProjectListToCurrentSiteKey()) {
@@ -155,7 +155,7 @@ export async function GET(request: NextRequest) {
     return noCache(
       {
         error: 'Duplicate Studio project path aliases detected',
-        code: 'NOVUM_DUPLICATE_STUDIO_PROJECT_PATH',
+        code: 'STUDIO_DUPLICATE_STUDIO_PROJECT_PATH',
         ...(siteAdminRole ? { pathSlugs: duplicatePathSlugs } : {}),
       },
       409

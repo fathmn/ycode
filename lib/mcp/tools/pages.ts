@@ -4,15 +4,21 @@ import { getAllPages, getPageById, getPagesByFolder, createPage, updatePage, del
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { upsertDraftLayers } from '@/lib/repositories/pageLayersRepository';
 import { broadcastPageCreated, broadcastPageUpdated, broadcastPageDeleted, broadcastLayersChanged } from '@/lib/mcp/broadcast';
+import { resolveMcpProjectId, type McpProjectContext } from '@/lib/mcp/project-context';
 
-export function registerPageTools(server: McpServer) {
+const projectSchema = z.string().optional().describe('Optional Studio project slug, studio path slug, or domain for project-scoped page data');
+
+export function registerPageTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
     'list_pages',
     'List all pages in the website with their IDs, names, slugs, and folder structure',
-    {},
-    async () => {
-      const pages = await getAllPages();
-      const folders = await getAllPageFolders();
+    {
+      project: projectSchema,
+    },
+    async ({ project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      const pages = await getAllPages(undefined, projectId);
+      const folders = await getAllPageFolders(undefined, projectId);
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({ pages, folders }, null, 2) }],
       };
@@ -22,9 +28,13 @@ export function registerPageTools(server: McpServer) {
   server.tool(
     'get_page',
     'Get a single page by ID, including its settings and metadata',
-    { page_id: z.string().describe('The page ID') },
-    async ({ page_id }) => {
-      const page = await getPageById(page_id);
+    {
+      page_id: z.string().describe('The page ID'),
+      project: projectSchema,
+    },
+    async ({ page_id, project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      const page = await getPageById(page_id, false, projectId);
       if (!page) {
         return { content: [{ type: 'text' as const, text: `Error: Page "${page_id}" not found.` }], isError: true };
       }
@@ -41,13 +51,15 @@ export function registerPageTools(server: McpServer) {
       page_folder_id: z.string().nullable().optional().describe('Parent folder ID, or null for root'),
       is_index: z.boolean().optional().describe('Set to true to make this the homepage'),
       is_dynamic: z.boolean().optional().describe('Set to true for CMS dynamic pages'),
+      project: projectSchema,
     },
     async (args) => {
+      const projectId = await resolveMcpProjectId(projectContext, args.project);
       const isIndex = args.is_index || false;
       const slug = isIndex ? '' : (args.slug || args.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
       const folderId = args.page_folder_id ?? null;
 
-      const siblings = await getPagesByFolder(folderId);
+      const siblings = await getPagesByFolder(folderId, projectId);
       const maxOrder = siblings.reduce((max, p) => Math.max(max, p.order ?? 0), -1);
 
       const page = await createPage({
@@ -61,7 +73,7 @@ export function registerPageTools(server: McpServer) {
         is_dynamic: args.is_dynamic || false,
         error_page: null,
         settings: {},
-      });
+      }, undefined, projectId);
 
       const initialLayers = [{
         id: 'body',
@@ -69,7 +81,7 @@ export function registerPageTools(server: McpServer) {
         classes: '',
         children: [],
       }];
-      await upsertDraftLayers(page.id, initialLayers);
+      await upsertDraftLayers(page.id, initialLayers, undefined, projectId);
 
       broadcastPageCreated(page).catch(() => {});
       broadcastLayersChanged(page.id, initialLayers).catch(() => {});
@@ -86,9 +98,11 @@ export function registerPageTools(server: McpServer) {
       name: z.string().optional().describe('New page title'),
       slug: z.string().optional().describe('New URL slug'),
       page_folder_id: z.string().nullable().optional().describe('Move to folder ID, or null for root'),
+      project: projectSchema,
     },
-    async ({ page_id, ...data }) => {
-      const page = await updatePage(page_id, data);
+    async ({ page_id, project, ...data }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      const page = await updatePage(page_id, data, projectId);
       broadcastPageUpdated(page_id, data).catch(() => {});
       return { content: [{ type: 'text' as const, text: JSON.stringify(page, null, 2) }] };
     },
@@ -117,9 +131,11 @@ Password protection: Enable/disable with a password.`,
         enabled: z.boolean().describe('Enable or disable password protection'),
         password: z.string().optional().describe('Password for accessing the page'),
       }).optional(),
+      project: projectSchema,
     },
-    async ({ page_id, seo, custom_code, auth }) => {
-      const existing = await getPageById(page_id);
+    async ({ page_id, seo, custom_code, auth, project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      const existing = await getPageById(page_id, false, projectId);
       if (!existing) {
         return { content: [{ type: 'text' as const, text: `Error: Page "${page_id}" not found.` }], isError: true };
       }
@@ -151,7 +167,7 @@ Password protection: Enable/disable with a password.`,
         };
       }
 
-      const page = await updatePage(page_id, { settings });
+      const page = await updatePage(page_id, { settings }, projectId);
       broadcastPageUpdated(page_id, { settings }).catch(() => {});
       return { content: [{ type: 'text' as const, text: JSON.stringify({ message: 'Updated page settings', settings: page.settings }, null, 2) }] };
     },
@@ -160,9 +176,13 @@ Password protection: Enable/disable with a password.`,
   server.tool(
     'duplicate_page',
     'Create a copy of a page including all its layers.',
-    { page_id: z.string().describe('The page ID to duplicate') },
-    async ({ page_id }) => {
-      const page = await duplicatePage(page_id);
+    {
+      page_id: z.string().describe('The page ID to duplicate'),
+      project: projectSchema,
+    },
+    async ({ page_id, project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      const page = await duplicatePage(page_id, projectId);
       broadcastPageCreated(page).catch(() => {});
       return { content: [{ type: 'text' as const, text: JSON.stringify({ message: `Duplicated page as "${page.name}"`, page }, null, 2) }] };
     },
@@ -171,9 +191,13 @@ Password protection: Enable/disable with a password.`,
   server.tool(
     'delete_page',
     'Permanently delete a page and all its layers',
-    { page_id: z.string().describe('The page ID to delete') },
-    async ({ page_id }) => {
-      await deletePage(page_id);
+    {
+      page_id: z.string().describe('The page ID to delete'),
+      project: projectSchema,
+    },
+    async ({ page_id, project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      await deletePage(page_id, projectId);
       broadcastPageDeleted(page_id).catch(() => {});
       return { content: [{ type: 'text' as const, text: `Page ${page_id} deleted successfully.` }] };
     },

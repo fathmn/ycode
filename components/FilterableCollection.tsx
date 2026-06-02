@@ -20,6 +20,7 @@ interface FilterableCollectionProps {
   collectionLayerClasses?: string[];
   collectionLayerTag?: string;
   isPublished?: boolean;
+  previewProjectParam?: string | null;
 }
 
 const FC_FILTERED_ATTR = 'data-fc-filtered';
@@ -39,6 +40,7 @@ export default function FilterableCollection({
   collectionLayerClasses,
   collectionLayerTag,
   isPublished = true,
+  previewProjectParam,
 }: FilterableCollectionProps) {
   const markerRef = useRef<HTMLSpanElement>(null);
   const ssrChildrenRef = useRef<Element[]>([]);
@@ -522,9 +524,14 @@ export default function FilterableCollection({
     abortRef.current = controller;
     inFlightRequestKeyRef.current = requestKey;
 
+    const headers = new Headers({ 'Content-Type': 'application/json' });
+    if (previewProjectParam) {
+      headers.set('x-studio-project-slug', previewProjectParam);
+    }
+
     fetch(`/ycode/api/collections/${collectionId}/items/filter`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         layerTemplate,
         collectionLayerId,
@@ -586,7 +593,7 @@ export default function FilterableCollection({
           abortRef.current = null;
         }
       });
-  }, [collectionId, collectionLayerId, layerTemplate, effectiveSortBy, effectiveSortOrder, limit, paginationMode, updateEmptyStateElements, injectFilteredHTML, collectionLayerClasses, collectionLayerTag, isPublished]);
+  }, [collectionId, collectionLayerId, layerTemplate, effectiveSortBy, effectiveSortOrder, limit, paginationMode, updateEmptyStateElements, injectFilteredHTML, collectionLayerClasses, collectionLayerTag, isPublished, previewProjectParam]);
 
   const fetchFilteredRef = useRef(fetchFiltered);
   useEffect(() => { fetchFilteredRef.current = fetchFiltered; }, [fetchFiltered]);

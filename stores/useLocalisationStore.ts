@@ -6,7 +6,7 @@
  */
 
 import { create } from 'zustand';
-import { localisationApi, novumFetch } from '@/lib/api';
+import { localisationApi, studioFetch } from '@/lib/api';
 import { getTranslatableKey } from '@/lib/localisation-utils';
 import type { Locale, CreateLocaleData, UpdateLocaleData, Translation, CreateTranslationData, UpdateTranslationData } from '@/types';
 
@@ -769,7 +769,7 @@ export const useLocalisationStore = create<LocalisationStore>((set, get) => ({
     set({ isLoading: { ...initialLoadingState, createTranslation: true }, error: null });
 
     try {
-      const response = await novumFetch('/ycode/api/translations/bulk', {
+      const response = await studioFetch('/ycode/api/translations/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ translations: translationsData }),

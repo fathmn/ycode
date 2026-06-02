@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { duplicatePage } from '@/lib/repositories/pageRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -17,8 +18,15 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
+    const roleCheck = await requireStudioProjectRole(request, [
+      'studio_admin',
+      'studio_developer',
+      'customer_owner',
+      'customer_editor',
+    ]);
+    if (!roleCheck.ok) return roleCheck.response;
 
-    const newPage = await duplicatePage(id);
+    const newPage = await duplicatePage(id, roleCheck.context.project.id);
 
     return noCache(
       { data: newPage },

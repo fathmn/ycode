@@ -5,7 +5,7 @@ import {
   deleteFormSubmission,
 } from '@/lib/repositories/formSubmissionRepository';
 import { noCache } from '@/lib/api-response';
-import { requireNovumProjectRole, type NovumRole } from '@/lib/novum-platform';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -15,7 +15,7 @@ interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
-const FORM_READ_ROLES: NovumRole[] = [
+const FORM_READ_ROLES: StudioProjectRole[] = [
   'studio_admin',
   'studio_developer',
   'customer_owner',
@@ -23,15 +23,15 @@ const FORM_READ_ROLES: NovumRole[] = [
   'customer_viewer',
 ];
 
-const FORM_WRITE_ROLES: NovumRole[] = [
+const FORM_WRITE_ROLES: StudioProjectRole[] = [
   'studio_admin',
   'studio_developer',
   'customer_owner',
   'customer_editor',
 ];
 
-async function requireFormProjectId(request: NextRequest, roles: NovumRole[]) {
-  const roleCheck = await requireNovumProjectRole(request, roles);
+async function requireFormProjectId(request: NextRequest, roles: StudioProjectRole[]) {
+  const roleCheck = await requireStudioProjectRole(request, roles);
   if (!roleCheck.ok) return roleCheck;
   return { ok: true as const, projectId: roleCheck.context.project.id };
 }

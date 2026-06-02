@@ -14,7 +14,7 @@ import { getItemsByCollectionId } from '@/lib/repositories/collectionItemReposit
 import { publishAssets, getUnpublishedAssets, hardDeleteSoftDeletedAssets } from '@/lib/repositories/assetRepository';
 import { publishAssetFolders, getUnpublishedAssetFolders, hardDeleteSoftDeletedAssetFolders } from '@/lib/repositories/assetFolderRepository';
 import { publishFonts } from '@/lib/repositories/fontRepository';
-import { triggerNovumProductionDeployment, verifyNovumPublishGate, writeNovumAuditLog } from '@/lib/novum-platform';
+import { triggerStudioProductionDeployment, verifyStudioPublishGate, writeStudioAuditLog } from '@/lib/studio-platform';
 import type { Setting, PublishStats, PublishTableStats } from '@/types';
 
 // Disable caching for this route
@@ -123,8 +123,8 @@ export async function POST(request: NextRequest) {
       publishLocales = true,
     } = body;
 
-    const novumGate = await verifyNovumPublishGate(request);
-    if (!novumGate.ok) return novumGate.response;
+    const studioGate = await verifyStudioPublishGate(request);
+    if (!studioGate.ok) return studioGate.response;
 
     const publishedAt = new Date().toISOString();
 
@@ -429,7 +429,7 @@ export async function POST(request: NextRequest) {
     {
       const stepStart = performance.now();
       try {
-        result.changes.css = await publishCSS();
+        result.changes.css = await publishCSS(studioGate.context.project.id);
         stats.tables.css.added = result.changes.css ? 1 : 0;
       } catch {
         // Don't fail the entire publish if CSS fails
@@ -446,7 +446,7 @@ export async function POST(request: NextRequest) {
 
     // Save published timestamp to settings
     try {
-      result.published_at_setting = await savePublishedAt(publishedAt);
+      result.published_at_setting = await savePublishedAt(publishedAt, studioGate.context.project.id);
     } catch {
       // Silently handle - non-fatal
     }
@@ -465,25 +465,25 @@ export async function POST(request: NextRequest) {
       result.changes.locales +
       result.changes.translations;
 
-    result.deployment = await triggerNovumProductionDeployment({
-      client: novumGate.context.client,
-      project: novumGate.context.project,
+    result.deployment = await triggerStudioProductionDeployment({
+      client: studioGate.context.client,
+      project: studioGate.context.project,
     });
 
-    await writeNovumAuditLog({
+    await writeStudioAuditLog({
       request,
       action: 'site.publish',
       entityType: 'site',
-      entityId: novumGate.context.project.slug,
+      entityId: studioGate.context.project.slug,
       metadata: {
         publishAll: isPublishingAll,
         changes: result.changes,
         totalPublished,
         durationMs: stats.totalDurationMs,
-        projectSlug: novumGate.context.project.slug,
-        actorRole: novumGate.context.role,
-        draftHash: novumGate.draftHash,
-        customCode: novumGate.customCode,
+        projectSlug: studioGate.context.project.slug,
+        actorRole: studioGate.context.role,
+        draftHash: studioGate.draftHash,
+        customCode: studioGate.customCode,
         deployment: result.deployment,
       },
     });

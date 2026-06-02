@@ -5,6 +5,7 @@ import { getAllPages } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { renderCollectionItemsToHtml, loadTranslationsForLocale } from '@/lib/page-fetcher';
 import { noCache } from '@/lib/api-response';
+import { resolvePublicContentRequestProjectScope } from '@/lib/request-project-scope';
 import type { Layer } from '@/types';
 
 // Disable caching for this route
@@ -29,6 +30,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const projectScope = await resolvePublicContentRequestProjectScope(request);
+    const projectId = projectScope.projectId;
     const { id } = await params;
     const collectionId = id;
 
@@ -40,11 +43,14 @@ export async function POST(
       itemIds,
       layerTemplate,
       collectionLayerId,
-      published = true,
+      published: requestedPublished = true,
       localeCode,
       collectionLayerClasses,
       collectionLayerTag,
     } = body;
+    const published = projectScope.source === 'authenticated-preview'
+      ? requestedPublished !== false
+      : true;
 
     // Validate required fields
     if (!layerTemplate || !Array.isArray(layerTemplate)) {
@@ -79,14 +85,15 @@ export async function POST(
     const { items, total } = await getItemsWithValues(
       collectionId,
       published,
-      filters
+      filters,
+      projectId
     );
 
     // Build collection item slugs from the items we're rendering
     const collectionItemSlugs: Record<string, string> = {};
 
     // Get the slug field for this collection
-    const collectionFields = await getFieldsByCollectionId(collectionId, published, { excludeComputed: true });
+    const collectionFields = await getFieldsByCollectionId(collectionId, published, { excludeComputed: true }, projectId);
     const slugField = collectionFields.find(f => f.key === 'slug');
 
     // Extract slug values from items
@@ -100,15 +107,15 @@ export async function POST(
 
     // Fetch pages and folders for link resolution using repository functions
     const [pages, folders] = await Promise.all([
-      getAllPages(),
-      getAllPageFolders(),
+      getAllPages(undefined, projectId),
+      getAllPageFolders(undefined, projectId),
     ]);
 
     // Load locale and translations if locale code is provided
     let locale = null;
     let translations: Record<string, any> | undefined;
     if (localeCode) {
-      const localeData = await loadTranslationsForLocale(localeCode, published);
+      const localeData = await loadTranslationsForLocale(localeCode, published, undefined, projectId);
       locale = localeData.locale;
       translations = localeData.translations;
     }
@@ -128,6 +135,7 @@ export async function POST(
       undefined,
       collectionLayerClasses,
       collectionLayerTag,
+      projectId,
     );
 
     return noCache({
@@ -165,6 +173,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const projectScope = await resolvePublicContentRequestProjectScope(request);
+    const projectId = projectScope.projectId;
     const { id } = await params;
     const collectionId = id;
 
@@ -172,7 +182,9 @@ export async function GET(
     const offset = parseInt(searchParams.get('offset') || '0', 10);
     const limit = parseInt(searchParams.get('limit') || '10', 10);
     const itemIdsParam = searchParams.get('itemIds');
-    const isPublished = searchParams.get('published') !== 'false';
+    const isPublished = projectScope.source === 'authenticated-preview'
+      ? searchParams.get('published') !== 'false'
+      : true;
 
     // Parse itemIds if provided (for multi-reference filtering)
     const itemIds = itemIdsParam ? itemIdsParam.split(',').filter(Boolean) : undefined;
@@ -195,7 +207,8 @@ export async function GET(
     const { items, total } = await getItemsWithValues(
       collectionId,
       isPublished,
-      filters
+      filters,
+      projectId
     );
 
     return noCache({

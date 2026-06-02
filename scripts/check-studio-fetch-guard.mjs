@@ -1,1 +1,1 @@
-import './check-novum-fetch-guard.mjs';
+import './check-studio-api-fetch-guard.mjs';

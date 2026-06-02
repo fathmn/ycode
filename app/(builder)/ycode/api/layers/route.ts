@@ -1,12 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLayersByPageId, upsertDraftLayers } from '@/lib/repositories/pageLayersRepository';
 import { noCache } from '@/lib/api-response';
-import { recordNovumCustomCodeMutation } from '@/lib/novum-platform';
+import { recordStudioCustomCodeMutation, requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 import type { Layer } from '@/types';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const LAYER_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+const LAYER_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * GET /ycode/api/layers?page_id=X&is_published=false
@@ -29,7 +43,10 @@ export async function GET(request: NextRequest) {
     // Parse is_published filter
     const isPublished = isPublishedParam === 'true' ? true : isPublishedParam === 'false' ? false : undefined;
 
-    const layers = await getLayersByPageId(pageId, isPublished);
+    const roleCheck = await requireStudioProjectRole(request, LAYER_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const layers = await getLayersByPageId(pageId, isPublished, roleCheck.context.project.id);
 
     if (!layers) {
       return noCache(
@@ -78,11 +95,14 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const draft = await upsertDraftLayers(pageId, layers as Layer[]);
+    const roleCheck = await requireStudioProjectRole(request, LAYER_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const draft = await upsertDraftLayers(pageId, layers as Layer[], undefined, roleCheck.context.project.id);
     const htmlEmbedCode = collectHtmlEmbedCode(layers as Layer[]);
 
     if (htmlEmbedCode.length > 0) {
-      await recordNovumCustomCodeMutation(request, {
+      await recordStudioCustomCodeMutation(request, {
         scope: 'embed',
         targetId: pageId,
         content: htmlEmbedCode.join('\n---\n'),

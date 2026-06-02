@@ -13,6 +13,7 @@ import {
   getImageLoadingAttribute,
   getImageSizesForLayer,
   getImageSrcsetWidthsForLayer,
+  getImageTransformQualityForLayer,
 } from '@/lib/image-rendering';
 import { resolveComponents, applyComponentOverrides } from '@/lib/resolve-components';
 import { isTiptapDoc, hasBlockElementsWithResolver } from '@/lib/tiptap-utils';
@@ -1800,24 +1801,7 @@ export async function resolveCollectionLayers(
             }
 
             // Fetch all assets at once (returns Record<string, Asset>)
-            let assetsById = await getAssetsByIds(assetIds, isPublished);
-            if (projectId) {
-              const supabase = await getSupabaseAdmin();
-              if (supabase) {
-                let assetsQuery = supabase
-                  .from('assets')
-                  .select('*')
-                  .in('id', assetIds)
-                  .eq('is_published', isPublished);
-                assetsQuery = (await applyProjectScopeToQuery(assetsQuery, supabase, 'assets', projectId)).query;
-                if (!isPublished) assetsQuery = assetsQuery.is('deleted_at', null);
-                const { data } = await assetsQuery;
-                assetsById = {};
-                for (const asset of data || []) {
-                  assetsById[asset.id] = asset;
-                }
-              }
-            }
+            const assetsById = await getAssetsByIds(assetIds, isPublished, projectId);
 
             // Clone the layer for each asset (like regular collections)
             const clonedLayers: Layer[] = await Promise.all(
@@ -2849,7 +2833,7 @@ export async function renderCollectionItemsToHtml(
       // Fetch any missing assets from field links
       if (missingAssetIds.length > 0) {
         const { getAssetsByIds } = await import('@/lib/repositories/assetRepository');
-        const additionalAssets = await getAssetsByIds(missingAssetIds, isPublished);
+        const additionalAssets = await getAssetsByIds(missingAssetIds, isPublished, projectId);
         for (const asset of Object.values(additionalAssets)) {
           const proxyUrl = getAssetProxyUrl(asset);
           if (proxyUrl) {
@@ -3070,7 +3054,7 @@ async function resolveAllAssets(
 	    }
 	  } else {
     const { getAssetsByIds } = await import('@/lib/repositories/assetRepository');
-    assetMap = await getAssetsByIds(Array.from(assetIds), isPublished);
+    assetMap = await getAssetsByIds(Array.from(assetIds), isPublished, projectId);
   }
 
   // Step 2.5: Override public_url with SEO-friendly proxy URLs where available
@@ -3763,10 +3747,11 @@ function layerToHtml(
         resolvedSrcValue = undefined;
       }
       if (resolvedSrcValue && resolvedSrcValue.trim()) {
-        const optimizedSrc = getOptimizedImageUrl(resolvedSrcValue, getFallbackImageWidthForLayer(layer), 85);
+        const transformQuality = getImageTransformQualityForLayer(layer);
+        const optimizedSrc = getOptimizedImageUrl(resolvedSrcValue, getFallbackImageWidthForLayer(layer), transformQuality);
         attrs.push(`src="${escapeHtml(optimizedSrc)}"`);
 
-        const srcset = generateImageSrcset(resolvedSrcValue, getImageSrcsetWidthsForLayer(layer));
+        const srcset = generateImageSrcset(resolvedSrcValue, getImageSrcsetWidthsForLayer(layer), transformQuality);
         if (srcset) {
           attrs.push(`srcset="${escapeHtml(srcset)}"`);
           attrs.push(`sizes="${escapeHtml(getImageSizesForLayer(layer))}"`);
@@ -3798,6 +3783,8 @@ function layerToHtml(
     if (imgLoadingAttr) attrs.push(`loading="${escapeHtml(String(imgLoadingAttr))}"`);
     const imgFetchPriorityAttr = layer.attributes?.fetchPriority || getImageFetchPriority(layer);
     if (imgFetchPriorityAttr) attrs.push(`fetchpriority="${escapeHtml(String(imgFetchPriorityAttr))}"`);
+    const imgDecodingAttr = layer.attributes?.decoding || 'async';
+    if (imgDecodingAttr) attrs.push(`decoding="${escapeHtml(String(imgDecodingAttr))}"`);
   }
 
   // Handle YouTube video (VideoVariable with provider='youtube') - render as iframe
@@ -4020,9 +4007,13 @@ function layerToHtml(
     'autoFocus': 'autofocus',
   };
   if (layer.attributes) {
+    const managedImageAttributes = tag === 'img'
+      ? new Set(['src', 'srcSet', 'srcset', 'sizes', 'alt', 'width', 'height', 'loading', 'fetchPriority', 'fetchpriority', 'decoding'])
+      : null;
     for (const [key, value] of Object.entries(layer.attributes)) {
       // Skip type attribute for elements converted to <a>
       if ((isButtonWithLink || isDivWithLink) && key === 'type') continue;
+      if (managedImageAttributes?.has(key)) continue;
       if (value !== undefined && value !== null) {
         const htmlKey = jsxToHtmlAttrMap[key] || key;
         // Boolean HTML attributes should be rendered without a value

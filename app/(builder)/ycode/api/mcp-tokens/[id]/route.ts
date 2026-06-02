@@ -1,9 +1,16 @@
 import { NextRequest } from 'next/server';
 import { getTokenById, deleteToken } from '@/lib/repositories/mcpTokenRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const MCP_TOKEN_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+];
 
 /**
  * GET /ycode/api/mcp-tokens/[id]
@@ -14,8 +21,12 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, MCP_TOKEN_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
-    const token = await getTokenById(id);
+    const token = await getTokenById(id, projectId);
 
     if (!token) {
       return noCache({ error: 'MCP token not found' }, 404);
@@ -40,14 +51,18 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, MCP_TOKEN_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
 
-    const existing = await getTokenById(id);
+    const existing = await getTokenById(id, projectId);
     if (!existing) {
       return noCache({ error: 'MCP token not found' }, 404);
     }
 
-    await deleteToken(id);
+    await deleteToken(id, projectId);
 
     return noCache({ data: { deleted: true, id } });
   } catch (error) {

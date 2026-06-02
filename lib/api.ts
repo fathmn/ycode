@@ -13,7 +13,6 @@ import { studioProjectPathSlugFromPathname } from '@/lib/studio-project-path';
 // All API routes are now relative (Next.js API routes)
 const API_BASE = '';
 const STUDIO_PROJECT_STORAGE_KEY = 'studio:selected-project-slug';
-const LEGACY_NOVUM_PROJECT_STORAGE_KEY = 'novum:selected-project-slug';
 export const STUDIO_PROJECT_SELECTION_EVENT = 'studio:selected-project-slug-changed';
 
 // Get Supabase auth token
@@ -27,7 +26,7 @@ async function getAuthToken(): Promise<string | null> {
 
 export function getSelectedStudioProjectSlug(): string | null {
   if (typeof window === 'undefined') return null;
-  return window.localStorage.getItem(STUDIO_PROJECT_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_NOVUM_PROJECT_STORAGE_KEY);
+  return window.localStorage.getItem(STUDIO_PROJECT_STORAGE_KEY);
 }
 
 function getStudioProjectLookupForRequest(): string | null {
@@ -39,14 +38,12 @@ function getStudioProjectLookupForRequest(): string | null {
 export function setSelectedStudioProjectSlug(slug: string): void {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(STUDIO_PROJECT_STORAGE_KEY, slug);
-  window.localStorage.removeItem(LEGACY_NOVUM_PROJECT_STORAGE_KEY);
   window.dispatchEvent(new CustomEvent(STUDIO_PROJECT_SELECTION_EVENT, { detail: { slug } }));
 }
 
 export function clearSelectedStudioProjectSlug(): void {
   if (typeof window === 'undefined') return;
   window.localStorage.removeItem(STUDIO_PROJECT_STORAGE_KEY);
-  window.localStorage.removeItem(LEGACY_NOVUM_PROJECT_STORAGE_KEY);
   window.dispatchEvent(new CustomEvent(STUDIO_PROJECT_SELECTION_EVENT, { detail: { slug: null } }));
 }
 
@@ -59,8 +56,8 @@ export async function studioFetch(input: RequestInfo | URL, options: RequestInit
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  if (selectedProjectSlug && !headers.has('x-novum-project-slug')) {
-    headers.set('x-novum-project-slug', selectedProjectSlug);
+  if (selectedProjectSlug && !headers.has('x-studio-project-slug')) {
+    headers.set('x-studio-project-slug', selectedProjectSlug);
   }
 
   return fetch(input, {
@@ -69,10 +66,6 @@ export async function studioFetch(input: RequestInfo | URL, options: RequestInit
     headers,
   });
 }
-
-export const getSelectedNovumProjectSlug = getSelectedStudioProjectSlug;
-export const setSelectedNovumProjectSlug = setSelectedStudioProjectSlug;
-export const novumFetch = studioFetch;
 
 // Generic API request helper
 async function apiRequest<T>(
@@ -123,7 +116,7 @@ async function apiRequest<T>(
   }
 }
 
-export const novumProjectsApi = {
+export const studioProjectsApi = {
   async getAssigned(): Promise<ApiResponse<Array<{
     id: string;
     slug: string;
@@ -135,11 +128,9 @@ export const novumProjectsApi = {
     status: string;
     role: string;
   }>>> {
-    return apiRequest('/ycode/api/novum/projects');
+    return apiRequest('/ycode/api/studio/projects');
   },
 };
-
-export const studioProjectsApi = novumProjectsApi;
 
 // Pages API
 export const pagesApi = {
@@ -263,7 +254,7 @@ export const pageLayersApi = {
 
 // Publish API - Global publishing endpoint
 export const publishApi = {
-  /** Get Novum publish capability from the server-side runtime flags */
+  /** Get Studio publish capability from the server-side runtime flags */
   async getReadiness(): Promise<ApiResponse<{
     livePublishAvailable: boolean;
     projectScopedPublishAvailable: boolean;
@@ -273,7 +264,7 @@ export const publishApi = {
     blockerCode: string | null;
     blockerMessage: string | null;
   }>> {
-    return apiRequest('/ycode/api/novum/publish-readiness');
+    return apiRequest('/ycode/api/studio/publish-readiness');
   },
 
   /** Get counts of unpublished items per entity type */
@@ -342,14 +333,14 @@ export const publishApi = {
     });
   },
 
-  /** Explicitly approve the current draft preview for the Novum publish gate */
+  /** Explicitly approve the current draft preview for the Studio publish gate */
   async approvePreview(previewUrl: string = '/ycode/preview'): Promise<ApiResponse<{
     id: string;
     preview_url: string;
     draft_hash: string;
     created_at: string;
   }>> {
-    return apiRequest('/ycode/api/novum/preview-approval', {
+    return apiRequest('/ycode/api/studio/preview-approval', {
       method: 'POST',
       body: JSON.stringify({ previewUrl }),
     });
@@ -364,7 +355,7 @@ export const assetsApi = {
     formData.append('file', file);
     formData.append('source', source);
 
-    const response = await novumFetch(`${API_BASE}/ycode/api/assets/upload`, {
+    const response = await studioFetch(`${API_BASE}/ycode/api/assets/upload`, {
       method: 'POST',
       body: formData,
     });
@@ -772,7 +763,7 @@ export const componentsApi = {
     const formData = new FormData();
     formData.append('image', blob, 'thumbnail.png');
 
-    const response = await novumFetch(`/ycode/api/components/${id}/thumbnail`, {
+    const response = await studioFetch(`/ycode/api/components/${id}/thumbnail`, {
       method: 'POST',
       body: formData,
     });
@@ -924,7 +915,7 @@ async function uploadViaPresignedUrl(
   assetFolderId?: string | null
 ): Promise<Asset | null> {
   // 1. Get presigned upload URL from server
-  const presignResponse = await novumFetch('/ycode/api/files/presign', {
+  const presignResponse = await studioFetch('/ycode/api/files/presign', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -954,7 +945,7 @@ async function uploadViaPresignedUrl(
   }
 
   // 3. Register the asset record in the database
-  const registerResponse = await novumFetch('/ycode/api/files/register', {
+  const registerResponse = await studioFetch('/ycode/api/files/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1013,7 +1004,7 @@ export async function uploadFileApi(
       formData.append('asset_folder_id', assetFolderId);
     }
 
-    const response = await novumFetch('/ycode/api/files/upload', {
+    const response = await studioFetch('/ycode/api/files/upload', {
       method: 'POST',
       body: formData,
     });
@@ -1073,7 +1064,7 @@ export const colorVariablesApi = {
  */
 export async function deleteAssetApi(assetId: string): Promise<boolean> {
   try {
-    const response = await novumFetch(
+    const response = await studioFetch(
       `/ycode/api/files/delete?assetId=${encodeURIComponent(assetId)}`,
       { method: 'DELETE' }
     );

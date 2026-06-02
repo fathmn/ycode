@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 import { useState, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
 import {
@@ -55,7 +55,7 @@ export default function ApiPage() {
 
   const fetchApiKeys = async () => {
     try {
-      const response = await novumFetch('/ycode/api/api-keys');
+      const response = await studioFetch('/ycode/api/api-keys');
       const result = await response.json();
       if (result.data) {
         setApiKeys(result.data);
@@ -72,7 +72,7 @@ export default function ApiPage() {
 
     setIsGenerating(true);
     try {
-      const response = await novumFetch('/ycode/api/api-keys', {
+      const response = await studioFetch('/ycode/api/api-keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newKeyName.trim() }),
@@ -98,7 +98,7 @@ export default function ApiPage() {
     if (!keyToDelete) return;
 
     try {
-      await novumFetch(`/ycode/api/api-keys/${keyToDelete.id}`, {
+      await studioFetch(`/ycode/api/api-keys/${keyToDelete.id}`, {
         method: 'DELETE',
       });
       setApiKeys(apiKeys.filter(k => k.id !== keyToDelete.id));
@@ -138,7 +138,7 @@ export default function ApiPage() {
       <div className="max-w-3xl mx-auto">
 
         <header className="pt-8 pb-6 flex items-center justify-between">
-          <span className="text-base font-medium">Ycode API</span>
+          <span className="text-base font-medium">Studio API</span>
           <Button
             variant="secondary"
             size="sm"

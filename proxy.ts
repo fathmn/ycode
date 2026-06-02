@@ -1,10 +1,10 @@
 import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
-import { NOVUM_PREVIEW_NONCE_COOKIE } from '@/lib/novum-preview-nonce';
+import { STUDIO_PREVIEW_NONCE_COOKIE } from '@/lib/studio-preview-nonce';
 import { projectLookupFromHost } from '@/lib/project-host';
 import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
-import { getConfiguredSiteAdminRoleForUser } from '@/lib/novum-site-admin';
+import { getConfiguredSiteAdminRoleForUser } from '@/lib/studio-site-admin';
 import {
   CUSTOMER_OWNER_ROLE,
   STUDIO_OPERATOR_ROLES,
@@ -141,13 +141,13 @@ async function checkProjectIsolation(client: any): Promise<ProjectIsolationCheck
 }
 
 const AUTH_ONLY_API_EXACT = [
-  '/ycode/api/novum/projects', // Project picker must work before a project is selected
-  '/ycode/api/novum/preview-rendered', // The route binds project access to the signed preview nonce.
+  '/ycode/api/studio/projects', // Project picker must work before a project is selected
+  '/ycode/api/studio/preview-rendered', // The route binds project access to the signed preview nonce.
 ];
 
 const BUILDER_ONLY_MUTATION_PREFIXES = [
   '/ycode/api/publish',
-  '/ycode/api/novum/preview-approval',
+  '/ycode/api/studio/preview-approval',
 ];
 
 const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
@@ -236,7 +236,7 @@ function isDevtoolsRoute(pathname: string): boolean {
 }
 
 function areDevtoolsEnabled(): boolean {
-  return process.env.NODE_ENV !== 'production' || process.env.NOVUM_ENABLE_DEVTOOLS === '1';
+  return process.env.NODE_ENV !== 'production' || process.env.STUDIO_ENABLE_DEVTOOLS === '1';
 }
 
 function isSafeProjectLookupValue(value: string): boolean {
@@ -257,8 +257,8 @@ function normalizeHost(host: string | null): string {
 
 function isStudioHost(request: NextRequest): boolean {
   const host = normalizeHost(
-    request.headers.get('x-forwarded-host')
-      || request.headers.get('host')
+    request.headers.get('host')
+      || request.headers.get('x-forwarded-host')
   );
   return host === getStudioAppHost();
 }
@@ -309,7 +309,7 @@ function studioSitemapResponse(): Response {
 }
 
 function getPreviewNonceSecret(): string | null {
-  return process.env.NOVUM_PREVIEW_NONCE_SECRET
+  return process.env.STUDIO_PREVIEW_NONCE_SECRET
     || process.env.SUPABASE_SECRET_KEY
     || process.env.SUPABASE_SERVICE_ROLE_KEY
     || process.env.SUPABASE_DB_PASSWORD
@@ -440,7 +440,7 @@ async function applyPreviewNonceCookie(
   const nonceSignature = await signPreviewNoncePayload(noncePayload);
   if (nonceContext && nonceSignature) {
     response.cookies.set(
-      NOVUM_PREVIEW_NONCE_COOKIE,
+      STUDIO_PREVIEW_NONCE_COOKIE,
       `${noncePayload}.${nonceSignature}`,
       {
         httpOnly: true,
@@ -451,7 +451,7 @@ async function applyPreviewNonceCookie(
       }
     );
   } else {
-    response.cookies.set(NOVUM_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
+    response.cookies.set(STUDIO_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
   }
 }
 
@@ -492,7 +492,7 @@ async function resolvePreviewNonceContext(request: NextRequest): Promise<{
     const project = await findProjectBySlugOrDomain(supabase, projectSlug);
     if (!project) return null;
     const membershipResult = await supabase
-      .from('novum_project_memberships')
+      .from('studio_project_memberships')
       .select('project_id')
       .eq('project_id', project.id)
       .eq('user_id', user.id)
@@ -507,8 +507,8 @@ async function resolvePreviewNonceContext(request: NextRequest): Promise<{
   }
 
   const membershipResult = await supabase
-    .from('novum_project_memberships')
-    .select('project_id, project:novum_projects(status, ycode_site_key)')
+    .from('studio_project_memberships')
+    .select('project_id, project:studio_projects(status, ycode_site_key)')
     .eq('user_id', user.id);
   if (membershipResult.error) return null;
 
@@ -526,7 +526,7 @@ async function findProjectBySlugOrDomain(client: any, value: string): Promise<{ 
   if (!isSafeProjectLookupValue(value)) return null;
 
   const activeProjects = await client
-    .from('novum_projects')
+    .from('studio_projects')
     .select('id, slug, metadata')
     .eq('status', 'active');
 
@@ -534,7 +534,7 @@ async function findProjectBySlugOrDomain(client: any, value: string): Promise<{ 
   const aliasMatches = findStudioProjectPathMatches(activeProjects.data, value);
 
   const bySlug = await client
-    .from('novum_projects')
+    .from('studio_projects')
     .select('id')
     .eq('slug', value)
     .eq('status', 'active')
@@ -546,7 +546,7 @@ async function findProjectBySlugOrDomain(client: any, value: string): Promise<{ 
   }
 
   const byDomain = await client
-    .from('novum_projects')
+    .from('studio_projects')
     .select('id')
     .eq('primary_domain', value)
     .eq('status', 'active')
@@ -568,7 +568,7 @@ function getAuditDescriptor(pathname: string, method: string): { action: string;
   if (pathname.startsWith('/ycode/api/revert') || pathname.startsWith('/ycode/api/versions')) {
     return { action: 'site.version.mutate', entityType: 'version' };
   }
-  if (pathname.startsWith('/ycode/api/novum/preview-approval')) {
+  if (pathname.startsWith('/ycode/api/studio/preview-approval')) {
     return { action: 'site.preview.approval.mutate', entityType: 'preview' };
   }
   if (pathname.startsWith('/ycode/api/pages') || pathname.startsWith('/ycode/api/folders')) {
@@ -645,7 +645,7 @@ async function writeProxyAuditLog(input: {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    await adminClient.from('novum_audit_logs').insert({
+    await adminClient.from('studio_audit_logs').insert({
       project_id: input.projectId,
       actor_user_id: input.actorUserId,
       action: descriptor.action,
@@ -659,16 +659,16 @@ async function writeProxyAuditLog(input: {
       },
     });
   } catch (error) {
-    console.error('[novum] proxy audit log failed:', error);
+    console.error('[studio] proxy audit log failed:', error);
   }
 }
 
 function resolveRequestedProjectSlug(request: NextRequest): string | null {
-  const explicit = request.headers.get('x-novum-project-slug')
+  const explicit = request.headers.get('x-studio-project-slug')
     || request.nextUrl.searchParams.get('project');
   if (explicit) return explicit;
 
-  const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
+  const host = request.headers.get('host') || request.headers.get('x-forwarded-host') || '';
   return projectLookupFromHost(host);
 }
 
@@ -861,14 +861,14 @@ async function verifyApiAuth(request: NextRequest): Promise<ApiAuthResult> {
         return {
           ok: false,
           response: NextResponse.json(
-            { error: 'No assigned Novum project resolved' },
+            { error: 'No assigned Studio project resolved' },
             { status: 403 }
           ),
         };
       }
 
       const membershipResult = await accessClient
-        .from('novum_project_memberships')
+        .from('studio_project_memberships')
         .select('role, project_id')
         .eq('project_id', project.id)
         .eq('user_id', user.id)
@@ -892,8 +892,8 @@ async function verifyApiAuth(request: NextRequest): Promise<ApiAuthResult> {
       }
 
       const membershipResult = await accessClient
-        .from('novum_project_memberships')
-        .select('role, project_id, project:novum_projects(status, ycode_site_key)')
+        .from('studio_project_memberships')
+        .select('role, project_id, project:studio_projects(status, ycode_site_key)')
         .eq('user_id', user.id);
 
       const activeSiteMemberships = (membershipResult.data || []).filter((item: any) => {
@@ -937,10 +937,10 @@ async function verifyApiAuth(request: NextRequest): Promise<ApiAuthResult> {
 
     const requestHeaders = new Headers(request.headers);
     if (resolvedProjectId) {
-      requestHeaders.set('x-novum-project-id', resolvedProjectId);
+      requestHeaders.set('x-studio-project-id', resolvedProjectId);
     }
     if (projectSlug) {
-      requestHeaders.set('x-novum-project-slug', projectSlug);
+      requestHeaders.set('x-studio-project-slug', projectSlug);
     }
 
     return { ok: true, requestHeaders };
@@ -974,7 +974,7 @@ export async function proxy(request: NextRequest) {
 
     let requestHeaders = new Headers(request.headers);
     if (projectPathSlug) {
-      requestHeaders.set('x-novum-project-slug', projectPathSlug);
+      requestHeaders.set('x-studio-project-slug', projectPathSlug);
     }
 
     const rewrittenRequest = new NextRequest(rewriteUrl, {
@@ -987,7 +987,7 @@ export async function proxy(request: NextRequest) {
       if (!authResult.ok) {
         if (isProjectPrefixedPreview) {
           const redirect = NextResponse.redirect(new URL(projectPathSlug ? `/${projectPathSlug}` : '/ycode', request.url));
-          redirect.cookies.set(NOVUM_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
+          redirect.cookies.set(STUDIO_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
           return redirect;
         }
         return authResult.response;
@@ -1007,7 +1007,7 @@ export async function proxy(request: NextRequest) {
     });
     response.headers.set('x-pathname', rewriteUrl.pathname);
     if (projectPathSlug) {
-      response.headers.set('x-novum-project-slug', projectPathSlug);
+      response.headers.set('x-studio-project-slug', projectPathSlug);
     }
     if (isProjectPrefixedPreview && request.method === 'GET') {
       const canonicalPreviewUrl = new URL(`${rewriteUrl.pathname}${rewriteUrl.search}`, request.url);
@@ -1037,7 +1037,7 @@ export async function proxy(request: NextRequest) {
     if (!authResult.ok) {
       if (pathname.startsWith('/ycode/preview')) {
         const redirect = NextResponse.redirect(new URL('/ycode', request.url));
-        redirect.cookies.set(NOVUM_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
+        redirect.cookies.set(STUDIO_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
         return redirect;
       }
       return authResult.response;

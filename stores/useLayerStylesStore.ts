@@ -5,7 +5,7 @@
  * Layer styles are part of the page draft and get published when the page is published
  */
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 import { create } from 'zustand';
 import type { Layer, LayerStyle } from '@/types';
 
@@ -74,7 +74,7 @@ export const useLayerStylesStore = create<LayerStylesStore>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await novumFetch('/ycode/api/layer-styles');
+      const response = await studioFetch('/ycode/api/layer-styles');
       const result = await response.json();
 
       if (result.error) {
@@ -94,7 +94,7 @@ export const useLayerStylesStore = create<LayerStylesStore>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await novumFetch('/ycode/api/layer-styles', {
+      const response = await studioFetch('/ycode/api/layer-styles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -131,7 +131,7 @@ export const useLayerStylesStore = create<LayerStylesStore>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await novumFetch(`/ycode/api/layer-styles/${id}`, {
+      const response = await studioFetch(`/ycode/api/layer-styles/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -167,7 +167,7 @@ export const useLayerStylesStore = create<LayerStylesStore>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await novumFetch(`/ycode/api/layer-styles/${id}`, {
+      const response = await studioFetch(`/ycode/api/layer-styles/${id}`, {
         method: 'DELETE',
       });
 
@@ -329,7 +329,7 @@ export const useLayerStylesStore = create<LayerStylesStore>((set, get) => ({
     // Restore each style via API
     for (const styleId of stylesToRestore) {
       try {
-        const response = await novumFetch(`/ycode/api/layer-styles/${styleId}`, {
+        const response = await studioFetch(`/ycode/api/layer-styles/${styleId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'restore' }),

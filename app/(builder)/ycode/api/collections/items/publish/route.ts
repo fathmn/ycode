@@ -1,9 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { publishValues } from '@/lib/repositories/collectionItemValueRepository';
 import { hardDeleteItem, getItemById } from '@/lib/repositories/collectionItemRepository';
 import { getCollectionById } from '@/lib/repositories/collectionRepository';
 import { cleanupDeletedCollections } from '@/lib/services/collectionService';
 import { noCache } from '@/lib/api-response';
+import { getStudioLiveMutationBlocker } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -17,6 +18,11 @@ export const revalidate = 0;
  */
 export async function POST(request: NextRequest) {
   try {
+    const blocker = getStudioLiveMutationBlocker();
+    if (blocker) {
+      return noCache(blocker, 409);
+    }
+
     const body = await request.json();
     const { item_ids } = body;
     

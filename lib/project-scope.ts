@@ -1,7 +1,7 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { getAuthUser } from '@/lib/supabase-auth';
 import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
-import { getConfiguredSiteAdminRoleForUser } from '@/lib/novum-site-admin';
+import { getConfiguredSiteAdminRoleForUser } from '@/lib/studio-site-admin';
 export { projectLookupFromHost } from '@/lib/project-host';
 
 const projectScopeColumnCache = new Set<string>();
@@ -57,6 +57,19 @@ export async function applyProjectScopeToQuery(query: any, client: any, tableNam
   return { query: query.eq('project_id', projectId) };
 }
 
+export async function resolveProjectScopeForWrite(client: any, tableName: string, projectId?: string | null): Promise<boolean> {
+  const hasProjectScope = await tableHasProjectScopeColumn(client, tableName);
+  if (isSharedDbProjectScopeRequired()) {
+    if (!hasProjectScope) {
+      throw new Error(`Project scope column is required for ${tableName}`);
+    }
+    if (!projectId) {
+      throw new Error(`Project scope is required for ${tableName}`);
+    }
+  }
+  return hasProjectScope;
+}
+
 export function isSafeProjectLookupValue(value: string): boolean {
   return /^[a-z0-9][a-z0-9.-]{0,252}[a-z0-9]$/i.test(value);
 }
@@ -71,13 +84,13 @@ async function hasSiteAdminRole(client: any, userId: string): Promise<boolean> {
   return Boolean(getConfiguredSiteAdminRoleForUser(data?.user));
 }
 
-export async function resolveNovumProjectId(value: string | null | undefined): Promise<string | null> {
+export async function resolveStudioProjectId(value: string | null | undefined): Promise<string | null> {
   if (!value || !isSafeProjectLookupValue(value)) return null;
   const client = await getSupabaseAdmin();
   if (!client) return null;
 
   const activeProjects = await client
-    .from('novum_projects')
+    .from('studio_projects')
     .select('id, slug, metadata')
     .eq('status', 'active');
   if (activeProjects.error || !Array.isArray(activeProjects.data)) return null;
@@ -85,7 +98,7 @@ export async function resolveNovumProjectId(value: string | null | undefined): P
 
   const baseSelect = 'id';
   const bySlug = await client
-    .from('novum_projects')
+    .from('studio_projects')
     .select(baseSelect)
     .eq('slug', value)
     .eq('status', 'active')
@@ -96,7 +109,7 @@ export async function resolveNovumProjectId(value: string | null | undefined): P
   }
 
   const byDomain = await client
-    .from('novum_projects')
+    .from('studio_projects')
     .select(baseSelect)
     .eq('primary_domain', value)
     .eq('status', 'active')
@@ -109,21 +122,21 @@ export async function resolveNovumProjectId(value: string | null | undefined): P
   return null;
 }
 
-export async function resolveSingleNovumProjectIdForCurrentUser(): Promise<string | null> {
+export async function resolveSingleStudioProjectIdForCurrentUser(): Promise<string | null> {
   const auth = await getAuthUser();
   if (!auth?.user?.id) return null;
-  return resolveSingleNovumProjectIdForUser(auth.user.id);
+  return resolveSingleStudioProjectIdForUser(auth.user.id);
 }
 
-export async function resolveSingleNovumProjectIdForUser(userId: string): Promise<string | null> {
+export async function resolveSingleStudioProjectIdForUser(userId: string): Promise<string | null> {
   if (!userId) return null;
   const client = await getSupabaseAdmin();
   if (!client) return null;
   if (await hasSiteAdminRole(client, userId)) return null;
 
   const { data, error } = await client
-    .from('novum_project_memberships')
-    .select('project_id, project:novum_projects(id, status, ycode_site_key)')
+    .from('studio_project_memberships')
+    .select('project_id, project:studio_projects(id, status, ycode_site_key)')
     .eq('user_id', userId);
   if (error || !Array.isArray(data)) return null;
 

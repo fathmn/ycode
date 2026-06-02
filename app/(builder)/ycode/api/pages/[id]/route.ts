@@ -2,11 +2,25 @@ import { NextRequest } from 'next/server';
 import { getPageById, updatePage, deletePage } from '@/lib/repositories/pageRepository';
 import { deleteTranslationsInBulk } from '@/lib/repositories/translationRepository';
 import { noCache } from '@/lib/api-response';
-import { recordNovumCustomCodeMutation } from '@/lib/novum-platform';
+import { recordStudioCustomCodeMutation, requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const PAGE_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+const PAGE_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * GET /ycode/api/pages/[id]
@@ -19,8 +33,11 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+    const roleCheck = await requireStudioProjectRole(request, PAGE_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
     // For GET requests, return draft version (what users edit)
-    const page = await getPageById(id, false);
+    const page = await getPageById(id, false, roleCheck.context.project.id);
 
     if (!page) {
       return noCache(
@@ -54,10 +71,13 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
+    const roleCheck = await requireStudioProjectRole(request, PAGE_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    delete body.is_published;
 
     // Get current draft page to check its state
     // Repository update functions only update draft versions
-    const currentPage = await getPageById(id, false);
+    const currentPage = await getPageById(id, false, roleCheck.context.project.id);
     if (!currentPage) {
       return noCache(
         { error: 'Page not found' },
@@ -97,10 +117,10 @@ export async function PUT(
     }
 
     // Pass all updates to the repository (it will handle further validation)
-    const page = await updatePage(id, body);
+    const page = await updatePage(id, body, roleCheck.context.project.id);
 
     if (body.settings?.custom_code) {
-      await recordNovumCustomCodeMutation(request, {
+      await recordStudioCustomCodeMutation(request, {
         scope: 'page',
         targetId: id,
         content: JSON.stringify(body.settings.custom_code),
@@ -136,9 +156,11 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
+    const roleCheck = await requireStudioProjectRole(request, PAGE_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
 
     // Delete the page
-    await deletePage(id);
+    await deletePage(id, roleCheck.context.project.id);
 
     // Delete all translations for this page
     await deleteTranslationsInBulk('page', id);

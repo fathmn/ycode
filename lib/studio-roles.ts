@@ -11,8 +11,6 @@ export type StudioRole =
   | typeof CUSTOMER_EDITOR_ROLE
   | typeof CUSTOMER_VIEWER_ROLE;
 
-export type LegacyStudioRole = 'novum_admin' | 'novum_developer';
-
 export const STUDIO_OPERATOR_ROLES: StudioRole[] = [
   STUDIO_ADMIN_ROLE,
   STUDIO_DEVELOPER_ROLE,
@@ -33,11 +31,9 @@ export const STUDIO_READ_ROLES: StudioRole[] = [
 export function normalizeStudioRole(role: string | null | undefined): StudioRole | null {
   switch (role) {
     case STUDIO_ADMIN_ROLE:
-    case 'novum_admin':
     case 'site_admin':
       return STUDIO_ADMIN_ROLE;
     case STUDIO_DEVELOPER_ROLE:
-    case 'novum_developer':
     case 'site_developer':
       return STUDIO_DEVELOPER_ROLE;
     case CUSTOMER_OWNER_ROLE:

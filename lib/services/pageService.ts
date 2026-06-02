@@ -11,6 +11,7 @@ import { getKnexClient } from '../knex-client';
 import { getPublishedPagesByIds } from '@/lib/repositories/pageRepository';
 import { batchPublishPageLayers } from '@/lib/repositories/pageLayersRepository';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { isSharedDbProjectScopeRequired } from '@/lib/project-scope';
 
 /**
  * Helper: Generate a unique slug from a page name
@@ -54,12 +55,29 @@ function generateSlugFromName(name: string, timestamp?: number): string {
 export async function incrementSiblingOrders(
   startOrder: number,
   depth: number,
-  parentFolderId: string | null
+  parentFolderId: string | null,
+  projectId?: string | null
 ): Promise<void> {
   const knex = await getKnexClient();
   const { incrementColumn } = await import('../knex-helpers');
 
   try {
+    const pageHasProjectScope = await knex.schema.hasColumn('pages', 'project_id');
+    const folderHasProjectScope = await knex.schema.hasColumn('page_folders', 'project_id');
+    if (isSharedDbProjectScopeRequired()) {
+      if (!projectId) {
+        throw new Error('Project scope is required for page sibling order updates');
+      }
+      if (!pageHasProjectScope) {
+        throw new Error('Project scope column is required for pages');
+      }
+      if (!folderHasProjectScope) {
+        throw new Error('Project scope column is required for page_folders');
+      }
+    }
+    const pageProjectCondition = pageHasProjectScope && projectId ? 'AND project_id = ?' : '';
+    const folderProjectCondition = folderHasProjectScope && projectId ? 'AND project_id = ?' : '';
+
     // Update pages - single query to increment all matching rows
     // Exclude error pages (error_page IS NULL)
     const pageParentCondition = parentFolderId === null
@@ -68,9 +86,12 @@ export async function incrementSiblingOrders(
     const pageParams: (string | number)[] = parentFolderId === null
       ? [startOrder, depth]
       : [startOrder, depth, parentFolderId];
+    if (pageProjectCondition) {
+      pageParams.push(projectId as string);
+    }
 
     await incrementColumn(knex, 'pages', 'order',
-      `"order" >= ? AND depth = ? ${pageParentCondition} AND deleted_at IS NULL AND error_page IS NULL`,
+      `"order" >= ? AND depth = ? ${pageParentCondition} AND is_published = false AND deleted_at IS NULL AND error_page IS NULL ${pageProjectCondition}`,
       pageParams
     );
 
@@ -81,9 +102,12 @@ export async function incrementSiblingOrders(
     const folderParams: (string | number)[] = parentFolderId === null
       ? [startOrder, depth]
       : [startOrder, depth, parentFolderId];
+    if (folderProjectCondition) {
+      folderParams.push(projectId as string);
+    }
 
     await incrementColumn(knex, 'page_folders', 'order',
-      `"order" >= ? AND depth = ? ${folderParentCondition} AND deleted_at IS NULL`,
+      `"order" >= ? AND depth = ? ${folderParentCondition} AND is_published = false AND deleted_at IS NULL ${folderProjectCondition}`,
       folderParams
     );
   } catch (error) {
@@ -105,7 +129,8 @@ export async function incrementSiblingOrders(
  * @throws Error if the database update fails
  */
 export async function fixOrphanedPageSlugs(
-  orphanedPages: Array<{ id: string; name: string; slug: string; is_index: boolean; page_folder_id: string | null }>
+  orphanedPages: Array<{ id: string; name: string; slug: string; is_index: boolean; page_folder_id: string | null }>,
+  projectId?: string | null
 ): Promise<void> {
   if (orphanedPages.length === 0) return;
 
@@ -119,6 +144,18 @@ export async function fixOrphanedPageSlugs(
       .whereNotNull('slug')
       .whereNot('slug', '')
       .whereNull('deleted_at');
+    const hasProjectScope = await knex.schema.hasColumn('pages', 'project_id');
+    if (isSharedDbProjectScopeRequired()) {
+      if (!projectId) {
+        throw new Error('Project scope is required for fixing orphaned page slugs');
+      }
+      if (!hasProjectScope) {
+        throw new Error('Project scope column is required for pages');
+      }
+    }
+    if (hasProjectScope && projectId) {
+      slugQuery.where('project_id', projectId);
+    }
 
     // Apply tenant scoping and execute query
     // await resolves both the Promise and the thenable QueryBuilder, returning rows
@@ -146,7 +183,10 @@ export async function fixOrphanedPageSlugs(
     // Batch update all orphaned pages using CASE statement for efficiency
     if (updates.length > 0) {
       await batchUpdateColumn(knex, 'pages', 'slug',
-        updates.map(u => ({ id: u.id, value: u.slug }))
+        updates.map(u => ({ id: u.id, value: u.slug })),
+        hasProjectScope && projectId
+          ? { extraWhereClause: 'AND project_id = ?', extraWhereParams: [projectId] }
+          : undefined
       );
     }
   } catch (error) {

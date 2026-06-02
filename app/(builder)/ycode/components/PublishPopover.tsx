@@ -43,7 +43,7 @@ const BREAKDOWN_ITEMS: { key: keyof Omit<PublishPreviewCounts, 'total'>; label: 
 function getLastRenderedPreviewUrl(): string {
   if (typeof window === 'undefined') return '/ycode/preview';
   const projectSlug = getSelectedStudioProjectSlug();
-  const value = window.localStorage?.getItem('novum:last-rendered-preview-url') || '';
+  const value = window.localStorage?.getItem('studio:last-rendered-preview-url') || '';
   try {
     const url = new URL(value, window.location.origin);
     if (url.pathname === '/ycode/preview' || url.pathname.startsWith('/ycode/preview/')) {
@@ -135,7 +135,7 @@ export default function PublishPopover({
   const [publishReadiness, setPublishReadiness] = useState<PublishReadiness | null>(null);
   const [selectedProjectSlug, setSelectedProjectSlug] = useState<string | null>(() => getSelectedStudioProjectSlug());
   const [lastRenderedPreviewUrl, setLastRenderedPreviewUrl] = useState<string | null>(() => (
-    typeof window === 'undefined' ? null : window.localStorage?.getItem('novum:last-rendered-preview-url')
+    typeof window === 'undefined' ? null : window.localStorage?.getItem('studio:last-rendered-preview-url')
   ));
 
   const { getSettingByKey, updateSetting } = useSettingsStore();
@@ -203,26 +203,26 @@ export default function PublishPopover({
   useEffect(() => {
     const updateSelectedProject = () => setSelectedProjectSlug(getSelectedStudioProjectSlug());
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === 'studio:selected-project-slug' || event.key === 'novum:selected-project-slug') {
+      if (event.key === 'studio:selected-project-slug' || event.key === 'studio:selected-project-slug') {
         updateSelectedProject();
       }
-      if (event.key === 'novum:last-rendered-preview-url') {
+      if (event.key === 'studio:last-rendered-preview-url') {
         setLastRenderedPreviewUrl(event.newValue);
         if (isOpen) loadPublishReadiness();
       }
     };
     const handlePreviewRendered = () => {
-      setLastRenderedPreviewUrl(window.localStorage?.getItem('novum:last-rendered-preview-url'));
+      setLastRenderedPreviewUrl(window.localStorage?.getItem('studio:last-rendered-preview-url'));
       if (isOpen) loadPublishReadiness();
     };
     window.addEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
     window.addEventListener('storage', handleStorage);
-    window.addEventListener('novum:preview-rendered', handlePreviewRendered);
+    window.addEventListener('studio:preview-rendered', handlePreviewRendered);
     updateSelectedProject();
     return () => {
       window.removeEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
       window.removeEventListener('storage', handleStorage);
-      window.removeEventListener('novum:preview-rendered', handlePreviewRendered);
+      window.removeEventListener('studio:preview-rendered', handlePreviewRendered);
     };
   }, [isOpen, loadPublishReadiness]);
 
@@ -232,7 +232,7 @@ export default function PublishPopover({
     setPublishReadiness(null);
     setChangeCounts(null);
     if (isOpen && selectedProjectSlug) {
-      setLastRenderedPreviewUrl(window.localStorage?.getItem('novum:last-rendered-preview-url'));
+      setLastRenderedPreviewUrl(window.localStorage?.getItem('studio:last-rendered-preview-url'));
       loadPublishReadiness();
       loadChangesCount(null);
     }
@@ -387,7 +387,7 @@ export default function PublishPopover({
             variant="secondary"
             className="w-full"
             onClick={() => {
-              window.localStorage?.removeItem('novum:last-rendered-preview-url');
+              window.localStorage?.removeItem('studio:last-rendered-preview-url');
               setLastRenderedPreviewUrl(null);
               window.open(getProjectPreviewUrl(), '_blank');
             }}

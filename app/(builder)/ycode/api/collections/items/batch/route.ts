@@ -3,7 +3,7 @@ import { getTopItemsWithValuesPerCollection, enrichItemsWithStatus } from '@/lib
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import { findStatusFieldId } from '@/lib/collection-field-utils';
 import { noCache } from '@/lib/api-response';
-import { resolveNovumProjectId } from '@/lib/project-scope';
+import { resolveStudioProjectId } from '@/lib/project-scope';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -27,8 +27,8 @@ export async function POST(request: NextRequest) {
       return noCache({ data: { items: {} } });
     }
 
-    const projectSlug = request.headers.get('x-novum-project-slug');
-    const projectId = projectSlug ? await resolveNovumProjectId(projectSlug) : null;
+    const projectSlug = request.headers.get('x-studio-project-slug');
+    const projectId = projectSlug ? await resolveStudioProjectId(projectSlug) : null;
     if (!projectSlug || !projectId) {
       return noCache({ error: 'Invalid project' }, 404);
     }

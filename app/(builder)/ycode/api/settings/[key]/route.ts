@@ -1,9 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSettingByKey, setSetting } from '@/lib/repositories/settingsRepository';
 import { clearAllCache } from '@/lib/services/cacheService';
-import { recordNovumCustomCodeMutation } from '@/lib/novum-platform';
+import { recordStudioCustomCodeMutation, requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 const CUSTOM_CODE_SETTING_KEYS = new Set(['custom_code_head', 'custom_code_body']);
+const SETTINGS_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+const SETTINGS_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * GET /ycode/api/settings/[key]
@@ -16,7 +29,10 @@ export async function GET(
 ) {
   try {
     const { key } = await params;
-    const value = await getSettingByKey(key);
+    const roleCheck = await requireStudioProjectRole(request, SETTINGS_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const value = await getSettingByKey(key, roleCheck.context.project.id);
 
     if (value === null) {
       return NextResponse.json(
@@ -56,12 +72,15 @@ export async function PUT(
       );
     }
 
-    await setSetting(key, value);
+    const roleCheck = await requireStudioProjectRole(request, SETTINGS_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    await setSetting(key, value, roleCheck.context.project.id);
 
     await clearAllCache();
 
     if (CUSTOM_CODE_SETTING_KEYS.has(key)) {
-      await recordNovumCustomCodeMutation(request, {
+      await recordStudioCustomCodeMutation(request, {
         scope: 'global',
         targetId: key,
         content: typeof value === 'string' ? value : JSON.stringify(value ?? ''),

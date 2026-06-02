@@ -14,7 +14,6 @@ import { findUniqueStudioProjectPathMatch, studioProjectPathFromSlug, studioProj
 import { isStudioOperatorRole } from '@/lib/studio-roles';
 
 const STORAGE_KEY = 'studio:selected-project-slug';
-const LEGACY_STORAGE_KEY = 'novum:selected-project-slug';
 
 type StudioProject = {
   id: string;
@@ -33,7 +32,7 @@ function hasSiteAdminProjectRole(projects: StudioProject[]) {
 
 function getStoredProjectSlug() {
   if (typeof window === 'undefined') return null;
-  return window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
+  return window.localStorage.getItem(STORAGE_KEY);
 }
 
 function findProjectForCurrentPath(projects: StudioProject[]): StudioProject | null {

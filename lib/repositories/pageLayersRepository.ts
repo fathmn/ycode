@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import type { PageLayers, Layer } from '../../types';
 import { generatePageLayersHash } from '../hash-utils';
 import { deleteTranslationsInBulk, markTranslationsIncomplete } from '@/lib/repositories/translationRepository';
@@ -9,7 +10,8 @@ import { extractLayerContentMap } from '../localisation-utils';
  */
 export async function getLayersByPageId(
   pageId: string,
-  isPublished?: boolean
+  isPublished?: boolean,
+  projectId?: string | null
 ): Promise<PageLayers | null> {
   const client = await getSupabaseAdmin();
 
@@ -27,6 +29,7 @@ export async function getLayersByPageId(
   if (isPublished !== undefined) {
     query = query.eq('is_published', isPublished);
   }
+  query = (await applyProjectScopeToQuery(query, client, 'page_layers', projectId)).query;
 
   const { data, error } = await query
     .order('created_at', { ascending: false })
@@ -46,19 +49,22 @@ export async function getLayersByPageId(
 /**
  * Get draft layers for a page
  */
-export async function getDraftLayers(pageId: string): Promise<PageLayers | null> {
+export async function getDraftLayers(pageId: string, projectId?: string | null): Promise<PageLayers | null> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('page_layers')
     .select('*')
     .eq('page_id', pageId)
     .eq('is_published', false)
-    .is('deleted_at', null)
+    .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'page_layers', projectId)).query;
+
+  const { data, error } = await query
     .order('created_at', { ascending: false })
     .limit(1)
     .single();
@@ -112,7 +118,8 @@ export async function getPublishedLayers(pageId: string): Promise<PageLayers | n
 export async function upsertDraftLayers(
   pageId: string,
   layers: Layer[],
-  additionalData?: Record<string, any>
+  additionalData?: Record<string, any>,
+  projectId?: string | null
 ): Promise<PageLayers> {
   const client = await getSupabaseAdmin();
 
@@ -120,8 +127,25 @@ export async function upsertDraftLayers(
     throw new Error('Supabase not configured');
   }
 
+  let pageQuery = client
+    .from('pages')
+    .select('id')
+    .eq('id', pageId)
+    .eq('is_published', false)
+    .is('deleted_at', null);
+  pageQuery = (await applyProjectScopeToQuery(pageQuery, client, 'pages', projectId)).query;
+  const { data: page, error: pageError } = await pageQuery.maybeSingle();
+  if (pageError) {
+    throw new Error(`Failed to verify page ownership: ${pageError.message}`);
+  }
+  if (!page) {
+    throw new Error('Page not found');
+  }
+
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'page_layers', projectId);
+
   // Check if draft exists
-  const existingDraft = await getDraftLayers(pageId);
+  const existingDraft = await getDraftLayers(pageId, projectId);
 
   // Detect removed and changed layer content, update translations accordingly
   if (existingDraft && existingDraft.layers) {
@@ -163,16 +187,20 @@ export async function upsertDraftLayers(
   if (additionalData) {
     Object.assign(updateData, additionalData);
   }
+  if (hasProjectScope && projectId) {
+    updateData.project_id = projectId;
+  }
 
   if (existingDraft) {
     // Update existing draft
-    const { data, error } = await client
+    let updateQuery = client
       .from('page_layers')
       .update(updateData)
       .eq('id', existingDraft.id)
-      .eq('is_published', false)
-      .select()
-      .single();
+      .eq('is_published', false);
+    updateQuery = (await applyProjectScopeToQuery(updateQuery, client, 'page_layers', projectId)).query;
+
+    const { data, error } = await updateQuery.select().single();
 
     if (error) {
       throw new Error(`Failed to update draft: ${error.message}`);
@@ -186,7 +214,8 @@ export async function upsertDraftLayers(
       layers,
       content_hash: contentHash,
       is_published: false,
-      ...additionalData
+      ...additionalData,
+      ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
     };
 
     const { data, error } = await client
@@ -207,19 +236,21 @@ export async function upsertDraftLayers(
  * Get all draft layers (non-published)
  * Used for loading all drafts at once in the editor
  */
-export async function getAllDraftLayers(): Promise<PageLayers[]> {
+export async function getAllDraftLayers(projectId?: string | null): Promise<PageLayers[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('page_layers')
     .select('*')
     .eq('is_published', false)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: false });
+    .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'page_layers', projectId)).query;
+
+  const { data, error } = await query.order('created_at', { ascending: false });
 
   if (error) {
     throw new Error(`Failed to fetch draft layers: ${error.message}`);

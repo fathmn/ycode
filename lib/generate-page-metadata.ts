@@ -63,7 +63,7 @@ export interface GenerateMetadataOptions {
  * Includes SEO settings, published CSS, and global custom code
  * Wrapped with React cache to deduplicate within the same request
  */
-export const fetchGlobalPageSettings = cache(async (): Promise<GlobalPageSettings> => {
+export const fetchGlobalPageSettings = cache(async (projectId?: string | null): Promise<GlobalPageSettings> => {
   const settings = await getSettingsByKeys([
     'google_site_verification',
     'global_canonical_url',
@@ -74,7 +74,7 @@ export const fetchGlobalPageSettings = cache(async (): Promise<GlobalPageSetting
     'ycode_badge',
     'favicon_asset_id',
     'web_clip_asset_id',
-  ]);
+  ], projectId);
 
   // Fetch favicon and web clip asset URLs if IDs are set
   let faviconUrl: string | null = null;
@@ -82,7 +82,7 @@ export const fetchGlobalPageSettings = cache(async (): Promise<GlobalPageSetting
 
   if (settings.favicon_asset_id) {
     try {
-      const asset = await getAssetById(settings.favicon_asset_id, true);
+      const asset = await getAssetById(settings.favicon_asset_id, true, projectId);
       if (asset) {
         faviconUrl = getAssetProxyUrl(asset) || asset.public_url || null;
       }
@@ -93,7 +93,7 @@ export const fetchGlobalPageSettings = cache(async (): Promise<GlobalPageSetting
 
   if (settings.web_clip_asset_id) {
     try {
-      const asset = await getAssetById(settings.web_clip_asset_id, true);
+      const asset = await getAssetById(settings.web_clip_asset_id, true, projectId);
       if (asset) {
         webClipUrl = getAssetProxyUrl(asset) || asset.public_url || null;
       }
@@ -102,7 +102,7 @@ export const fetchGlobalPageSettings = cache(async (): Promise<GlobalPageSetting
     }
   }
 
-  const colorVariablesCss = await generateColorVariablesCss();
+  const colorVariablesCss = await generateColorVariablesCss(projectId);
 
   return {
     googleSiteVerification: settings.google_site_verification || null,
@@ -112,7 +112,7 @@ export const fetchGlobalPageSettings = cache(async (): Promise<GlobalPageSetting
     colorVariablesCss,
     globalCustomCodeHead: settings.custom_code_head || null,
     globalCustomCodeBody: settings.custom_code_body || null,
-    ycodeBadge: settings.ycode_badge ?? true,
+    ycodeBadge: settings.ycode_badge ?? false,
     faviconUrl,
     webClipUrl,
   };
@@ -149,9 +149,9 @@ export async function generatePageMetadata(
   }
 
   // Build description - resolve field variables if collection item is available
-  let description = seo?.description || fallbackDescription || `${page.name} - Built with Ycode`;
+  let description = seo?.description || fallbackDescription || `${page.name} - Studio`;
   if (collectionItem && seo?.description) {
-    description = resolveInlineVariables(seo.description, collectionItem) || fallbackDescription || `${page.name} - Built with Ycode`;
+    description = resolveInlineVariables(seo.description, collectionItem) || fallbackDescription || `${page.name} - Studio`;
   }
 
   // Base metadata

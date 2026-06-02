@@ -3,14 +3,14 @@ import type { NextRequest } from 'next/server';
 import { noCache } from '@/lib/api-response';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { extractSupabaseAccessToken } from '@/lib/supabase-cookie-token';
-import { NOVUM_PREVIEW_NONCE_COOKIE } from '@/lib/novum-preview-nonce';
+import { STUDIO_PREVIEW_NONCE_COOKIE } from '@/lib/studio-preview-nonce';
 import { getAuthUser } from '@/lib/supabase-auth';
 import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
-import { getConfiguredSiteAdminRoleForUser } from '@/lib/novum-site-admin';
+import { getConfiguredSiteAdminRoleForUser } from '@/lib/studio-site-admin';
 import { STUDIO_READ_ROLES, type StudioRole, normalizeStudioRole } from '@/lib/studio-roles';
 
-const PREVIEW_MAX_AGE_HOURS = Number(process.env.NOVUM_PREVIEW_MAX_AGE_HOURS || 24);
-const PREVIEW_NONCE_MAX_AGE_MINUTES = Number(process.env.NOVUM_PREVIEW_NONCE_MAX_AGE_MINUTES || 30);
+const PREVIEW_MAX_AGE_HOURS = Number(process.env.STUDIO_PREVIEW_MAX_AGE_HOURS || 24);
+const PREVIEW_NONCE_MAX_AGE_MINUTES = Number(process.env.STUDIO_PREVIEW_NONCE_MAX_AGE_MINUTES || 30);
 const DRAFT_FINGERPRINT_TABLES = [
   'page_folders',
   'pages',
@@ -28,14 +28,14 @@ const DRAFT_FINGERPRINT_TABLES = [
   'translations',
 ];
 
-export type NovumRole = StudioRole;
+export type StudioProjectRole = StudioRole;
 
-type NovumProject = {
+type StudioProject = {
   id: string;
   slug: string;
 };
 
-type NovumProductionDeploymentResult = {
+type StudioProductionDeploymentResult = {
   provider: 'vercel';
   configured: boolean;
   triggered: boolean;
@@ -47,11 +47,11 @@ type NovumProductionDeploymentResult = {
   error?: string;
 };
 
-type NovumContext = {
+type StudioProjectContext = {
   client: any;
-  project: NovumProject;
+  project: StudioProject;
   actorUserId: string;
-  role: NovumRole;
+  role: StudioProjectRole;
 };
 
 type AuditInput = {
@@ -83,18 +83,18 @@ function getCurrentSiteKey(): string {
   return process.env.STUDIO_YCODE_SITE_KEY || 'default';
 }
 
-async function getSiteAdminRole(client: any, actorUserId: string): Promise<NovumRole | null> {
+async function getSiteAdminRole(client: any, actorUserId: string): Promise<StudioProjectRole | null> {
   const { data, error } = await client.auth.admin.getUserById(actorUserId);
   if (error) return null;
   return getConfiguredSiteAdminRoleForUser(data?.user);
 }
 
-async function getProjectRoleForUser(client: any, projectId: string, actorUserId: string): Promise<NovumRole | null> {
+async function getProjectRoleForUser(client: any, projectId: string, actorUserId: string): Promise<StudioProjectRole | null> {
   const siteAdminRole = await getSiteAdminRole(client, actorUserId);
   if (siteAdminRole) return siteAdminRole;
 
   const { data: membership, error } = await client
-    .from('novum_project_memberships')
+    .from('studio_project_memberships')
     .select('role')
     .eq('project_id', projectId)
     .eq('user_id', actorUserId)
@@ -120,10 +120,10 @@ function getVercelErrorMessage(payload: Record<string, any> | null): string | nu
   return null;
 }
 
-export async function requireNovumProjectRole(
+export async function requireStudioProjectRole(
   request: NextRequest,
-  allowedRoles: NovumRole[]
-): Promise<{ ok: true; context: NovumContext } | { ok: false; response: Response }> {
+  allowedRoles: StudioProjectRole[]
+): Promise<{ ok: true; context: StudioProjectContext } | { ok: false; response: Response }> {
   const client = await getSupabaseAdmin();
   if (!client) {
     return { ok: false, response: noCache({ error: 'Supabase is not configured' }, 500) };
@@ -136,7 +136,7 @@ export async function requireNovumProjectRole(
 
   const project = await resolveProjectForRequest(client, request, actorUserId);
   if (!project) {
-    return { ok: false, response: noCache({ error: 'No Novum project resolved for request' }, 403) };
+    return { ok: false, response: noCache({ error: 'No Studio project resolved for request' }, 403) };
   }
 
   const role = await getProjectRoleForUser(client, project.id, actorUserId);
@@ -156,11 +156,11 @@ export async function requireNovumProjectRole(
   };
 }
 
-async function requireNovumProjectRoleForProject(
+async function requireStudioProjectRoleForProject(
   request: NextRequest,
   projectId: string,
-  allowedRoles: NovumRole[]
-): Promise<{ ok: true; context: NovumContext } | { ok: false; response: Response }> {
+  allowedRoles: StudioProjectRole[]
+): Promise<{ ok: true; context: StudioProjectContext } | { ok: false; response: Response }> {
   const client = await getSupabaseAdmin();
   if (!client) {
     return { ok: false, response: noCache({ error: 'Supabase is not configured' }, 500) };
@@ -173,7 +173,7 @@ async function requireNovumProjectRoleForProject(
 
   const project = await getProjectById(client, projectId);
   if (!project) {
-    return { ok: false, response: noCache({ error: 'No Novum project resolved for request' }, 403) };
+    return { ok: false, response: noCache({ error: 'No Studio project resolved for request' }, 403) };
   }
 
   const role = await getProjectRoleForUser(client, project.id, actorUserId);
@@ -193,19 +193,19 @@ async function requireNovumProjectRoleForProject(
   };
 }
 
-export async function canAccessNovumProject(
+export async function canAccessStudioProject(
   projectId: string,
-  allowedRoles: NovumRole[] = STUDIO_READ_ROLES
+  allowedRoles: StudioProjectRole[] = STUDIO_READ_ROLES
 ): Promise<boolean> {
   const auth = await getAuthUser();
   if (!auth?.user?.id) return false;
-  return canAccessNovumProjectForUser(projectId, auth.user.id, allowedRoles);
+  return canAccessStudioProjectForUser(projectId, auth.user.id, allowedRoles);
 }
 
-export async function canAccessNovumProjectForUser(
+export async function canAccessStudioProjectForUser(
   projectId: string,
   actorUserId: string,
-  allowedRoles: NovumRole[] = STUDIO_READ_ROLES
+  allowedRoles: StudioProjectRole[] = STUDIO_READ_ROLES
 ): Promise<boolean> {
   if (!actorUserId) return false;
   const client = await getSupabaseAdmin();
@@ -218,7 +218,7 @@ export async function canAccessNovumProjectForUser(
   return !!role && allowedRoles.includes(role);
 }
 
-export async function writeNovumAuditLog(input: AuditInput): Promise<void> {
+export async function writeStudioAuditLog(input: AuditInput): Promise<void> {
   try {
     const client = await getSupabaseAdmin();
     if (!client) return;
@@ -229,7 +229,7 @@ export async function writeNovumAuditLog(input: AuditInput): Promise<void> {
       : null;
     if (!project) return;
 
-    await client.from('novum_audit_logs').insert({
+    await client.from('studio_audit_logs').insert({
       project_id: project.id,
       actor_user_id: actorUserId,
       action: input.action,
@@ -238,11 +238,11 @@ export async function writeNovumAuditLog(input: AuditInput): Promise<void> {
       metadata: input.metadata || {},
     });
   } catch (error) {
-    console.error('[novum] audit log failed:', error);
+    console.error('[studio] audit log failed:', error);
   }
 }
 
-export async function recordNovumCustomCodeMutation(
+export async function recordStudioCustomCodeMutation(
   request: NextRequest,
   input: CustomCodeMutationInput
 ): Promise<void> {
@@ -260,7 +260,7 @@ export async function recordNovumCustomCodeMutation(
     const findings = scanForSecrets(input.content || '');
     const secretScanStatus = findings.length > 0 ? 'blocked' : 'clean';
 
-    await client.from('novum_custom_code_events').insert({
+    await client.from('studio_custom_code_events').insert({
       project_id: project.id,
       actor_user_id: actorUserId,
       scope: input.scope,
@@ -276,7 +276,7 @@ export async function recordNovumCustomCodeMutation(
       },
     });
 
-    await client.from('novum_audit_logs').insert({
+    await client.from('studio_audit_logs').insert({
       project_id: project.id,
       actor_user_id: actorUserId,
       action: findings.length > 0 ? 'custom_code.changed.secret_detected' : 'custom_code.changed',
@@ -293,15 +293,15 @@ export async function recordNovumCustomCodeMutation(
       },
     });
   } catch (error) {
-    console.error('[novum] custom code mutation audit failed:', error);
+    console.error('[studio] custom code mutation audit failed:', error);
   }
 }
 
-export async function verifyNovumPublishGate(request: NextRequest): Promise<
-  | { ok: true; context: NovumContext; draftHash: string; customCode: CustomCodeScanResult }
+export async function verifyStudioPublishGate(request: NextRequest): Promise<
+  | { ok: true; context: StudioProjectContext; draftHash: string; customCode: CustomCodeScanResult }
   | { ok: false; response: Response }
 > {
-  const roleCheck = await requireNovumProjectRole(request, [
+  const roleCheck = await requireStudioProjectRole(request, [
     'studio_admin',
     'studio_developer',
     'customer_owner',
@@ -309,9 +309,9 @@ export async function verifyNovumPublishGate(request: NextRequest): Promise<
   if (!roleCheck.ok) return roleCheck;
 
   const { context } = roleCheck;
-  const readiness = getNovumPublishReadiness();
+  const readiness = getStudioPublishReadiness();
   if (!readiness.livePublishAvailable) {
-    await writeNovumAuditLog({
+    await writeStudioAuditLog({
       request,
       action: 'site.publish.blocked.project_scoped_publish_required',
       entityType: 'site',
@@ -338,7 +338,7 @@ export async function verifyNovumPublishGate(request: NextRequest): Promise<
   const draftHash = await getCurrentDraftHash(context.client, context.project.id);
   const previewOk = await hasValidPreviewApproval(context.client, context.project.id, draftHash);
   if (!previewOk) {
-    await writeNovumAuditLog({
+    await writeStudioAuditLog({
       request,
       action: 'site.publish.blocked.preview_required',
       entityType: 'site',
@@ -350,7 +350,7 @@ export async function verifyNovumPublishGate(request: NextRequest): Promise<
       response: noCache(
         {
           error: 'Preview required before publishing',
-          code: 'NOVUM_PREVIEW_REQUIRED',
+          code: 'STUDIO_PREVIEW_REQUIRED',
           draftHash,
         },
         409
@@ -358,10 +358,10 @@ export async function verifyNovumPublishGate(request: NextRequest): Promise<
     };
   }
 
-  const customCode = await scanNovumCustomCode(context.client, context.project.id);
+  const customCode = await scanStudioCustomCode(context.client, context.project.id);
 
   if (customCode.secret_scan_status === 'blocked') {
-    await writeNovumAuditLog({
+    await writeStudioAuditLog({
       request,
       action: 'site.publish.blocked.custom_code_secret',
       entityType: 'site',
@@ -377,7 +377,7 @@ export async function verifyNovumPublishGate(request: NextRequest): Promise<
       response: noCache(
         {
           error: 'Custom code contains possible secrets and cannot be published',
-          code: 'NOVUM_CUSTOM_CODE_SECRET_BLOCKED',
+          code: 'STUDIO_CUSTOM_CODE_SECRET_BLOCKED',
           findings: customCode.secret_scan_findings,
         },
         409
@@ -388,10 +388,10 @@ export async function verifyNovumPublishGate(request: NextRequest): Promise<
   return { ok: true, context, draftHash, customCode };
 }
 
-export async function triggerNovumProductionDeployment(input: {
+export async function triggerStudioProductionDeployment(input: {
   client: any;
-  project: NovumProject;
-}): Promise<NovumProductionDeploymentResult> {
+  project: StudioProject;
+}): Promise<StudioProductionDeploymentResult> {
   const resultBase = {
     provider: 'vercel' as const,
     configured: false,
@@ -409,7 +409,7 @@ export async function triggerNovumProductionDeployment(input: {
   }
 
   const { data: project, error } = await input.client
-    .from('novum_projects')
+    .from('studio_projects')
     .select('id, slug, metadata')
     .eq('id', input.project.id)
     .maybeSingle();
@@ -480,7 +480,7 @@ export async function triggerNovumProductionDeployment(input: {
 
     if (deploymentId || deploymentUrl) {
       await input.client
-        .from('novum_projects')
+        .from('studio_projects')
         .update({
           metadata: {
             ...metadata,
@@ -511,20 +511,20 @@ export async function triggerNovumProductionDeployment(input: {
   }
 }
 
-export async function recordExplicitNovumPreviewApproval(request: NextRequest): Promise<Response> {
+export async function recordExplicitStudioPreviewApproval(request: NextRequest): Promise<Response> {
   const body = await request.json().catch(() => ({}));
   const previewUrl = normalizePreviewUrl(body.previewUrl || '/ycode/preview');
   if (!previewUrl) {
     return noCache(
       {
         error: 'Invalid preview URL',
-        code: 'NOVUM_PREVIEW_URL_INVALID',
+        code: 'STUDIO_PREVIEW_URL_INVALID',
       },
       400
     );
   }
 
-  const roleCheck = await requireNovumProjectRole(request, [
+  const roleCheck = await requireStudioProjectRole(request, [
     'studio_admin',
     'studio_developer',
     'customer_owner',
@@ -546,7 +546,7 @@ export async function recordExplicitNovumPreviewApproval(request: NextRequest): 
     return noCache(
       {
         error: 'Open and verify this Studio preview before approving the draft for publish',
-        code: 'NOVUM_PREVIEW_RENDER_REQUIRED',
+        code: 'STUDIO_PREVIEW_RENDER_REQUIRED',
         projectId: context.project.id,
         projectSlug: context.project.slug,
         previewUrl,
@@ -567,7 +567,7 @@ export async function recordExplicitNovumPreviewApproval(request: NextRequest): 
   };
 
   const { data, error } = await context.client
-    .from('novum_preview_runs')
+    .from('studio_preview_runs')
     .insert({
       project_id: context.project.id,
       actor_user_id: context.actorUserId,
@@ -582,7 +582,7 @@ export async function recordExplicitNovumPreviewApproval(request: NextRequest): 
 
   if (error) return noCache({ error: error.message }, 500);
 
-  await context.client.from('novum_audit_logs').insert({
+  await context.client.from('studio_audit_logs').insert({
     project_id: context.project.id,
     actor_user_id: context.actorUserId,
     action: 'site.preview.approved',
@@ -598,14 +598,14 @@ export async function recordExplicitNovumPreviewApproval(request: NextRequest): 
   return noCache({ data });
 }
 
-export async function recordNovumPreviewRendered(request: NextRequest): Promise<Response> {
+export async function recordStudioPreviewRendered(request: NextRequest): Promise<Response> {
   const body = await request.json().catch(() => ({}));
   const previewUrl = normalizePreviewUrl(body.previewUrl);
   if (!previewUrl) {
     return noCache(
       {
         error: 'Invalid preview URL',
-        code: 'NOVUM_PREVIEW_URL_INVALID',
+        code: 'STUDIO_PREVIEW_URL_INVALID',
       },
       400
     );
@@ -625,19 +625,19 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
     return noCache(
       {
         error: 'Rendered preview client heartbeat is incomplete',
-        code: 'NOVUM_PREVIEW_CLIENT_HEARTBEAT_INVALID',
+        code: 'STUDIO_PREVIEW_CLIENT_HEARTBEAT_INVALID',
       },
       409
     );
   }
 
-  const allowedPreviewRoles: NovumRole[] = [
+  const allowedPreviewRoles: StudioProjectRole[] = [
     'studio_admin',
     'studio_developer',
     'customer_owner',
     'customer_editor',
   ];
-  const previewNonce = parsePreviewNonce(request.cookies.get(NOVUM_PREVIEW_NONCE_COOKIE)?.value || '');
+  const previewNonce = parsePreviewNonce(request.cookies.get(STUDIO_PREVIEW_NONCE_COOKIE)?.value || '');
   const matchedPreviewNonce = (
     previewNonce
     && previewNonce.previewUrl === previewUrl
@@ -647,13 +647,13 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
     return noCache(
       {
         error: 'Open this Studio preview before recording a rendered draft',
-        code: 'NOVUM_PREVIEW_RENDER_REQUIRED',
+        code: 'STUDIO_PREVIEW_RENDER_REQUIRED',
       },
       409
     );
   }
 
-  const roleCheck = await requireNovumProjectRoleForProject(request, matchedPreviewNonce.projectId, allowedPreviewRoles);
+  const roleCheck = await requireStudioProjectRoleForProject(request, matchedPreviewNonce.projectId, allowedPreviewRoles);
   if (!roleCheck.ok) return roleCheck.response;
 
   const { context } = roleCheck;
@@ -661,7 +661,7 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
     return noCache(
       {
         error: 'Open this Studio preview before recording a rendered draft',
-        code: 'NOVUM_PREVIEW_RENDER_REQUIRED',
+        code: 'STUDIO_PREVIEW_RENDER_REQUIRED',
       },
       409
     );
@@ -672,13 +672,24 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
     return noCache(
       {
         error: 'Open this Studio preview again before recording a rendered draft',
-        code: 'NOVUM_PREVIEW_RENDER_REQUIRED',
+        code: 'STUDIO_PREVIEW_RENDER_REQUIRED',
       },
       409
     );
   }
 
   const draftHash = await getCurrentDraftHash(context.client, context.project.id);
+  const serverRenderProof = await verifyStudioPreviewServerRender(request, previewUrl, context.project.slug);
+  if (!serverRenderProof) {
+    return noCache(
+      {
+        error: 'Open this Studio preview again before recording a server-verified rendered draft',
+        code: 'STUDIO_PREVIEW_SERVER_RENDER_REQUIRED',
+      },
+      409
+    );
+  }
+
   const rawNonceHash = hashPreviewNonce(matchedPreviewNonce.raw);
   const previewNonceHash = crypto
     .createHash('sha256')
@@ -700,11 +711,12 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
     previewNonceIssuedAt: new Date(matchedPreviewNonce.issuedAt).toISOString(),
     clientVisibilityProof: true,
     serverSideRenderProof: true,
+    serverRenderProof,
     renderArtifact: {
-      kind: 'studio-preview-nonce-heartbeat',
+      kind: 'studio-preview-server-render',
       reportPath: previewUrl,
       generatedAt: new Date().toISOString(),
-      pairCount: Number(clientHeartbeat.visibleLayerCount) || 1,
+      pairCount: serverRenderProof.markerCount,
       failingPairs: [],
       previewNonceHash,
       draftHash,
@@ -712,7 +724,7 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
   };
 
   const { data, error } = await context.client
-    .from('novum_preview_runs')
+    .from('studio_preview_runs')
     .insert({
       project_id: context.project.id,
       actor_user_id: context.actorUserId,
@@ -730,7 +742,7 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
       return noCache(
         {
           error: 'Open this Studio preview again before recording a rendered draft',
-          code: 'NOVUM_PREVIEW_RENDER_REQUIRED',
+          code: 'STUDIO_PREVIEW_RENDER_REQUIRED',
         },
         409
       );
@@ -748,7 +760,7 @@ type CustomCodeScanResult = {
   snippets_count: number;
 };
 
-async function scanNovumCustomCode(client: any, projectId: string, isPublished = false): Promise<CustomCodeScanResult & { snippets: CodeSnippet[] }> {
+async function scanStudioCustomCode(client: any, projectId: string, isPublished = false): Promise<CustomCodeScanResult & { snippets: CodeSnippet[] }> {
   const snippets = await collectCustomCodeSnippets(client, projectId, isPublished);
   const combined = snippets.map((item) => `${item.scope}:${item.targetId || ''}:${item.content}`).join('\n---\n');
 
@@ -772,7 +784,7 @@ async function scanNovumCustomCode(client: any, projectId: string, isPublished =
   };
 }
 
-export async function canRenderNovumCustomCode(
+export async function canRenderStudioCustomCode(
   projectId?: string | null,
   isPublished = false,
   options: { requireProject?: boolean } = {}
@@ -783,22 +795,22 @@ export async function canRenderNovumCustomCode(
   if (!client) return false;
 
   try {
-    const scan = await scanNovumCustomCode(client, projectId, isPublished);
+    const scan = await scanStudioCustomCode(client, projectId, isPublished);
     return scan.secret_scan_status === 'clean';
   } catch {
     return false;
   }
 }
 
-async function recordNovumCustomCodeSnapshot(input: {
+async function recordStudioCustomCodeSnapshot(input: {
   client: any;
-  project: NovumProject;
+  project: StudioProject;
   actorUserId: string;
 }): Promise<CustomCodeScanResult> {
-  const scan = await scanNovumCustomCode(input.client, input.project.id);
+  const scan = await scanStudioCustomCode(input.client, input.project.id);
   if (!scan.content_hash) return scan;
 
-  await input.client.from('novum_custom_code_events').insert({
+  await input.client.from('studio_custom_code_events').insert({
     project_id: input.project.id,
     actor_user_id: input.actorUserId,
     scope: 'global',
@@ -821,11 +833,11 @@ async function recordNovumCustomCodeSnapshot(input: {
   return result;
 }
 
-async function resolveProjectForRequest(client: any, request: NextRequest, actorUserId: string): Promise<NovumProject | null> {
-  const explicitProject = request.headers.get('x-novum-project-slug') || request.nextUrl.searchParams.get('project');
+async function resolveProjectForRequest(client: any, request: NextRequest, actorUserId: string): Promise<StudioProject | null> {
+  const explicitProject = request.headers.get('x-studio-project-slug') || request.nextUrl.searchParams.get('project');
   if (explicitProject) return getProjectByDomainOrSlug(client, explicitProject);
 
-  const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || '';
+  const host = request.headers.get('host') || request.headers.get('x-forwarded-host') || '';
   const hostname = host.split(':')[0];
   if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
     const byDomain = await getProjectByDomainOrSlug(client, hostname);
@@ -835,11 +847,11 @@ async function resolveProjectForRequest(client: any, request: NextRequest, actor
   return getSingleProjectByMembership(client, actorUserId);
 }
 
-async function getProjectBySlug(client: any, slug: string): Promise<NovumProject | null> {
+async function getProjectBySlug(client: any, slug: string): Promise<StudioProject | null> {
   if (!isSafeProjectLookupValue(slug)) return null;
 
   const { data, error } = await client
-    .from('novum_projects')
+    .from('studio_projects')
     .select('id, slug')
     .eq('slug', slug)
     .eq('status', 'active')
@@ -849,11 +861,11 @@ async function getProjectBySlug(client: any, slug: string): Promise<NovumProject
   return data;
 }
 
-async function getProjectById(client: any, projectId: string): Promise<NovumProject | null> {
+async function getProjectById(client: any, projectId: string): Promise<StudioProject | null> {
   if (!/^[a-f0-9-]{36}$/i.test(projectId)) return null;
 
   const { data, error } = await client
-    .from('novum_projects')
+    .from('studio_projects')
     .select('id, slug')
     .eq('id', projectId)
     .eq('status', 'active')
@@ -863,11 +875,11 @@ async function getProjectById(client: any, projectId: string): Promise<NovumProj
   return data;
 }
 
-async function getProjectByDomainOrSlug(client: any, value: string): Promise<NovumProject | null> {
+async function getProjectByDomainOrSlug(client: any, value: string): Promise<StudioProject | null> {
   if (!isSafeProjectLookupValue(value)) return null;
 
   const activeProjects = await client
-    .from('novum_projects')
+    .from('studio_projects')
     .select('id, slug, metadata')
     .eq('status', 'active');
 
@@ -875,7 +887,7 @@ async function getProjectByDomainOrSlug(client: any, value: string): Promise<Nov
   const aliasMatches = findStudioProjectPathMatches(activeProjects.data, value);
 
   const bySlug = await client
-    .from('novum_projects')
+    .from('studio_projects')
     .select('id, slug')
     .eq('slug', value)
     .eq('status', 'active')
@@ -887,7 +899,7 @@ async function getProjectByDomainOrSlug(client: any, value: string): Promise<Nov
   }
 
   const byDomain = await client
-    .from('novum_projects')
+    .from('studio_projects')
     .select('id, slug')
     .eq('primary_domain', value)
     .eq('status', 'active')
@@ -900,12 +912,12 @@ async function getProjectByDomainOrSlug(client: any, value: string): Promise<Nov
   return match?.id && match?.slug ? { id: match.id, slug: match.slug } : null;
 }
 
-async function getSingleProjectByMembership(client: any, actorUserId: string): Promise<NovumProject | null> {
+async function getSingleProjectByMembership(client: any, actorUserId: string): Promise<StudioProject | null> {
   if (await getSiteAdminRole(client, actorUserId)) return null;
 
   const { data, error } = await client
-    .from('novum_project_memberships')
-    .select('project:novum_projects(id, slug, status, ycode_site_key)')
+    .from('studio_project_memberships')
+    .select('project:studio_projects(id, slug, status, ycode_site_key)')
     .eq('user_id', actorUserId);
 
   if (error || !Array.isArray(data)) return null;
@@ -1021,10 +1033,13 @@ function hasTrustedPreviewRenderProof(): boolean {
 }
 
 function isProjectScopedLivePublishVerified(): boolean {
-  return process.env.STUDIO_PROJECT_SCOPED_LIVE_PUBLISH_VERIFIED === '1';
+  // Safety gate: the current upstream publish/revert services still operate on
+  // global draft/published rows. Do not allow an env flag to claim project-scoped
+  // live publishing until those services thread project_id through every table.
+  return false;
 }
 
-export function getNovumPublishReadiness() {
+export function getStudioPublishReadiness() {
   const projectScopeRequired = isProjectScopeRequired();
   const globalPublishAllowed = allowGlobalPublishEscapeHatch();
   const trustedPreviewRenderProof = hasTrustedPreviewRenderProof();
@@ -1039,21 +1054,31 @@ export function getNovumPublishReadiness() {
     projectScopeRequired,
     globalPublishAllowed,
     trustedPreviewRenderProof,
-    blockerCode: livePublishAvailable ? null : 'NOVUM_PROJECT_SCOPED_PUBLISH_REQUIRED',
+    blockerCode: livePublishAvailable ? null : 'STUDIO_PROJECT_SCOPED_PUBLISH_REQUIRED',
     blockerMessage: livePublishAvailable
       ? null
       : !trustedPreviewRenderProof
         ? 'Live-Schaltung ist blockiert, bis eine serverseitig verifizierte Preview-Prüfung verfügbar ist.'
         : projectScopedPublishConfigured
-          ? 'Live-Schaltung ist blockiert: projektgebundenes Publishing ist konfiguriert, aber die aktuelle Ycode-Publish-Route ist noch global.'
+          ? 'Live-Schaltung ist blockiert: projektgebundenes Publishing ist konfiguriert, aber die aktuelle Studio-Publish-Route ist noch global.'
           : globalPublishAllowed
             ? 'Live-Schaltung bleibt trotz Global-Publish-Escape-Hatch blockiert, bis der Studio-Publish-Pfad projektgebunden ist.'
             : 'Live-Schaltung ist blockiert, bis projektgebundenes Publishing verfügbar ist.',
+	  };
+}
+
+export function getStudioLiveMutationBlocker() {
+  const readiness = getStudioPublishReadiness();
+  if (readiness.livePublishAvailable) return null;
+  return {
+    error: readiness.blockerMessage,
+    code: readiness.blockerCode,
+    readiness,
   };
 }
 
-export async function getNovumPublishReadinessForRequest(request: NextRequest): Promise<Response> {
-  const roleCheck = await requireNovumProjectRole(request, [
+export async function getStudioPublishReadinessForRequest(request: NextRequest): Promise<Response> {
+  const roleCheck = await requireStudioProjectRole(request, [
     'studio_admin',
     'studio_developer',
     'customer_owner',
@@ -1062,10 +1087,10 @@ export async function getNovumPublishReadinessForRequest(request: NextRequest): 
   if (!roleCheck.ok) return roleCheck.response;
 
   const { context } = roleCheck;
-  const readiness = getNovumPublishReadiness();
+  const readiness = getStudioPublishReadiness();
   const draftHash = await getCurrentDraftHash(context.client, context.project.id);
   const previewApproved = await hasValidPreviewApproval(context.client, context.project.id, draftHash);
-  const customCode = await scanNovumCustomCode(context.client, context.project.id);
+  const customCode = await scanStudioCustomCode(context.client, context.project.id);
   const customCodeBlocked = customCode.secret_scan_status === 'blocked';
 
   return noCache({
@@ -1080,9 +1105,9 @@ export async function getNovumPublishReadinessForRequest(request: NextRequest): 
       livePublishAvailable: readiness.livePublishAvailable && previewApproved && !customCodeBlocked,
       blockerCode: readiness.livePublishAvailable
         ? !previewApproved
-          ? 'NOVUM_PREVIEW_REQUIRED'
+          ? 'STUDIO_PREVIEW_REQUIRED'
           : customCodeBlocked
-            ? 'NOVUM_CUSTOM_CODE_SECRET_BLOCKED'
+            ? 'STUDIO_CUSTOM_CODE_SECRET_BLOCKED'
             : null
         : readiness.blockerCode,
       blockerMessage: readiness.livePublishAvailable
@@ -1359,7 +1384,7 @@ async function draftChangedAfter(client: any, projectId: string, issuedAt: numbe
 async function hasValidPreviewApproval(client: any, projectId: string, draftHash: string): Promise<boolean> {
   const cutoff = new Date(Date.now() - PREVIEW_MAX_AGE_HOURS * 60 * 60 * 1000).toISOString();
   const { data, error } = await client
-    .from('novum_preview_runs')
+    .from('studio_preview_runs')
     .select('id, actor_user_id, metadata')
     .eq('project_id', projectId)
     .eq('draft_hash', draftHash)
@@ -1377,7 +1402,7 @@ async function hasValidPreviewApproval(client: any, projectId: string, draftHash
     if (!approval.actor_user_id) continue;
 
     const { data: renderedPreview, error: renderedPreviewError } = await client
-      .from('novum_preview_runs')
+      .from('studio_preview_runs')
       .select('id, metadata')
       .eq('id', approval.metadata.renderedPreviewRunId)
       .eq('project_id', projectId)
@@ -1469,7 +1494,7 @@ function parsePreviewNonce(value: string): {
 }
 
 function getPreviewNonceSecret(): string | null {
-  return process.env.NOVUM_PREVIEW_NONCE_SECRET
+  return process.env.STUDIO_PREVIEW_NONCE_SECRET
     || process.env.SUPABASE_SECRET_KEY
     || process.env.SUPABASE_SERVICE_ROLE_KEY
     || process.env.SUPABASE_DB_PASSWORD
@@ -1501,7 +1526,7 @@ async function verifyStudioPreviewServerRender(
   const absolutePreviewUrl = new URL(previewUrl, request.nextUrl.origin);
   const headers = new Headers({
     accept: 'text/html',
-    'x-novum-project-slug': projectSlug,
+    'x-studio-project-slug': projectSlug,
   });
   const cookieHeader = request.headers.get('cookie');
   if (cookieHeader) headers.set('cookie', cookieHeader);
@@ -1539,7 +1564,7 @@ async function getRecentRenderedPreview(
 ): Promise<{ id: string; preview_url: string } | null> {
   const cutoff = new Date(Date.now() - PREVIEW_MAX_AGE_HOURS * 60 * 60 * 1000).toISOString();
   const { data, error } = await client
-    .from('novum_preview_runs')
+    .from('studio_preview_runs')
     .select('id, preview_url, metadata')
     .eq('project_id', projectId)
     .eq('actor_user_id', actorUserId)
@@ -1564,7 +1589,10 @@ function hasPreviewRenderProof(metadata: Record<string, unknown> | null | undefi
     const artifact = metadata.renderArtifact;
     if (!artifact || typeof artifact !== 'object') return false;
     const typedArtifact = artifact as Record<string, unknown>;
-    if (typedArtifact.kind !== 'studio-preview-nonce-heartbeat') return false;
+    if (
+      typedArtifact.kind !== 'studio-preview-nonce-heartbeat'
+      && typedArtifact.kind !== 'studio-preview-server-render'
+    ) return false;
     if (typeof typedArtifact.reportPath !== 'string' || !typedArtifact.reportPath.trim()) return false;
     if (typeof typedArtifact.generatedAt !== 'string' || !typedArtifact.generatedAt.trim()) return false;
     if (typeof typedArtifact.pairCount !== 'number' || typedArtifact.pairCount <= 0) return false;

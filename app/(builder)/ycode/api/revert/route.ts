@@ -5,7 +5,7 @@ import { cleanupOrphanedStorageFiles } from '@/lib/storage-utils';
 import { syncCSS } from '@/lib/services/settingsService';
 import { clearAllCache } from '@/lib/services/cacheService';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
-import { requireNovumProjectRole, writeNovumAuditLog } from '@/lib/novum-platform';
+import { getStudioPublishReadiness, requireStudioProjectRole, writeStudioAuditLog } from '@/lib/studio-platform';
 import type { PublishStats, PublishTableStats } from '@/types';
 
 export const dynamic = 'force-dynamic';
@@ -87,16 +87,39 @@ export async function POST(_request: NextRequest) {
   const stats = createEmptyStats();
 
   try {
-    const novumRole = await requireNovumProjectRole(_request, [
+    const studioRole = await requireStudioProjectRole(_request, [
       'studio_admin',
       'studio_developer',
       'customer_owner',
       'customer_editor',
     ]);
-    if (!novumRole.ok) return novumRole.response;
+    if (!studioRole.ok) return studioRole.response;
+
+    const readiness = getStudioPublishReadiness();
+    if (!readiness.projectScopedPublishAvailable) {
+      await writeStudioAuditLog({
+        request: _request,
+        action: 'site.revert.blocked.project_scoped_publish_required',
+        entityType: 'site',
+        entityId: studioRole.context.project.slug,
+        metadata: {
+          projectId: studioRole.context.project.id,
+          reason: 'project_scoped_revert_not_available',
+          readiness,
+        },
+      });
+      return noCache(
+        {
+          error: readiness.blockerMessage,
+          code: readiness.blockerCode,
+          readiness,
+        },
+        409
+      );
+    }
 
     // Guard: only allow revert if site has been published before
-    const publishedAt = await getSettingByKey('published_at');
+    const publishedAt = await getSettingByKey('published_at', studioRole.context.project.id);
     if (!publishedAt) {
       return noCache(
         { error: 'Cannot revert: site has never been published' },
@@ -325,18 +348,18 @@ export async function POST(_request: NextRequest) {
       result.changes.assetFolders + result.changes.assets + result.changes.fonts +
       result.changes.locales + result.changes.translations;
 
-    await writeNovumAuditLog({
+    await writeStudioAuditLog({
       request: _request,
       action: 'site.revert',
       entityType: 'site',
-      entityId: novumRole.context.project.slug,
+      entityId: studioRole.context.project.slug,
       metadata: {
         changes: result.changes,
         cleaned: result.cleaned,
         totalReverted,
         durationMs: stats.totalDurationMs,
-        projectSlug: novumRole.context.project.slug,
-        actorRole: novumRole.context.role,
+        projectSlug: studioRole.context.project.slug,
+        actorRole: studioRole.context.role,
       },
     });
 

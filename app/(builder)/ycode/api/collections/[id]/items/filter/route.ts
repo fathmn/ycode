@@ -8,6 +8,8 @@ import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { renderCollectionItemsToHtml, loadTranslationsForLocale } from '@/lib/page-fetcher';
 import { noCache } from '@/lib/api-response';
 import { isDatePreset, resolveDateFilterValue } from '@/lib/collection-field-utils';
+import { resolvePublicContentRequestProjectScope } from '@/lib/request-project-scope';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import type { Layer, CollectionItem, CollectionItemWithValues } from '@/types';
 
 export const dynamic = 'force-dynamic';
@@ -59,6 +61,7 @@ async function getAllItemIdsForCollection(
   client: SupabaseClient,
   collectionId: string,
   isPublished: boolean,
+  projectId?: string | null,
 ): Promise<string[]> {
   let query = client
     .from('collection_items')
@@ -70,6 +73,7 @@ async function getAllItemIdsForCollection(
   if (isPublished) {
     query = query.eq('is_publishable', true);
   }
+  query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
 
   const { data, error } = await query;
   if (error) throw new Error(`Failed to fetch item IDs: ${error.message}`);
@@ -81,27 +85,34 @@ async function getIdsMatchingFilter(
   filter: FilterCondition,
   isPublished: boolean,
   allItemIds: string[],
+  projectId?: string | null,
 ): Promise<Set<string>> {
   const { fieldId, operator, value } = filter;
   const allSet = new Set(allItemIds);
 
-  const selectIds = (chunk: string[]) =>
-    client
+  const selectIds = (chunk: string[]) => {
+    let query = client
       .from('collection_item_values')
       .select('item_id')
       .eq('field_id', fieldId)
       .eq('is_published', isPublished)
       .is('deleted_at', null)
       .in('item_id', chunk);
+    if (projectId) query = query.eq('project_id', projectId);
+    return query;
+  };
 
-  const selectIdsAndValues = (chunk: string[]) =>
-    client
+  const selectIdsAndValues = (chunk: string[]) => {
+    let query = client
       .from('collection_item_values')
       .select('item_id, value')
       .eq('field_id', fieldId)
       .eq('is_published', isPublished)
       .is('deleted_at', null)
       .in('item_id', chunk);
+    if (projectId) query = query.eq('project_id', projectId);
+    return query;
+  };
 
   switch (operator) {
     // --- Text positive ---
@@ -408,11 +419,12 @@ async function getFilteredItemIds(
   collectionId: string,
   isPublished: boolean,
   filterGroups: FilterCondition[][],
+  projectId?: string | null,
 ): Promise<{ matchingIds: string[]; total: number }> {
   const client = await getSupabaseAdmin();
   if (!client) throw new Error('Supabase client not configured');
 
-  const allItemIds = await getAllItemIdsForCollection(client, collectionId, isPublished);
+  const allItemIds = await getAllItemIdsForCollection(client, collectionId, isPublished, projectId);
 
   if (filterGroups.length === 0) {
     return { matchingIds: allItemIds, total: allItemIds.length };
@@ -432,7 +444,7 @@ async function getFilteredItemIds(
           filter = { ...filter, operator: resolved.operator, value: resolved.value, value2: resolved.value2 };
         }
       }
-      const matchingForFilter = await getIdsMatchingFilter(client, filter, isPublished, [...currentIds]);
+      const matchingForFilter = await getIdsMatchingFilter(client, filter, isPublished, [...currentIds], projectId);
       currentIds = new Set([...currentIds].filter(id => matchingForFilter.has(id)));
     }
 
@@ -464,19 +476,24 @@ async function getFieldValuesForItems(
   fieldId: string,
   isPublished: boolean,
   itemIds: string[],
+  projectId?: string | null,
 ): Promise<Map<string, string>> {
   if (itemIds.length === 0) return new Map();
   const client = await getSupabaseAdmin();
   if (!client) throw new Error('Supabase client not configured');
 
   const rows = await chunkedQuery<{ item_id: string; value: string | null }>(
-    chunk => client
-      .from('collection_item_values')
-      .select('item_id, value')
-      .eq('field_id', fieldId)
-      .eq('is_published', isPublished)
-      .is('deleted_at', null)
-      .in('item_id', chunk),
+    async chunk => {
+      let query = client
+        .from('collection_item_values')
+        .select('item_id, value')
+        .eq('field_id', fieldId)
+        .eq('is_published', isPublished)
+        .is('deleted_at', null)
+        .in('item_id', chunk);
+      query = (await applyProjectScopeToQuery(query, client, 'collection_item_values', projectId)).query;
+      return query;
+    },
     itemIds,
   );
 
@@ -506,6 +523,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const projectScope = await resolvePublicContentRequestProjectScope(request);
+    const projectId = projectScope.projectId;
     const { id: collectionId } = await params;
     const body = await request.json();
     const {
@@ -519,8 +538,11 @@ export async function POST(
       localeCode,
       collectionLayerClasses,
       collectionLayerTag,
-      published: isPublished = true,
+      published: requestedPublished = true,
     } = body;
+    const isPublished = projectScope.source === 'authenticated-preview'
+      ? requestedPublished !== false
+      : true;
 
     if (!layerTemplate || !Array.isArray(layerTemplate)) {
       return noCache({ error: 'layerTemplate is required and must be an array' }, 400);
@@ -533,6 +555,7 @@ export async function POST(
       collectionId,
       isPublished,
       filterGroups,
+      projectId,
     );
 
     if (matchingIds.length === 0) {
@@ -552,7 +575,7 @@ export async function POST(
         itemIds: matchingIds,
         limit: pageLimit,
         offset: pageOffset,
-      });
+      }, projectId);
       pageRawItems = items;
       pageItemIds = items.map(item => item.id);
     } else if (sortBy === 'random') {
@@ -561,13 +584,13 @@ export async function POST(
       if (pageItemIds.length > 0) {
         const { items } = await getItemsByCollectionId(collectionId, isPublished, {
           itemIds: pageItemIds,
-        });
+        }, projectId);
         pageRawItems = reorderItemsById(items, pageItemIds);
       }
     } else {
       // For field-based sort, sort IDs using just the sort field values first,
       // then hydrate only the requested page window.
-      const sortValueByItem = await getFieldValuesForItems(sortBy, isPublished, matchingIds);
+      const sortValueByItem = await getFieldValuesForItems(sortBy, isPublished, matchingIds, projectId);
       const sortedIds = [...matchingIds].sort((a, b) => {
         const aStr = String(sortValueByItem.get(a) || '');
         const bStr = String(sortValueByItem.get(b) || '');
@@ -584,7 +607,7 @@ export async function POST(
       if (pageItemIds.length > 0) {
         const { items } = await getItemsByCollectionId(collectionId, isPublished, {
           itemIds: pageItemIds,
-        });
+        }, projectId);
         pageRawItems = reorderItemsById(items, pageItemIds);
       }
     }
@@ -592,6 +615,7 @@ export async function POST(
     const valuesByItem = await getValuesByItemIds(
       pageRawItems.map(i => i.id),
       isPublished,
+      projectId,
     );
     const paginatedItems: CollectionItemWithValues[] = pageRawItems.map(item => ({
       ...item,
@@ -599,7 +623,7 @@ export async function POST(
     }));
     const hasMore = pageOffset + paginatedItems.length < filteredTotal;
 
-    const collectionFields = await getFieldsByCollectionId(collectionId, isPublished, { excludeComputed: true });
+    const collectionFields = await getFieldsByCollectionId(collectionId, isPublished, { excludeComputed: true }, projectId);
     const slugField = collectionFields.find(f => f.key === 'slug');
     const collectionItemSlugs: Record<string, string> = {};
     if (slugField) {
@@ -611,14 +635,14 @@ export async function POST(
     }
 
     const [pages, folders] = await Promise.all([
-      getAllPages(),
-      getAllPageFolders(),
+      getAllPages(undefined, projectId),
+      getAllPageFolders(undefined, projectId),
     ]);
 
     let locale = null;
     let translations: Record<string, any> | undefined;
     if (localeCode) {
-      const localeData = await loadTranslationsForLocale(localeCode, isPublished);
+      const localeData = await loadTranslationsForLocale(localeCode, isPublished, undefined, projectId);
       locale = localeData.locale;
       translations = localeData.translations;
     }
@@ -637,6 +661,7 @@ export async function POST(
       undefined,
       collectionLayerClasses,
       collectionLayerTag,
+      projectId,
     );
 
     return noCache({

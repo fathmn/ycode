@@ -1,27 +1,38 @@
 import { unstable_cache } from 'next/cache';
 import Link from 'next/link';
+import { headers } from 'next/headers';
 import { fetchHomepage, fetchErrorPage } from '@/lib/page-fetcher';
 import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { generatePageMetadata, fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
+import { projectLookupFromHost, resolveStudioProjectId } from '@/lib/project-scope';
 import { getSiteBaseUrl } from '@/lib/url-utils';
 import type { Metadata } from 'next';
 
 // Static by default for performance, dynamic only when pagination is requested
 export const revalidate = false; // Cache indefinitely until publish invalidates
 
+async function resolvePublishedProjectId(): Promise<string | null> {
+  const requestHeaders = await headers();
+  const hostLookup = projectLookupFromHost(
+    requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
+  );
+  return hostLookup ? resolveStudioProjectId(hostLookup) : null;
+}
+
 /**
  * Fetch homepage data from database
  * Cached with tag-based revalidation (no time-based stale cache)
  */
-async function fetchPublishedHomepage() {
+async function fetchPublishedHomepage(projectId: string | null) {
+  const projectCacheKey = projectId || 'global';
   try {
     return await unstable_cache(
-      async () => fetchHomepage(true),
-      ['data-for-route-/'],
+      async () => fetchHomepage(true, undefined, undefined, undefined, undefined, projectId),
+      [`data-for-project-${projectCacheKey}-route-/`],
       {
-        tags: ['all-pages', 'route-/'], // all-pages for full publish invalidation, route-/ for targeted
+        tags: ['all-pages', `project-${projectCacheKey}`, 'route-/'],
         revalidate: false,
       }
     )();
@@ -29,19 +40,20 @@ async function fetchPublishedHomepage() {
     // Fallback to uncached fetch when data exceeds cache size limit (2MB).
     // If runtime credentials are unavailable (e.g. build-time), return null.
     try {
-      return await fetchHomepage(true);
+      return await fetchHomepage(true, undefined, undefined, undefined, undefined, projectId);
     } catch {
       return null;
     }
   }
 }
 
-async function fetchCachedGlobalSettings() {
+async function fetchCachedGlobalSettings(projectId: string | null) {
+  const projectCacheKey = projectId || 'global';
   try {
     return await unstable_cache(
-      async () => fetchGlobalPageSettings(),
-      ['data-for-global-settings'],
-      { tags: ['all-pages'], revalidate: false }
+      async () => fetchGlobalPageSettings(projectId),
+      [`data-for-project-${projectCacheKey}-global-settings`],
+      { tags: ['all-pages', `project-${projectCacheKey}`], revalidate: false }
     )();
   } catch {
     return {
@@ -52,31 +64,33 @@ async function fetchCachedGlobalSettings() {
       colorVariablesCss: null,
       globalCustomCodeHead: null,
       globalCustomCodeBody: null,
-      ycodeBadge: true,
+      ycodeBadge: false,
       faviconUrl: null,
       webClipUrl: null,
     };
   }
 }
 
-async function fetchCachedFoldersForAuth() {
+async function fetchCachedFoldersForAuth(projectId: string | null) {
+  const projectCacheKey = projectId || 'global';
   try {
     return await unstable_cache(
-      async () => fetchFoldersForAuth(true),
-      ['data-for-auth-folders'],
-      { tags: ['all-pages'], revalidate: false }
+      async () => fetchFoldersForAuth(true, projectId),
+      [`data-for-project-${projectCacheKey}-auth-folders`],
+      { tags: ['all-pages', `project-${projectCacheKey}`], revalidate: false }
     )();
   } catch {
     return [];
   }
 }
 
-async function fetchCachedErrorPage(errorCode: 401) {
+async function fetchCachedErrorPage(errorCode: 401, projectId: string | null) {
+  const projectCacheKey = projectId || 'global';
   try {
     return await unstable_cache(
-      async () => fetchErrorPage(errorCode, true),
-      [`data-for-error-page-${errorCode}`],
-      { tags: ['all-pages'], revalidate: false }
+      async () => fetchErrorPage(errorCode, true, undefined, projectId),
+      [`data-for-project-${projectCacheKey}-error-page-${errorCode}`],
+      { tags: ['all-pages', `project-${projectCacheKey}`], revalidate: false }
     )();
   } catch {
     return null;
@@ -84,8 +98,9 @@ async function fetchCachedErrorPage(errorCode: 401) {
 }
 
 export default async function Home() {
+  const projectId = await resolvePublishedProjectId();
   // Cache-first homepage path; pagination is served through internal dynamic routes.
-  const data = await fetchPublishedHomepage();
+  const data = await fetchPublishedHomepage(projectId);
 
   // If no published homepage exists, show default landing page
   if (!data || !data.pageLayers) {
@@ -93,13 +108,13 @@ export default async function Home() {
       <div className="min-h-screen flex items-center justify-center bg-white">
         <div className="text-center p-8 flex flex-col items-center justify-center gap-2">
           <h1 className="text-xl font-semibold text-neutral-900">
-            Welcome to Ycode
+            Willkommen im Studio
           </h1>
           <Link
             href="/ycode"
             className=" bg-blue-500 text-white text-sm font-medium h-8 flex items-center justify-center px-3 rounded-lg transition-colors"
           >
-            Get started
+            Studio öffnen
           </Link>
         </div>
       </div>
@@ -107,11 +122,11 @@ export default async function Home() {
   }
 
   // Load all global settings early so error pages also get global custom code
-  const globalSettings = await fetchCachedGlobalSettings();
+  const globalSettings = await fetchCachedGlobalSettings(projectId);
 
   // Check password protection for homepage.
   // First evaluate without cookies() so non-protected pages can stay cacheable.
-  const folders = await fetchCachedFoldersForAuth();
+  const folders = await fetchCachedFoldersForAuth(projectId);
   const protectionCheck = getPasswordProtection(data.page, folders, null);
 
   // If homepage is protected, read auth cookie and re-check unlock state.
@@ -121,7 +136,7 @@ export default async function Home() {
 
     // If homepage is protected and not unlocked, show 401 error page
     if (!protection.isUnlocked) {
-      const errorPageData = await fetchCachedErrorPage(401);
+      const errorPageData = await fetchCachedErrorPage(401, projectId);
 
       if (errorPageData) {
         const { page: errorPage, pageLayers: errorPageLayers, components: errorComponents } = errorPageData;
@@ -134,6 +149,8 @@ export default async function Home() {
             generatedCss={globalSettings.publishedCss || undefined}
             globalCustomCodeHead={globalSettings.globalCustomCodeHead}
             globalCustomCodeBody={globalSettings.globalCustomCodeBody}
+            renderProjectId={projectId}
+            customCodeProjectId={projectId}
             passwordProtection={{
               pageId: protection.protectedBy === 'page' ? protection.protectedById : undefined,
               folderId: protection.protectedBy === 'folder' ? protection.protectedById : undefined,
@@ -178,28 +195,31 @@ export default async function Home() {
       globalCustomCodeHead={globalSettings.globalCustomCodeHead}
       globalCustomCodeBody={globalSettings.globalCustomCodeBody}
       ycodeBadge={globalSettings.ycodeBadge}
+      renderProjectId={projectId}
+      customCodeProjectId={projectId}
     />
   );
 }
 
 // Generate metadata
 export async function generateMetadata(): Promise<Metadata> {
+  const projectId = await resolvePublishedProjectId();
   // Fetch page and global settings in parallel
   const [data, globalSettings] = await Promise.all([
-    fetchPublishedHomepage(),
-    fetchCachedGlobalSettings(),
+    fetchPublishedHomepage(projectId),
+    fetchCachedGlobalSettings(projectId),
   ]);
 
   if (!data) {
     return {
-      title: 'Ycode',
-      description: 'Built with Ycode',
+      title: 'Studio',
+      description: 'Kundenstudio für Websites',
     };
   }
 
   // Check password protection - don't leak metadata for protected pages.
   // First check without cookies() to avoid forcing dynamic metadata for public pages.
-  const folders = await fetchCachedFoldersForAuth();
+  const folders = await fetchCachedFoldersForAuth(projectId);
   const protectionCheck = getPasswordProtection(data.page, folders, null);
 
   if (protectionCheck.isProtected) {
@@ -223,8 +243,8 @@ export async function generateMetadata(): Promise<Metadata> {
       }),
       baseUrl: getSiteBaseUrl({ globalCanonicalUrl: globalSettings.globalCanonicalUrl }),
     }),
-    ['data-for-route-/-meta'],
-    { tags: ['all-pages', 'route-/'], revalidate: false }
+    [`data-for-project-${projectId || 'global'}-route-/-meta`],
+    { tags: ['all-pages', `project-${projectId || 'global'}`, 'route-/'], revalidate: false }
   )();
 
   if (baseUrl) {

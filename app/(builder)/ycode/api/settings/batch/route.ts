@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { setSettings } from '@/lib/repositories/settingsRepository';
 import { clearAllCache } from '@/lib/services/cacheService';
-import { recordNovumCustomCodeMutation } from '@/lib/novum-platform';
+import { recordStudioCustomCodeMutation, requireStudioProjectRole } from '@/lib/studio-platform';
 
 const CUSTOM_CODE_SETTING_KEYS = new Set(['custom_code_head', 'custom_code_body']);
 
@@ -24,14 +24,22 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const count = await setSettings(settings);
+    const roleCheck = await requireStudioProjectRole(request, [
+      'studio_admin',
+      'studio_developer',
+      'customer_owner',
+      'customer_editor',
+    ]);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const count = await setSettings(settings, roleCheck.context.project.id);
 
     await clearAllCache();
 
     for (const [key, value] of Object.entries(settings)) {
       if (!CUSTOM_CODE_SETTING_KEYS.has(key)) continue;
 
-      await recordNovumCustomCodeMutation(request, {
+      await recordStudioCustomCodeMutation(request, {
         scope: 'global',
         targetId: key,
         content: typeof value === 'string' ? value : JSON.stringify(value ?? ''),

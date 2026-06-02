@@ -2,6 +2,7 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT, SUPABASE_WRITE_BATCH_SIZE } from '@/lib/supabase-constants';
 import { STORAGE_BUCKET, STORAGE_FOLDERS } from '@/lib/asset-constants';
 import { cleanupOrphanedStorageFiles } from '@/lib/storage-utils';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import { generateAssetContentHash } from '../hash-utils';
 import type { Asset } from '../../types';
 
@@ -176,7 +177,7 @@ export async function getAllAssets(folderId?: string | null): Promise<Asset[]> {
  * @param id Asset ID
  * @param isPublished If true, get published version; if false, get draft version (default: false)
  */
-export async function getAssetById(id: string, isPublished: boolean = false): Promise<Asset | null> {
+export async function getAssetById(id: string, isPublished: boolean = false, projectId?: string | null): Promise<Asset | null> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -193,6 +194,7 @@ export async function getAssetById(id: string, isPublished: boolean = false): Pr
   if (!isPublished) {
     query = query.is('deleted_at', null);
   }
+  query = (await applyProjectScopeToQuery(query, client, 'assets', projectId)).query;
 
   const { data, error } = await query.single();
 
@@ -236,7 +238,11 @@ export async function getAssetForProxy(id: string): Promise<Pick<Asset, 'id' | '
  * Returns a map of asset ID to asset for quick lookup
  * @param isPublished If true, get published versions; if false, get draft versions (default: false)
  */
-export async function getAssetsByIds(ids: string[], isPublished: boolean = false): Promise<Record<string, Asset>> {
+export async function getAssetsByIds(
+  ids: string[],
+  isPublished: boolean = false,
+  projectId?: string | null
+): Promise<Record<string, Asset>> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -257,6 +263,7 @@ export async function getAssetsByIds(ids: string[], isPublished: boolean = false
   if (!isPublished) {
     query = query.is('deleted_at', null);
   }
+  query = (await applyProjectScopeToQuery(query, client, 'assets', projectId)).query;
 
   const { data, error } = await query;
 

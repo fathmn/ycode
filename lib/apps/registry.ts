@@ -60,7 +60,7 @@ export const apps: AppDefinition[] = [
   {
     id: 'airtable',
     name: 'Airtable',
-    description: 'One-way sync from Airtable tables to your Ycode collections with real-time webhook support.',
+    description: 'One-way sync from Airtable tables to your Studio collections with real-time webhook support.',
     logo: airtableLogo,
     categories: ['popular', 'cms-data'],
     implemented: true,
@@ -68,7 +68,7 @@ export const apps: AppDefinition[] = [
   {
     id: 'webflow',
     name: 'Webflow CMS',
-    description: 'One-click migrate a Webflow CMS site into Ycode collections, including assets and references.',
+    description: 'One-click migrate a Webflow CMS site into Studio collections, including assets and references.',
     logo: webflowLogo,
     categories: ['popular', 'cms-data'],
     implemented: true,

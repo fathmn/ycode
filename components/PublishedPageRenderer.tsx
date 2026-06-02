@@ -1,4 +1,5 @@
 import { Fragment } from 'react';
+import { preload } from 'react-dom';
 import CustomCodeInjector from '@/components/CustomCodeInjector';
 import LightboxInitializer from '@/components/LightboxInitializer';
 import PasswordForm from '@/components/PasswordForm';
@@ -9,12 +10,13 @@ import { collectLayerAssetIds, getAssetProxyUrl } from '@/lib/asset-utils';
 import { generateInitialAnimationCSS } from '@/lib/animation-utils';
 import { parseSafeBodyStyle } from '@/lib/body-style';
 import { castValue } from '@/lib/collection-utils';
-import { buildCustomFontsCss, buildFontClassesCss, getGoogleFontLinks } from '@/lib/font-utils';
+import { buildCustomFontsCss, buildFontClassesCss, filterGoogleFontLinksAgainstHeadHtml, getGoogleFontLinks, removeDuplicateGoogleFontLinksFromHeadHtml } from '@/lib/font-utils';
 import { getClassesString } from '@/lib/layer-utils';
 import { REF_COLLECTION_PREFIX, REF_PAGE_PREFIX, isCollectionItemKeyword } from '@/lib/link-utils';
-import { canRenderNovumCustomCode } from '@/lib/novum-platform';
+import { canRenderStudioCustomCode } from '@/lib/studio-platform';
 import { renderPageLayersToHtml } from '@/lib/page-fetcher';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
+import { extractPriorityImagePreload } from '@/lib/published-image-preload';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
@@ -481,7 +483,7 @@ export default async function PublishedPageRenderer({
   gaMeasurementId,
   globalCustomCodeHead,
   globalCustomCodeBody,
-  ycodeBadge = true,
+  ycodeBadge = false,
   passwordProtection,
 }: PublishedPageRendererProps) {
   const pageRenderProjectId = getRenderProjectId(page);
@@ -574,6 +576,7 @@ export default async function PublishedPageRenderer({
   const pageCustomCodeHead = page.is_dynamic && collectionItem
     ? resolveCustomCodePlaceholders(rawPageCustomCodeHead, collectionItem, collectionFields)
     : rawPageCustomCodeHead;
+  const dedupedPageCustomCodeHead = removeDuplicateGoogleFontLinksFromHeadHtml(pageCustomCodeHead, globalCustomCodeHead);
   const pageCustomCodeBody = page.is_dynamic && collectionItem
     ? resolveCustomCodePlaceholders(rawPageCustomCodeBody, collectionItem, collectionFields)
     : rawPageCustomCodeBody;
@@ -582,7 +585,7 @@ export default async function PublishedPageRenderer({
     ? (page as Page & { project_id?: string }).project_id || null
     : null;
   const customCodeRenderProjectId = explicitCustomCodeProjectId || renderProjectId || pageProjectId;
-  const allowCustomCodeExecution = await canRenderNovumCustomCode(customCodeRenderProjectId, true, {
+  const allowCustomCodeExecution = await canRenderStudioCustomCode(customCodeRenderProjectId, true, {
     requireProject: isProjectScopeRequired() || Boolean(process.env.STUDIO_YCODE_SITE_KEY && process.env.STUDIO_YCODE_SITE_KEY !== 'default'),
   });
 
@@ -594,7 +597,11 @@ export default async function PublishedPageRenderer({
       ? await getRenderFonts(renderProjectId)
       : await getPublishedFonts();
     fontsCss = buildCustomFontsCss(fonts) + buildFontClassesCss(fonts);
-    googleFontLinkUrls = getGoogleFontLinks(fonts);
+    googleFontLinkUrls = filterGoogleFontLinksAgainstHeadHtml(
+      getGoogleFontLinks(fonts),
+      globalCustomCodeHead,
+      dedupedPageCustomCodeHead,
+    );
   } catch (error) {
     console.error('[PublishedPageRenderer] Error loading fonts:', error);
     if (isProjectScopeRequired()) throw error;
@@ -642,6 +649,15 @@ export default async function PublishedPageRenderer({
     components,
     isPreview: false,
   });
+  const priorityImagePreload = extractPriorityImagePreload(html);
+  if (priorityImagePreload) {
+    preload(priorityImagePreload.href, {
+      as: 'image',
+      fetchPriority: 'high',
+      imageSrcSet: priorityImagePreload.imageSrcSet,
+      imageSizes: priorityImagePreload.imageSizes,
+    });
+  }
 
   const ssrBodyStyle = bodyStyleForSsr(appliedBodyStyle);
   const safeGaId = safeGaMeasurementId(gaMeasurementId);
@@ -656,7 +672,7 @@ export default async function PublishedPageRenderer({
       {allowCustomCodeExecution && process.env.SKIP_SETUP === 'true' && globalCustomCodeHead && (
         renderRootLayoutHeadCode(globalCustomCodeHead, 'global-head')
       )}
-      {allowCustomCodeExecution && pageCustomCodeHead && renderRootLayoutHeadCode(pageCustomCodeHead, 'page-head')}
+      {allowCustomCodeExecution && dedupedPageCustomCodeHead && renderRootLayoutHeadCode(dedupedPageCustomCodeHead, 'page-head')}
 
       <style id="ycode-form-reset" dangerouslySetInnerHTML={{ __html: FORM_RESET_CSS }} />
       {generatedCss && <style id="ycode-generated-css" dangerouslySetInnerHTML={{ __html: escapeStyleBoundary(generatedCss) }} />}
@@ -726,10 +742,10 @@ export default async function PublishedPageRenderer({
 
       {ycodeBadge && (
         <a
-          href="https://ycode.com"
+          href="https://studio.novum-partners.de"
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="This website was built using Ycode."
+          aria-label="Diese Website wird mit Studio verwaltet."
           style={{
             height: 'auto',
             background: '#050606',
@@ -750,7 +766,7 @@ export default async function PublishedPageRenderer({
             justifyContent: 'center',
           }}
         >
-          Built with Ycode
+          Studio
         </a>
       )}
 

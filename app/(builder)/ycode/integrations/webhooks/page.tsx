@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 
 import { useState, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
@@ -155,7 +155,7 @@ export default function WebhooksPage() {
 
   const fetchWebhooks = async () => {
     try {
-      const response = await novumFetch('/ycode/api/webhooks');
+      const response = await studioFetch('/ycode/api/webhooks');
       const result = await response.json();
       if (result.data) {
         setWebhooks(result.data);
@@ -192,7 +192,7 @@ export default function WebhooksPage() {
         ? { name: webhookName.trim(), url: webhookUrl.trim(), events: [webhookEvent], filters: hasFilters ? filters : null }
         : { name: webhookName.trim(), url: webhookUrl.trim(), events: [webhookEvent], filters: hasFilters ? filters : null, generateSecret };
 
-      const response = await novumFetch(url, {
+      const response = await studioFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -233,7 +233,7 @@ export default function WebhooksPage() {
     if (!webhookToDelete) return;
 
     try {
-      const response = await novumFetch(`/ycode/api/webhooks/${webhookToDelete.id}`, {
+      const response = await studioFetch(`/ycode/api/webhooks/${webhookToDelete.id}`, {
         method: 'DELETE',
       });
 
@@ -254,7 +254,7 @@ export default function WebhooksPage() {
 
   const handleToggleEnabled = async (webhook: Webhook) => {
     try {
-      const response = await novumFetch(`/ycode/api/webhooks/${webhook.id}`, {
+      const response = await studioFetch(`/ycode/api/webhooks/${webhook.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: !webhook.enabled }),
@@ -277,7 +277,7 @@ export default function WebhooksPage() {
   const handleTestWebhook = async (webhook: Webhook) => {
     setTestingWebhookId(webhook.id);
     try {
-      const response = await novumFetch(`/ycode/api/webhooks/${webhook.id}`, {
+      const response = await studioFetch(`/ycode/api/webhooks/${webhook.id}`, {
         method: 'POST',
       });
 
@@ -304,7 +304,7 @@ export default function WebhooksPage() {
     setIsLoadingDeliveries(true);
 
     try {
-      const response = await novumFetch(`/ycode/api/webhooks/${webhook.id}/deliveries?limit=20`);
+      const response = await studioFetch(`/ycode/api/webhooks/${webhook.id}/deliveries?limit=20`);
       const result = await response.json();
 
       if (result.data) {
@@ -322,8 +322,8 @@ export default function WebhooksPage() {
     setIsLoadingFilterData(true);
     try {
       const [formsRes, collectionsRes] = await Promise.all([
-        novumFetch('/ycode/api/form-submissions?summary=true'),
-        novumFetch('/ycode/api/collections'),
+        studioFetch('/ycode/api/form-submissions?summary=true'),
+        studioFetch('/ycode/api/collections'),
       ]);
       const formsResult = await formsRes.json();
       const collectionsResult = await collectionsRes.json();
@@ -423,7 +423,7 @@ export default function WebhooksPage() {
         </header>
 
         <p className="text-sm text-muted-foreground mb-6">
-          Receive real-time notifications when events occur in your Ycode site.
+          Receive real-time notifications when events occur in your Studio site.
         </p>
 
         {isLoading ? (

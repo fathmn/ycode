@@ -32,9 +32,9 @@ const allowedFiles = new Set([
   'components/LoadMoreCollection.tsx',
 ]);
 
-const fetchPattern = /(?<!(?:novum|studio))fetch\s*\(\s*([`'"])([^`'"]*\/ycode\/api[^`'"]*)\1/g;
+const fetchPattern = /(?<!studio)fetch\s*\(\s*([`'"])([^`'"]*\/ycode\/api[^`'"]*)\1/g;
 const apiUrlVariablePattern = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*([`'"])([^`'"]*\/ycode\/api[^`'"]*)\2/g;
-const variableFetchPattern = /(?<!(?:novum|studio))fetch\s*\(\s*([A-Za-z_$][\w$]*)\b/g;
+const variableFetchPattern = /(?<!studio)fetch\s*\(\s*([A-Za-z_$][\w$]*)\b/g;
 const findings = [];
 
 function isCodeFile(filePath) {

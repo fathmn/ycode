@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 
 import { useState, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
@@ -51,7 +51,7 @@ export default function RedirectsSettingsPage() {
       try {
         setIsLoading(true);
         setError(null);
-        const response = await novumFetch('/ycode/api/settings/redirects');
+        const response = await studioFetch('/ycode/api/settings/redirects');
         if (response.ok) {
           const result = await response.json();
           setRedirects(result.data || []);
@@ -77,7 +77,7 @@ export default function RedirectsSettingsPage() {
     try {
       setIsSaving(true);
       setError(null);
-      const response = await novumFetch('/ycode/api/settings/redirects', {
+      const response = await studioFetch('/ycode/api/settings/redirects', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ value: newRedirects }),

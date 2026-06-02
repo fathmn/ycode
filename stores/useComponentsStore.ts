@@ -5,7 +5,7 @@
  * Components are reusable layer trees stored globally
  */
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 import { create } from 'zustand';
 import {
   createComponentViaApi,
@@ -187,7 +187,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       set({ isLoading: true, error: null });
 
       try {
-        const response = await novumFetch('/ycode/api/components');
+        const response = await studioFetch('/ycode/api/components');
         const result = await response.json();
 
         if (result.error) {
@@ -207,7 +207,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       set({ isLoading: true, error: null });
 
       try {
-        const response = await novumFetch('/ycode/api/components', {
+        const response = await studioFetch('/ycode/api/components', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -245,7 +245,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       set({ isLoading: true, error: null });
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${id}`, {
+        const response = await studioFetch(`/ycode/api/components/${id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updates),
@@ -272,7 +272,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
     // Get preview of what will be affected by deleting a component
     getDeletePreview: async (id) => {
       try {
-        const response = await novumFetch(`/ycode/api/components/${id}`, {
+        const response = await studioFetch(`/ycode/api/components/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'preview-delete' }),
@@ -297,7 +297,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       set({ isLoading: true, error: null });
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${id}`, {
+        const response = await studioFetch(`/ycode/api/components/${id}`, {
           method: 'DELETE',
         });
 
@@ -511,7 +511,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       set({ isSaving: true });
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${componentId}`, {
+        const response = await studioFetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ layers: layersBeingSaved }),
@@ -664,13 +664,13 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       for (const componentId of componentIds) {
         try {
           // Check if component exists/is deleted
-          const response = await novumFetch(`/ycode/api/components/${componentId}`);
+          const response = await studioFetch(`/ycode/api/components/${componentId}`);
           const result = await response.json();
 
           // If component doesn't exist or is deleted, restore it
           if (!result.data || result.error) {
             // Restore the component via API
-            const restoreResponse = await novumFetch(`/ycode/api/components/${componentId}`, {
+            const restoreResponse = await studioFetch(`/ycode/api/components/${componentId}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ action: 'restore' }),
@@ -706,7 +706,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       const updatedVariables = [...(component.variables || []), newVariable];
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${componentId}`, {
+        const response = await studioFetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ variables: updatedVariables }),
@@ -741,7 +741,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       const updatedVariables = [...(component.variables || []), newVariable];
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${componentId}`, {
+        const response = await studioFetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ variables: updatedVariables }),
@@ -775,7 +775,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       const updatedVariables = [...(component.variables || []), newVariable];
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${componentId}`, {
+        const response = await studioFetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ variables: updatedVariables }),
@@ -811,7 +811,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       const updatedVariables = [...(component.variables || []), newVariable];
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${componentId}`, {
+        const response = await studioFetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ variables: updatedVariables }),
@@ -846,7 +846,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       const updatedVariables = [...(component.variables || []), newVariable];
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${componentId}`, {
+        const response = await studioFetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ variables: updatedVariables }),
@@ -880,7 +880,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       const updatedVariables = [...(component.variables || []), newVariable];
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${componentId}`, {
+        const response = await studioFetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ variables: updatedVariables }),
@@ -914,7 +914,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       const updatedVariables = [...(component.variables || []), newVariable];
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${componentId}`, {
+        const response = await studioFetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ variables: updatedVariables }),
@@ -949,7 +949,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       );
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${componentId}`, {
+        const response = await studioFetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ variables: updatedVariables }),
@@ -987,7 +987,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       }));
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${componentId}`, {
+        const response = await studioFetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ variables: reordered }),
@@ -1054,7 +1054,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       const updatedLayers = component.layers ? unlinkLayersFromVariable(component.layers) : [];
 
       try {
-        const response = await novumFetch(`/ycode/api/components/${componentId}`, {
+        const response = await studioFetch(`/ycode/api/components/${componentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

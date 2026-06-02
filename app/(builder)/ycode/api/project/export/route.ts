@@ -12,7 +12,7 @@ export const revalidate = 0;
 /**
  * POST /ycode/api/project/export
  *
- * Export the project as a compressed .ycode dump file.
+ * Export the project as a compressed Studio backup file.
  * Optionally encrypt with a password (JSON body: { "password": "..." }).
  */
 export async function POST(request: NextRequest) {

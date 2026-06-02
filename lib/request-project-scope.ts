@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
-import { projectLookupFromHost, resolveNovumProjectId, resolveSingleNovumProjectIdForCurrentUser } from '@/lib/project-scope';
-import { canAccessNovumProject } from '@/lib/novum-platform';
+import { projectLookupFromHost, resolveStudioProjectId, resolveSingleStudioProjectIdForCurrentUser } from '@/lib/project-scope';
+import { canAccessStudioProject } from '@/lib/studio-platform';
 
 export class ProjectScopeAuthorizationError extends Error {
   constructor(message: string) {
@@ -11,12 +11,12 @@ export class ProjectScopeAuthorizationError extends Error {
 
 function explicitProjectLookup(request: NextRequest): string | null {
   const { searchParams } = new URL(request.url);
-  return request.headers.get('x-novum-project-slug') || searchParams.get('project');
+  return request.headers.get('x-studio-project-slug') || searchParams.get('project');
 }
 
 function hostProjectLookup(request: NextRequest): string | null {
   return projectLookupFromHost(
-    request.headers.get('x-forwarded-host') || request.headers.get('host')
+    request.headers.get('host') || request.headers.get('x-forwarded-host')
   );
 }
 
@@ -27,12 +27,49 @@ export type PublicFormSubmissionProjectScope = {
   definitionState: PublicFormDefinitionState;
 };
 
+export type PublicContentRequestProjectScope = {
+  projectId: string | null;
+  source: 'host' | 'authenticated-preview' | 'none';
+};
+
 export async function resolveRequestProjectId(request: NextRequest): Promise<string | null> {
   const projectLookup = explicitProjectLookup(request);
-  if (projectLookup) return resolveNovumProjectId(projectLookup);
+  if (projectLookup) return resolveStudioProjectId(projectLookup);
   const hostLookup = hostProjectLookup(request);
-  if (hostLookup) return resolveNovumProjectId(hostLookup);
-  return resolveSingleNovumProjectIdForCurrentUser();
+  if (hostLookup) return resolveStudioProjectId(hostLookup);
+  return resolveSingleStudioProjectIdForCurrentUser();
+}
+
+export async function resolvePublicContentRequestProjectScope(request: NextRequest): Promise<PublicContentRequestProjectScope> {
+  const hostLookup = hostProjectLookup(request);
+  if (hostLookup) {
+    return {
+      projectId: await resolveStudioProjectId(hostLookup),
+      source: 'host',
+    };
+  }
+
+  const projectLookup = explicitProjectLookup(request);
+  if (!projectLookup) return { projectId: null, source: 'none' };
+
+  const projectId = await resolveStudioProjectId(projectLookup);
+  if (!projectId) return { projectId: null, source: 'none' };
+
+  const canAccessPreviewProject = await canAccessStudioProject(projectId, [
+    'studio_admin',
+    'studio_developer',
+    'customer_owner',
+    'customer_editor',
+  ]);
+  if (!canAccessPreviewProject) {
+    throw new Error('Not authorized for requested preview project');
+  }
+
+  return { projectId, source: 'authenticated-preview' };
+}
+
+export async function resolvePublicContentRequestProjectId(request: NextRequest): Promise<string | null> {
+  return (await resolvePublicContentRequestProjectScope(request)).projectId;
 }
 
 export async function resolvePublicFormSubmissionProjectScope(
@@ -40,7 +77,7 @@ export async function resolvePublicFormSubmissionProjectScope(
 ): Promise<PublicFormSubmissionProjectScope> {
   const hostLookup = hostProjectLookup(request);
   if (hostLookup) {
-    const hostProjectId = await resolveNovumProjectId(hostLookup);
+    const hostProjectId = await resolveStudioProjectId(hostLookup);
     if (hostProjectId) {
       return { projectId: hostProjectId, definitionState: 'published' };
     }
@@ -49,10 +86,10 @@ export async function resolvePublicFormSubmissionProjectScope(
   const projectLookup = explicitProjectLookup(request);
   if (!projectLookup) return { projectId: null, definitionState: 'any' };
 
-  const projectId = await resolveNovumProjectId(projectLookup);
+  const projectId = await resolveStudioProjectId(projectLookup);
   if (!projectId) return { projectId: null, definitionState: 'any' };
 
-  const canAccessPreviewProject = await canAccessNovumProject(projectId, [
+  const canAccessPreviewProject = await canAccessStudioProject(projectId, [
     'studio_admin',
     'studio_developer',
     'customer_owner',

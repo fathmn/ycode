@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPageById } from '@/lib/repositories/pageRepository';
 import { getItemWithValues } from '@/lib/repositories/collectionItemRepository';
+import { requireStudioProjectRole } from '@/lib/studio-platform';
 
 /**
  * GET /ycode/api/pages/[id]/collection-item?itemId=xxx
@@ -15,6 +16,14 @@ export async function GET(
     const { id: pageId } = await params;
     const { searchParams } = new URL(request.url);
     const itemId = searchParams.get('itemId');
+    const roleCheck = await requireStudioProjectRole(request, [
+      'studio_admin',
+      'studio_developer',
+      'customer_owner',
+      'customer_editor',
+      'customer_viewer',
+    ]);
+    if (!roleCheck.ok) return roleCheck.response;
 
     if (!itemId) {
       return NextResponse.json(
@@ -24,7 +33,7 @@ export async function GET(
     }
 
     // Get the page
-    const page = await getPageById(pageId);
+    const page = await getPageById(pageId, false, roleCheck.context.project.id);
 
     if (!page) {
       return NextResponse.json(

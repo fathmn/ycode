@@ -1127,7 +1127,7 @@ button:focus {
 
 /* Studio mobile drawer accessibility & UX layer:
    - GSAP click interaction (mobileDrawerToggleInteraction in
-     scripts/novum-import-pages-plan.mjs) handles the visual open/close
+     Studio import tooling) handles the visual open/close
      transition (autoAlpha + y).
    - .studio-mobile-drawer--open is added by AnimationInitializer's
      initializeStudioMobileDrawer() to drive aria-hidden, body-scroll-lock,

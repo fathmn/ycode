@@ -1,20 +1,40 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getAllPageFolders, createPageFolder } from '@/lib/repositories/pageFolderRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const FOLDER_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+
+const FOLDER_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * GET /ycode/api/folders
  *
  * Get all draft folders (for the builder)
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, FOLDER_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     // Only return draft folders for the builder
-    const folders = await getAllPageFolders({ is_published: false });
+    const folders = await getAllPageFolders({ is_published: false }, projectId);
 
     return noCache({
       data: folders,
@@ -36,6 +56,10 @@ export async function GET() {
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, FOLDER_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const body = await request.json();
     const { name, slug, page_folder_id = null, depth = 0, order = 0, settings = {} } = body;
 
@@ -54,7 +78,7 @@ export async function POST(request: NextRequest) {
 
     // Increment sibling orders if inserting (safe to call when appending - only updates order >= startOrder)
     const { incrementSiblingOrders } = await import('@/lib/services/pageService');
-    await incrementSiblingOrders(order, depth, sanitizedParentFolderId);
+    await incrementSiblingOrders(order, depth, sanitizedParentFolderId, projectId);
 
     // Create folder (use sanitized parent folder ID)
     const folder = await createPageFolder({
@@ -65,7 +89,7 @@ export async function POST(request: NextRequest) {
       order,
       settings,
       is_published: false,
-    });
+    }, projectId);
 
     return noCache({
       data: folder,

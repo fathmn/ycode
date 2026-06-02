@@ -2,8 +2,8 @@ import type { Layer } from '@/types';
 
 type ImageLayerLike = Pick<Layer, 'id' | 'name' | 'customName' | 'attributes'>;
 
-const SMALL_IMAGE_SRCSET_WIDTHS = [160, 320, 640, 960];
-const DEFAULT_IMAGE_SRCSET_WIDTHS = [320, 640, 960, 1280, 1920, 2560];
+const SMALL_IMAGE_SRCSET_WIDTHS = [96, 160, 240, 320];
+const DEFAULT_IMAGE_SRCSET_WIDTHS = [320, 640, 960, 1280, 1920];
 
 function getAttribute(layer: ImageLayerLike, name: string): unknown {
   return layer.attributes?.[name];
@@ -54,5 +54,12 @@ export function getImageSrcsetWidthsForLayer(layer: ImageLayerLike): number[] {
 }
 
 export function getFallbackImageWidthForLayer(layer: ImageLayerLike): number {
-  return isSmallBrandImageLayer(layer) ? 160 : 1920;
+  if (isSmallBrandImageLayer(layer)) return 160;
+  return isPriorityImageLayer(layer) ? 1280 : 960;
+}
+
+export function getImageTransformQualityForLayer(layer: ImageLayerLike): number {
+  if (isPriorityImageLayer(layer)) return 82;
+  if (isSmallBrandImageLayer(layer)) return 80;
+  return 80;
 }

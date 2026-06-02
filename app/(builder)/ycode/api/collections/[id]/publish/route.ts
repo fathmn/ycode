@@ -1,6 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { publishCollectionWithItems, cleanupDeletedCollections } from '@/lib/services/collectionService';
 import { noCache } from '@/lib/api-response';
+import { getStudioLiveMutationBlocker } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -32,6 +33,11 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const blocker = getStudioLiveMutationBlocker();
+    if (blocker) {
+      return noCache(blocker, 409);
+    }
+
     const { id } = await params;
     const collectionId = id;
     

@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 import { isStudioOperatorRole } from '@/lib/studio-roles';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -31,7 +31,7 @@ export default function MigrationChecker({ onComplete }: MigrationCheckerProps) 
       setProgress('Checking and running migrations...');
       setError(null);
 
-      const setupStatusResponse = await novumFetch('/ycode/api/setup/status');
+      const setupStatusResponse = await studioFetch('/ycode/api/setup/status');
       const setupStatus = await setupStatusResponse.json().catch(() => null);
       if (
         setupStatusResponse.ok
@@ -42,7 +42,7 @@ export default function MigrationChecker({ onComplete }: MigrationCheckerProps) 
         return;
       }
 
-      const projectsResponse = await novumFetch('/ycode/api/novum/projects');
+      const projectsResponse = await studioFetch('/ycode/api/studio/projects');
       const projectsResult = await projectsResponse.json().catch(() => null);
       const projects = Array.isArray(projectsResult?.data) ? projectsResult.data : [];
       const canRunMigrations = projects.some((project: { role?: string }) =>
@@ -55,7 +55,7 @@ export default function MigrationChecker({ onComplete }: MigrationCheckerProps) 
       }
 
       // Single API call: checks AND runs migrations if needed
-      const response = await novumFetch('/ycode/api/setup/migrate', {
+      const response = await studioFetch('/ycode/api/setup/migrate', {
         method: 'POST',
       });
 

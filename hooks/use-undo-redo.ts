@@ -14,7 +14,7 @@ import { applyPatch, createPatch, createInversePatch, isPatchEmpty, doesPatchCha
 import { markUndoRedoSave } from '@/lib/version-tracking';
 import { generatePageLayersHash } from '@/lib/hash-utils';
 import { stripUIProperties } from '@/lib/layer-utils';
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 import { useEditorStore } from '@/stores/useEditorStore';
 import type { Layer, Version, VersionEntityType, CreateVersionData } from '@/types';
 
@@ -231,7 +231,7 @@ export function useUndoRedo({
         }
         case 'layer_style': {
           // For layer styles, we need to update via API
-          await novumFetch(`/ycode/api/layer-styles/${entityId}`, {
+          await studioFetch(`/ycode/api/layer-styles/${entityId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(state),
@@ -779,7 +779,7 @@ export function useUndoRedo({
           session_id: getSessionId(),
         };
 
-        const response = await novumFetch('/ycode/api/versions', {
+        const response = await studioFetch('/ycode/api/versions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(versionData),

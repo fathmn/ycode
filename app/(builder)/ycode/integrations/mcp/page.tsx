@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 
 import { useState, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
@@ -52,7 +52,7 @@ export default function McpPage() {
 
   const fetchTokens = async () => {
     try {
-      const response = await novumFetch('/ycode/api/mcp-tokens');
+      const response = await studioFetch('/ycode/api/mcp-tokens');
       const result = await response.json();
       if (result.data) {
         setTokens(result.data);
@@ -69,7 +69,7 @@ export default function McpPage() {
 
     setIsGenerating(true);
     try {
-      const response = await novumFetch('/ycode/api/mcp-tokens', {
+      const response = await studioFetch('/ycode/api/mcp-tokens', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newTokenName.trim() }),
@@ -94,7 +94,7 @@ export default function McpPage() {
     if (!tokenToDelete) return;
 
     try {
-      await novumFetch(`/ycode/api/mcp-tokens/${tokenToDelete.id}`, {
+      await studioFetch(`/ycode/api/mcp-tokens/${tokenToDelete.id}`, {
         method: 'DELETE',
       });
       setTokens(tokens.filter(t => t.id !== tokenToDelete.id));
@@ -145,7 +145,7 @@ export default function McpPage() {
         </header>
 
         <p className="text-sm text-muted-foreground mb-6">
-          Connect AI assistants like Claude, Cursor, or Windsurf to your YCode project.
+          Connect AI assistants like Claude, Cursor, or Windsurf to your Studio project.
           Generate an MCP URL and paste it into your AI tool&apos;s connector settings.
         </p>
 
@@ -239,7 +239,7 @@ export default function McpPage() {
             <DialogHeader>
               <DialogTitle>Generate MCP URL</DialogTitle>
               <DialogDescription>
-                Create a unique MCP URL for connecting an AI assistant to your YCode project.
+                Create a unique MCP URL for connecting an AI assistant to your Studio project.
               </DialogDescription>
             </DialogHeader>
             <div className="py-4">
@@ -303,7 +303,7 @@ export default function McpPage() {
                 </div>
               )}
               <p className="text-xs text-muted-foreground mt-3">
-                Keep this URL private. Anyone with this URL can access your YCode project through MCP.
+                Keep this URL private. Anyone with this URL can access your Studio project through MCP.
               </p>
             </div>
             <DialogFooter>

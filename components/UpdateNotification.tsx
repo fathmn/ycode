@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 
 import { useState, useEffect } from 'react';
 
@@ -32,7 +32,7 @@ export default function UpdateNotification() {
 
   const checkForUpdates = async () => {
     try {
-      const response = await novumFetch('/ycode/api/updates/check');
+      const response = await studioFetch('/ycode/api/updates/check');
       if (response.ok) {
         const data = await response.json();
         setUpdateInfo(data);

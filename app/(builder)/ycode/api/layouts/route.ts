@@ -8,6 +8,7 @@ import { getComponentsByIds } from '@/lib/repositories/componentRepository';
 import { getDraftLayers, upsertDraftLayers } from '@/lib/repositories/pageLayersRepository';
 import type { Asset, Layer } from '@/types';
 import { collectComponentIds } from '@/lib/component-utils';
+import { requireStudioProjectRole } from '@/lib/studio-platform';
 
 const LAYOUTS_FILE_PATH = path.join(process.cwd(), 'lib', 'templates', 'layouts.ts');
 const LAYOUT_ASSETS_DIR = path.join(process.cwd(), 'public', 'ycode', 'layouts', 'assets');
@@ -287,6 +288,15 @@ function localizeMediaAssets(
 
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, [
+      'studio_admin',
+      'studio_developer',
+      'customer_owner',
+      'customer_editor',
+    ]);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const formData = await request.formData();
 
     const layoutKey = formData.get('layoutKey') as string;
@@ -352,7 +362,7 @@ export async function POST(request: NextRequest) {
     // Done server-side so changes survive the HMR reload triggered by layouts.ts write
     if (pageId && layerId && Object.keys(assetUrlMap).length > 0) {
       try {
-        const pageLayers = await getDraftLayers(pageId);
+        const pageLayers = await getDraftLayers(pageId, projectId);
         if (pageLayers) {
           const applyUrlMap = (l: Layer): Layer => {
             const updated = { ...l };
@@ -383,7 +393,7 @@ export async function POST(request: NextRequest) {
               children: l.children ? updateTree(l.children) : undefined,
             });
 
-          await upsertDraftLayers(pageId, updateTree(pageLayers.layers));
+          await upsertDraftLayers(pageId, updateTree(pageLayers.layers), undefined, projectId);
         }
       } catch (error) {
         console.warn('Warning: Could not update page layers with asset URLs:', error);

@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 
 /**
  * Welcome Wizard Page
@@ -102,7 +102,7 @@ export default function WelcomePage() {
 
     const checkEnvironment = async () => {
       try {
-        const response = await novumFetch('/ycode/api/setup/status');
+        const response = await studioFetch('/ycode/api/setup/status');
         const data = await response.json();
 
         // If setup is complete, redirect unauthenticated users to /ycode (login screen)
@@ -140,7 +140,7 @@ export default function WelcomePage() {
               className="absolute animate-out fade-out slide-in-from-bottom-1 duration-700 text-[11px] font-medium tracking-[0.18em] text-white/65 uppercase"
               style={{ animationDelay: '2000ms', animationFillMode: 'both' }}
             >
-              novum partners
+              Studio
             </div>
 
             <Label
@@ -156,7 +156,7 @@ export default function WelcomePage() {
               className="animate-in fade-in slide-in-from-bottom-1 duration-700"
               style={{ animationDelay: '2700ms', animationFillMode: 'both' }}
             >
-              Studio-Setup für novum partners in wenigen Schritten.
+              Studio-Setup in wenigen Schritten.
             </Label>
 
             <div
@@ -190,7 +190,7 @@ export default function WelcomePage() {
         setError(null);
 
         try {
-          const response = await novumFetch('/ycode/api/setup/status');
+          const response = await studioFetch('/ycode/api/setup/status');
           const data = await response.json();
 
           if (data.is_configured) {

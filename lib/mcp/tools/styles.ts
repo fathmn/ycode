@@ -5,8 +5,9 @@ import { getAllStyles, createStyle, updateStyle, deleteStyle } from '@/lib/repos
 import { getDraftLayers, upsertDraftLayers } from '@/lib/repositories/pageLayersRepository';
 import { findLayerById, updateLayerById, designToClassString } from '@/lib/mcp/utils';
 import { designSchema } from './shared-schemas';
+import type { McpProjectContext } from '@/lib/mcp/project-context';
 
-export function registerStyleTools(server: McpServer) {
+export function registerStyleTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
     'list_styles',
     'List all reusable layer styles. Styles define reusable design presets that can be applied to any layer.',
@@ -45,7 +46,7 @@ export function registerStyleTools(server: McpServer) {
       style_id: z.string().describe('The style ID'),
     },
     async ({ page_id, layer_id, style_id }) => {
-      const pageLayers = await getDraftLayers(page_id);
+      const pageLayers = await getDraftLayers(page_id, projectContext.projectId);
       if (!pageLayers) {
         return { content: [{ type: 'text' as const, text: `Error: Page "${page_id}" has no layers.` }], isError: true };
       }
@@ -57,7 +58,7 @@ export function registerStyleTools(server: McpServer) {
       }
 
       const updated = updateLayerById(layers, layer_id, (l) => ({ ...l, styleId: style_id }));
-      await upsertDraftLayers(page_id, updated);
+      await upsertDraftLayers(page_id, updated, undefined, projectContext.projectId);
 
       return { content: [{ type: 'text' as const, text: `Applied style "${style_id}" to "${layer.customName || layer.name}"` }] };
     },

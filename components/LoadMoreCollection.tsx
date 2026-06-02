@@ -25,6 +25,7 @@ interface LoadMoreCollectionProps {
   layerTemplate?: Layer[];
   /** Optional: item IDs for multi-reference filtering */
   itemIds?: string[];
+  previewProjectParam?: string | null;
 }
 
 interface LoadMoreState {
@@ -39,6 +40,7 @@ export default function LoadMoreCollection({
   collectionLayerId,
   layerTemplate,
   itemIds,
+  previewProjectParam,
 }: LoadMoreCollectionProps) {
   const { totalItems, itemsPerPage, collectionId } = paginationMeta;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -64,13 +66,16 @@ export default function LoadMoreCollection({
     
     try {
       // POST request with template for server-side rendering
+      const headers = new Headers({ 'Content-Type': 'application/json' });
+      if (previewProjectParam) {
+        headers.set('x-studio-project-slug', previewProjectParam);
+      }
+
       const response = await fetch(
         `/ycode/api/collections/${collectionId}/items/load-more`,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers,
           body: JSON.stringify({
             offset: state.loadedCount,
             limit: itemsPerPage,
@@ -103,7 +108,7 @@ export default function LoadMoreCollection({
       console.error('Load more failed:', error);
       setState(prev => ({ ...prev, isLoading: false }));
     }
-  }, [state.loadedCount, state.isLoading, state.hasMore, itemsPerPage, collectionId, collectionLayerId, itemIds, layerTemplate]);
+  }, [state.loadedCount, state.isLoading, state.hasMore, itemsPerPage, collectionId, collectionLayerId, itemIds, layerTemplate, previewProjectParam]);
 
   // Handle click events on load more button (delegated)
   useEffect(() => {

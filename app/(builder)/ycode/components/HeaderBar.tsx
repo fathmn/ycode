@@ -208,7 +208,7 @@ export default function HeaderBar({
     };
 
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === 'studio:selected-project-slug' || event.key === 'novum:selected-project-slug') {
+      if (event.key === 'studio:selected-project-slug' || event.key === 'studio:selected-project-slug') {
         resolveProjectBaseUrl();
       }
     };
@@ -390,7 +390,7 @@ export default function HeaderBar({
             {isCloudVersion() && (
               <>
                 <DropdownMenuItem asChild>
-                  <a href="https://dashboard.ycode.cloud/dashboard">
+                  <a href="/ycode">
                     Dashboard
                   </a>
                 </DropdownMenuItem>

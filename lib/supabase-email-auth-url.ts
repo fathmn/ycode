@@ -10,7 +10,7 @@ type ApplyEmailAuthUrlSessionResult = {
   user: User | null;
 };
 
-const PASSWORD_SETUP_FLOW_STORAGE_KEY = 'novum-studio:password-setup-flow';
+const PASSWORD_SETUP_FLOW_STORAGE_KEY = 'studio:password-setup-flow';
 
 function supportedFlow(value: string | null): SupabaseEmailAuthFlow | null {
   if (value === 'invite' || value === 'magiclink' || value === 'recovery') {

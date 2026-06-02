@@ -5,7 +5,7 @@
  * Handles font loading, CSS injection, and font selection.
  */
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 import { create } from 'zustand';
 import { buildAllFontsCss, buildGoogleFontUrl, BUILT_IN_FONTS, getFontFamilyValue } from '@/lib/font-utils';
 import type { Font } from '@/types';
@@ -73,7 +73,7 @@ export const useFontsStore = create<FontsStore>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await novumFetch('/ycode/api/fonts');
+      const response = await studioFetch('/ycode/api/fonts');
       if (!response.ok) throw new Error('Failed to fetch fonts');
 
       const { data: fonts } = await response.json();
@@ -124,7 +124,7 @@ export const useFontsStore = create<FontsStore>((set, get) => ({
         formData.append('file', file);
       }
 
-      const response = await novumFetch('/ycode/api/fonts', {
+      const response = await studioFetch('/ycode/api/fonts', {
         method: 'POST',
         body: formData,
       });
@@ -194,7 +194,7 @@ export const useFontsStore = create<FontsStore>((set, get) => ({
         payload.axes = googleFont.axes;
       }
 
-      const response = await novumFetch('/ycode/api/fonts', {
+      const response = await studioFetch('/ycode/api/fonts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -224,7 +224,7 @@ export const useFontsStore = create<FontsStore>((set, get) => ({
   /** Delete a font */
   deleteFont: async (fontId: string) => {
     try {
-      const response = await novumFetch(`/ycode/api/fonts/${fontId}`, {
+      const response = await studioFetch(`/ycode/api/fonts/${fontId}`, {
         method: 'DELETE',
       });
 
@@ -244,7 +244,7 @@ export const useFontsStore = create<FontsStore>((set, get) => ({
     if (get().isCatalogLoaded) return;
 
     try {
-      const response = await novumFetch('/ycode/api/fonts/google');
+      const response = await studioFetch('/ycode/api/fonts/google');
       if (!response.ok) throw new Error('Failed to load Google Fonts catalog');
 
       const { data } = await response.json();

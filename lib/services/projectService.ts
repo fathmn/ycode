@@ -1,7 +1,7 @@
 /**
  * Project Service
  *
- * Handles exporting and importing project data as portable .ycode dumps.
+ * Handles exporting and importing project data as portable Studio backups.
  */
 
 import { scryptSync, randomBytes, createCipheriv, createDecipheriv } from 'crypto';
@@ -362,11 +362,11 @@ export function sanitizeProjectNameSlug(value: string): string {
   return slug || DEFAULT_PROJECT_NAME;
 }
 
-/** Generate a filename for a .ycode export from the manifest. */
+/** Generate a filename for a Studio export from the manifest. */
 export function getExportFilename(manifest: ProjectManifest): string {
   const name = sanitizeProjectNameSlug(manifest.projectName || DEFAULT_PROJECT_NAME);
   const ts = new Date(manifest.exportedAt).toISOString().slice(0, 19).replace('T', '-').replace(/:/g, '-');
-  return `${name}-${ts}.ycode`;
+  return `${name}-${ts}.studio`;
 }
 
 // ─── Concurrency Helper ─────────────────────────────────────────────

@@ -4,7 +4,7 @@ import DarkModeProvider from '@/components/DarkModeProvider';
 
 export const defaultMetadata: Metadata = {
   title: 'Studio',
-  description: 'Kundenstudio für Websites von novum partners',
+  description: 'Kundenstudio für Websites',
 };
 
 interface RootLayoutShellProps {

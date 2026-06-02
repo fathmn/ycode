@@ -1,16 +1,26 @@
 import { notFound, redirect, permanentRedirect } from 'next/navigation';
 import { unstable_noStore } from 'next/cache';
+import { headers } from 'next/headers';
 import { fetchPageByPath, fetchErrorPage, PaginationContext } from '@/lib/page-fetcher';
 import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
+import { projectLookupFromHost, resolveStudioProjectId } from '@/lib/project-scope';
 import type { Redirect as RedirectType } from '@/types';
 
 // Internal pagination path: always dynamic/no-store.
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+async function resolvePublishedProjectId(): Promise<string | null> {
+  const requestHeaders = await headers();
+  const hostLookup = projectLookupFromHost(
+    requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
+  );
+  return hostLookup ? resolveStudioProjectId(hostLookup) : null;
+}
 
 interface DynamicSlugPageProps {
   params: Promise<{ slug: string | string[] }>;
@@ -23,8 +33,9 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
 
   const slugPath = Array.isArray(slug) ? slug.join('/') : slug;
   const currentPath = `/${slugPath}`;
+  const projectId = await resolvePublishedProjectId();
 
-  const redirects = await getSettingByKey('redirects') as RedirectType[] | null;
+  const redirects = await getSettingByKey('redirects', projectId) as RedirectType[] | null;
   if (redirects && Array.isArray(redirects)) {
     const matchedRedirect = redirects.find((r) => r.oldUrl === currentPath);
     if (matchedRedirect) {
@@ -55,13 +66,13 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
     defaultPage: 1,
   };
 
-  const data = await fetchPageByPath(slugPath, true, paginationContext);
+  const data = await fetchPageByPath(slugPath, true, paginationContext, undefined, projectId);
 
   if (!data) {
-    const errorPageData = await fetchErrorPage(404, true);
+    const errorPageData = await fetchErrorPage(404, true, undefined, projectId);
     if (errorPageData) {
       const { page, pageLayers, components } = errorPageData;
-      const publishedCSS = await getSettingByKey('published_css');
+      const publishedCSS = await getSettingByKey('published_css', projectId);
 
       return (
         <PublishedPageRenderer
@@ -69,6 +80,8 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
           layers={pageLayers.layers || []}
           components={components}
           generatedCss={publishedCSS}
+          renderProjectId={projectId}
+          customCodeProjectId={projectId}
         />
       );
     }
@@ -78,7 +91,7 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
 
   const { page, pageLayers, components, collectionItem, collectionFields, pageCollectionSortedItemIds, pageCollectionSortedItemSlugs, locale, availableLocales, translations } = data;
 
-  const folders = await fetchFoldersForAuth(true);
+  const folders = await fetchFoldersForAuth(true, projectId);
   const protectionCheck = getPasswordProtection(page, folders, null);
 
   if (protectionCheck.isProtected) {
@@ -86,8 +99,8 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
     const protection = getPasswordProtection(page, folders, authCookie);
 
     if (!protection.isUnlocked) {
-      const errorPageData = await fetchErrorPage(401, true);
-      const publishedCSS = await getSettingByKey('published_css');
+      const errorPageData = await fetchErrorPage(401, true, undefined, projectId);
+      const publishedCSS = await getSettingByKey('published_css', projectId);
 
       if (errorPageData) {
         const { page: errorPage, pageLayers: errorPageLayers, components: errorComponents } = errorPageData;
@@ -98,6 +111,8 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
             layers={errorPageLayers.layers || []}
             components={errorComponents}
             generatedCss={publishedCSS}
+            renderProjectId={projectId}
+            customCodeProjectId={projectId}
             passwordProtection={{
               pageId: protection.protectedBy === 'page' ? protection.protectedById : undefined,
               folderId: protection.protectedBy === 'folder' ? protection.protectedById : undefined,
@@ -126,7 +141,7 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
     }
   }
 
-  const globalSettings = await fetchGlobalPageSettings();
+  const globalSettings = await fetchGlobalPageSettings(projectId);
 
   return (
     <PublishedPageRenderer
@@ -146,6 +161,8 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
       globalCustomCodeHead={globalSettings.globalCustomCodeHead}
       globalCustomCodeBody={globalSettings.globalCustomCodeBody}
       ycodeBadge={globalSettings.ycodeBadge}
+      renderProjectId={projectId}
+      customCodeProjectId={projectId}
     />
   );
 }

@@ -1,15 +1,25 @@
 import { unstable_noStore } from 'next/cache';
 import Link from 'next/link';
+import { headers } from 'next/headers';
 import { fetchHomepage, fetchErrorPage, PaginationContext } from '@/lib/page-fetcher';
 import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
+import { projectLookupFromHost, resolveStudioProjectId } from '@/lib/project-scope';
 
 // Internal pagination path: always dynamic/no-store.
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+async function resolvePublishedProjectId(): Promise<string | null> {
+  const requestHeaders = await headers();
+  const hostLookup = projectLookupFromHost(
+    requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
+  );
+  return hostLookup ? resolveStudioProjectId(hostLookup) : null;
+}
 
 interface DynamicHomeProps {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
@@ -37,27 +47,28 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
     defaultPage: 1,
   };
 
-  const data = await fetchHomepage(true, paginationContext);
+  const projectId = await resolvePublishedProjectId();
+  const data = await fetchHomepage(true, paginationContext, undefined, undefined, undefined, projectId);
 
   if (!data || !data.pageLayers) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white">
         <div className="text-center p-8 flex flex-col items-center justify-center gap-2">
           <h1 className="text-xl font-semibold text-neutral-900">
-            Welcome to Ycode
+            Willkommen im Studio
           </h1>
           <Link
             href="/ycode"
             className=" bg-blue-500 text-white text-sm font-medium h-8 flex items-center justify-center px-3 rounded-lg transition-colors"
           >
-            Get started
+            Studio öffnen
           </Link>
         </div>
       </div>
     );
   }
 
-  const folders = await fetchFoldersForAuth(true);
+  const folders = await fetchFoldersForAuth(true, projectId);
   const protectionCheck = getPasswordProtection(data.page, folders, null);
 
   if (protectionCheck.isProtected) {
@@ -65,8 +76,8 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
     const protection = getPasswordProtection(data.page, folders, authCookie);
 
     if (!protection.isUnlocked) {
-      const errorPageData = await fetchErrorPage(401, true);
-      const publishedCSS = await getSettingByKey('published_css');
+      const errorPageData = await fetchErrorPage(401, true, undefined, projectId);
+      const publishedCSS = await getSettingByKey('published_css', projectId);
 
       if (errorPageData) {
         const { page: errorPage, pageLayers: errorPageLayers, components: errorComponents } = errorPageData;
@@ -77,6 +88,8 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
             layers={errorPageLayers.layers || []}
             components={errorComponents}
             generatedCss={publishedCSS}
+            renderProjectId={projectId}
+            customCodeProjectId={projectId}
             passwordProtection={{
               pageId: protection.protectedBy === 'page' ? protection.protectedById : undefined,
               folderId: protection.protectedBy === 'folder' ? protection.protectedById : undefined,
@@ -105,7 +118,7 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
     }
   }
 
-  const globalSettings = await fetchGlobalPageSettings();
+  const globalSettings = await fetchGlobalPageSettings(projectId);
 
   return (
     <PublishedPageRenderer
@@ -121,6 +134,8 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
       globalCustomCodeHead={globalSettings.globalCustomCodeHead}
       globalCustomCodeBody={globalSettings.globalCustomCodeBody}
       ycodeBadge={globalSettings.ycodeBadge}
+      renderProjectId={projectId}
+      customCodeProjectId={projectId}
     />
   );
 }

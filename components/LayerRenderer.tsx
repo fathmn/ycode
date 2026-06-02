@@ -30,6 +30,7 @@ import {
   getImageLoadingAttribute,
   getImageSizesForLayer,
   getImageSrcsetWidthsForLayer,
+  getImageTransformQualityForLayer,
 } from '@/lib/image-rendering';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { toast } from 'sonner';
@@ -325,6 +326,7 @@ const LayerRenderer: React.FC<LayerRendererProps> = ({
                 collectionLayerId={originalLayerId}
                 itemIds={layer._paginationMeta!.itemIds}
                 layerTemplate={layer._paginationMeta!.layerTemplate}
+                previewProjectParam={previewProjectParam}
               >
                 {content}
               </LoadMoreCollection>
@@ -358,6 +360,7 @@ const LayerRenderer: React.FC<LayerRendererProps> = ({
               collectionLayerClasses={layer._filterConfig!.collectionLayerClasses}
               collectionLayerTag={layer._filterConfig!.collectionLayerTag}
               isPublished={layer._filterConfig!.isPublished}
+              previewProjectParam={previewProjectParam}
             >
               {content}
             </FilterableCollection>
@@ -2170,8 +2173,9 @@ const LayerItem: React.FC<{
       const imgLoading = (layer.attributes?.loading as string | undefined) || getImageLoadingAttribute(layer);
       const imgFetchPriority = layer.attributes?.fetchPriority as string | undefined || getImageFetchPriority(layer);
 
-      const optimizedSrc = getOptimizedImageUrl(finalImageUrl, getFallbackImageWidthForLayer(layer), 85);
-      const srcset = generateImageSrcset(finalImageUrl, getImageSrcsetWidthsForLayer(layer));
+      const transformQuality = getImageTransformQualityForLayer(layer);
+      const optimizedSrc = getOptimizedImageUrl(finalImageUrl, getFallbackImageWidthForLayer(layer), transformQuality);
+      const srcset = generateImageSrcset(finalImageUrl, getImageSrcsetWidthsForLayer(layer), transformQuality);
       const sizes = getImageSizesForLayer(layer);
 
       const imageProps: Record<string, any> = {
@@ -2184,6 +2188,7 @@ const LayerItem: React.FC<{
       if (imgHeight) imageProps.height = imgHeight;
       if (imgLoading) imageProps.loading = imgLoading;
       if (imgFetchPriority) imageProps.fetchPriority = imgFetchPriority;
+      imageProps.decoding = layer.attributes?.decoding || 'async';
 
       if (srcset) {
         imageProps.srcSet = srcset;
@@ -2401,7 +2406,7 @@ const LayerItem: React.FC<{
         try {
           const submissionHeaders = new Headers({ 'Content-Type': 'application/json' });
           if (previewProjectParam) {
-            submissionHeaders.set('x-novum-project-slug', previewProjectParam);
+            submissionHeaders.set('x-studio-project-slug', previewProjectParam);
           }
 
           const response = await fetch('/ycode/api/form-submissions', {

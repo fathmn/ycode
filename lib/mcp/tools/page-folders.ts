@@ -7,14 +7,20 @@ import {
   deletePageFolder,
 } from '@/lib/repositories/pageFolderRepository';
 import { getPagesByFolder } from '@/lib/repositories/pageRepository';
+import { resolveMcpProjectId, type McpProjectContext } from '@/lib/mcp/project-context';
 
-export function registerPageFolderTools(server: McpServer) {
+const projectSchema = z.string().optional().describe('Optional Studio project slug, studio path slug, or domain for project-scoped page folder data');
+
+export function registerPageFolderTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
     'list_page_folders',
     'List all page folders with their hierarchy. Folders organize pages into groups with shared URL prefixes.',
-    {},
-    async () => {
-      const folders = await getAllPageFolders({ is_published: false });
+    {
+      project: projectSchema,
+    },
+    async ({ project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      const folders = await getAllPageFolders({ is_published: false }, projectId);
       return {
         content: [{
           type: 'text' as const,
@@ -38,13 +44,15 @@ export function registerPageFolderTools(server: McpServer) {
       name: z.string().describe('Folder name (e.g. "Blog", "Services")'),
       slug: z.string().optional().describe('URL slug. Auto-generated from name if omitted.'),
       page_folder_id: z.string().nullable().optional().describe('Parent folder ID for nesting, or null for root'),
+      project: projectSchema,
     },
-    async ({ name, slug, page_folder_id }) => {
+    async ({ name, slug, page_folder_id, project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
       const folderSlug = slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const parentId = page_folder_id ?? null;
 
-      const siblings = await getPagesByFolder(parentId);
-      const folders = await getAllPageFolders({ is_published: false });
+      const siblings = await getPagesByFolder(parentId, projectId);
+      const folders = await getAllPageFolders({ is_published: false }, projectId);
       const siblingFolders = folders.filter((f) =>
         parentId === null ? f.page_folder_id === null : f.page_folder_id === parentId
       );
@@ -64,7 +72,7 @@ export function registerPageFolderTools(server: McpServer) {
         depth,
         order: maxOrder + 1,
         is_published: false,
-      });
+      }, projectId);
 
       return {
         content: [{
@@ -83,14 +91,16 @@ export function registerPageFolderTools(server: McpServer) {
       name: z.string().optional().describe('New folder name'),
       slug: z.string().optional().describe('New URL slug'),
       settings: z.record(z.string(), z.unknown()).optional().describe('Folder settings (e.g. auth)'),
+      project: projectSchema,
     },
-    async ({ folder_id, name, slug, settings }) => {
+    async ({ folder_id, name, slug, settings, project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
       const updates: Record<string, unknown> = {};
       if (name !== undefined) updates.name = name;
       if (slug !== undefined) updates.slug = slug;
       if (settings !== undefined) updates.settings = settings;
 
-      const folder = await updatePageFolder(folder_id, updates);
+      const folder = await updatePageFolder(folder_id, updates, projectId);
       return {
         content: [{
           type: 'text' as const,
@@ -105,9 +115,11 @@ export function registerPageFolderTools(server: McpServer) {
     'Delete a page folder and all its contents (pages and sub-folders). This is a soft delete.',
     {
       folder_id: z.string().describe('The folder ID to delete'),
+      project: projectSchema,
     },
-    async ({ folder_id }) => {
-      await deletePageFolder(folder_id);
+    async ({ folder_id, project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      await deletePageFolder(folder_id, projectId);
       return {
         content: [{ type: 'text' as const, text: `Folder ${folder_id} and all its contents deleted successfully.` }],
       };

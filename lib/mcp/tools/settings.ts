@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getAllSettings, getSettingByKey, setSetting, setSettings } from '@/lib/repositories/settingsRepository';
+import type { McpProjectContext } from '@/lib/mcp/project-context';
 
-export function registerSettingsTools(server: McpServer) {
+export function registerSettingsTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
     'get_settings',
     'Get all site settings or a specific setting by key. Settings include site_name, site_description, custom_css, redirects, etc.',
@@ -11,7 +12,7 @@ export function registerSettingsTools(server: McpServer) {
     },
     async ({ key }) => {
       if (key) {
-        const value = await getSettingByKey(key);
+        const value = await getSettingByKey(key, projectContext.projectId);
         return {
           content: [{
             type: 'text' as const,
@@ -20,7 +21,7 @@ export function registerSettingsTools(server: McpServer) {
         };
       }
 
-      const settings = await getAllSettings();
+      const settings = await getAllSettings(projectContext.projectId);
       return {
         content: [{
           type: 'text' as const,
@@ -41,7 +42,7 @@ export function registerSettingsTools(server: McpServer) {
       value: z.unknown().describe('Setting value (string, number, boolean, or object)'),
     },
     async ({ key, value }) => {
-      const setting = await setSetting(key, value);
+      const setting = await setSetting(key, value, projectContext.projectId);
       return {
         content: [{
           type: 'text' as const,
@@ -58,7 +59,7 @@ export function registerSettingsTools(server: McpServer) {
       settings: z.record(z.string(), z.unknown()).describe('Object of key-value pairs to set. Use null to delete a key.'),
     },
     async ({ settings }) => {
-      const count = await setSettings(settings);
+      const count = await setSettings(settings, projectContext.projectId);
       return {
         content: [{
           type: 'text' as const,

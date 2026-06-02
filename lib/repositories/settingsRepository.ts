@@ -5,7 +5,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import type { Setting } from '@/types';
 
 /**
@@ -13,16 +13,18 @@ import type { Setting } from '@/types';
  *
  * @returns Promise resolving to all settings
  */
-export async function getAllSettings(): Promise<Setting[]> {
+export async function getAllSettings(projectId?: string | null): Promise<Setting[]> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('settings')
     .select('*')
-    .order('key', { ascending: true });
+  query = (await applyProjectScopeToQuery(query, client, 'settings', projectId)).query;
+
+  const { data, error } = await query.order('key', { ascending: true });
 
   if (error) {
     throw new Error(`Failed to fetch settings: ${error.message}`);
@@ -37,17 +39,19 @@ export async function getAllSettings(): Promise<Setting[]> {
  * @param key - The setting key
  * @returns Promise resolving to the setting value or null if not found
  */
-export async function getSettingByKey(key: string): Promise<any | null> {
+export async function getSettingByKey(key: string, projectId?: string | null): Promise<any | null> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('settings')
     .select('value')
-    .eq('key', key)
-    .single();
+    .eq('key', key);
+  query = (await applyProjectScopeToQuery(query, client, 'settings', projectId)).query;
+
+  const { data, error } = await query.single();
 
   if (error) {
     if (error.code === 'PGRST116') {
@@ -102,20 +106,27 @@ export async function getSettingsByKeys(keys: string[], projectId?: string | nul
  * @param value - The value to store
  * @returns Promise resolving to the created/updated setting
  */
-export async function setSetting(key: string, value: any): Promise<Setting> {
+export async function setSetting(key: string, value: any, projectId?: string | null): Promise<Setting> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
 
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'settings', projectId);
+
+  const record: Record<string, any> = {
+    key,
+    value,
+    updated_at: new Date().toISOString(),
+  };
+  if (hasProjectScope && projectId) {
+    record.project_id = projectId;
+  }
+
   const { data, error } = await client
     .from('settings')
-    .upsert({
-      key,
-      value,
-      updated_at: new Date().toISOString(),
-    }, {
-      onConflict: 'key',
+    .upsert(record, {
+      onConflict: hasProjectScope && projectId ? 'project_id,key' : 'key',
     })
     .select()
     .single();
@@ -134,7 +145,7 @@ export async function setSetting(key: string, value: any): Promise<Setting> {
  * @param settings - Object with key-value pairs to store
  * @returns Promise resolving to the number of settings updated
  */
-export async function setSettings(settings: Record<string, any>): Promise<number> {
+export async function setSettings(settings: Record<string, any>, projectId?: string | null): Promise<number> {
   const entries = Object.entries(settings);
   if (entries.length === 0) {
     return 0;
@@ -144,6 +155,7 @@ export async function setSettings(settings: Record<string, any>): Promise<number
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'settings', projectId);
 
   // Separate entries: null/undefined values should be deleted, others upserted
   const toUpsert: [string, any][] = [];
@@ -159,10 +171,12 @@ export async function setSettings(settings: Record<string, any>): Promise<number
 
   // Delete settings with null values
   if (toDelete.length > 0) {
-    const { error: deleteError } = await client
+    let deleteQuery = client
       .from('settings')
       .delete()
       .in('key', toDelete);
+    deleteQuery = (await applyProjectScopeToQuery(deleteQuery, client, 'settings', projectId)).query;
+    const { error: deleteError } = await deleteQuery;
 
     if (deleteError) {
       throw new Error(`Failed to delete settings: ${deleteError.message}`);
@@ -176,12 +190,13 @@ export async function setSettings(settings: Record<string, any>): Promise<number
       key,
       value,
       updated_at: now,
+      ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
     }));
 
     const { error } = await client
       .from('settings')
       .upsert(records, {
-        onConflict: 'key',
+        onConflict: hasProjectScope && projectId ? 'project_id,key' : 'key',
       });
 
     if (error) {

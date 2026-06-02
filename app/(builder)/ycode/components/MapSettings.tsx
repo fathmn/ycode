@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 /**
  * Map Settings Component
  *
@@ -187,7 +187,7 @@ export default function MapSettings({ layer, onLayerUpdate }: MapSettingsProps) 
     searchAbortRef.current = controller;
 
     setIsSearching(true);
-    novumFetch(`/ycode/api/maps/geocode?q=${encodeURIComponent(debouncedQuery)}&provider=${provider}`, {
+    studioFetch(`/ycode/api/maps/geocode?q=${encodeURIComponent(debouncedQuery)}&provider=${provider}`, {
       signal: controller.signal,
     })
       .then((res) => res.json())

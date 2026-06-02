@@ -128,7 +128,7 @@ export async function checkForUpdates(currentVersion: string): Promise<CheckUpda
         updateMethod = 'manual';
         autoSyncUrl = `https://github.com/${vercelGitRepoOwner}/${vercelGitRepoSlug}`;
         steps = [
-          '<strong class="text-yellow-300">Dieses Repository ist kein Fork.</strong> Für einfachere Updates sollte Novum langfristig einen sauberen Fork der offiziellen Basis pflegen.',
+          '<strong class="text-yellow-300">Dieses Repository ist kein Fork.</strong> Für einfachere Updates sollte Das Studio-Team langfristig einen sauberen Fork der offiziellen Basis pflegen.',
           '',
           '<strong class="text-current">Aktualisierung nur über einen Upgrade-Branch:</strong>',
           'Aktuellen Studio-Patchstand committen oder eindeutig sichern',

@@ -7,7 +7,7 @@
  * This avoids all WASM bundling issues
  */
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 import type { Component, Layer } from '@/types';
 import { DEFAULT_TEXT_STYLES } from '@/lib/text-format-utils';
 
@@ -197,7 +197,7 @@ export async function generateCSS(layers: Layer[]): Promise<string> {
  * Save CSS to settings via API and update the settings store
  */
 export async function saveCSS(css: string, key: 'draft_css' | 'published_css'): Promise<void> {
-  const response = await novumFetch(`/ycode/api/settings/${key}`, {
+  const response = await studioFetch(`/ycode/api/settings/${key}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value: css }),

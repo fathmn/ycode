@@ -3,7 +3,7 @@
 import {
   clearSelectedStudioProjectSlug,
   getSelectedStudioProjectSlug,
-  novumFetch,
+  studioFetch,
   setSelectedStudioProjectSlug,
   studioProjectsApi,
 } from '@/lib/api';
@@ -274,7 +274,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
   useEffect(() => {
     const checkSupabaseConfig = async () => {
       try {
-        const response = await novumFetch('/ycode/api/setup/status');
+        const response = await studioFetch('/ycode/api/setup/status');
         const data = await response.json();
 
         if (!data.is_configured) {

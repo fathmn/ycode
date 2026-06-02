@@ -8,6 +8,7 @@ import { getAssetsByIds } from '@/lib/repositories/assetRepository';
 import { findStatusFieldId, isAssetFieldType, isMultipleAssetField } from '@/lib/collection-field-utils';
 import type { StatusAction } from '@/lib/collection-field-utils';
 import { noCache } from '@/lib/api-response';
+import { getStudioLiveMutationBlocker } from '@/lib/studio-platform';
 import type { CollectionItemWithValues, CollectionField } from '@/types';
 
 // Disable caching for this route
@@ -271,11 +272,15 @@ export async function POST(
     // Apply status action if provided
     const action = status_action as StatusAction | undefined;
     if (action === 'draft') {
+      const blocker = getStudioLiveMutationBlocker();
+      if (blocker) return noCache(blocker, 409);
       await unpublishSingleItem(item.id);
       await clearAllCache();
     } else if (action === 'stage') {
       // New items are already staged (is_publishable defaults to true)
     } else if (action === 'publish') {
+      const blocker = getStudioLiveMutationBlocker();
+      if (blocker) return noCache(blocker, 409);
       const publishedCollection = await getCollectionById(id, true);
       if (!publishedCollection) {
         return noCache(

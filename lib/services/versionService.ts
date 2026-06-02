@@ -6,7 +6,7 @@
  */
 
 import type { Layer, VersionEntityType, CreateVersionData } from '@/types';
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 import { createPatch, createInversePatch, isPatchEmpty, generatePatchDescription, JsonPatch } from '@/lib/version-utils';
 import { generatePageLayersHash, generateComponentContentHash, generateLayerStyleContentHash } from '@/lib/hash-utils';
 
@@ -137,7 +137,7 @@ export async function recordVersion(
       session_id: finalSessionId,
     };
 
-    const response = await novumFetch('/ycode/api/versions', {
+    const response = await studioFetch('/ycode/api/versions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(versionData),

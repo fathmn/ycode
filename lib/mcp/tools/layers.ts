@@ -18,22 +18,23 @@ import {
 import type { RichTextBlock } from '@/lib/mcp/utils';
 import { broadcastLayersChanged } from '@/lib/mcp/broadcast';
 import { designSchema } from './shared-schemas';
+import type { McpProjectContext } from '@/lib/mcp/project-context';
 
 const templateEnum = z.enum(
   Object.keys(ELEMENT_TEMPLATES) as [string, ...string[]],
 );
 
-async function getPageLayers(pageId: string): Promise<Layer[]> {
-  const pageLayers = await getDraftLayers(pageId);
+async function getPageLayers(pageId: string, projectId?: string | null): Promise<Layer[]> {
+  const pageLayers = await getDraftLayers(pageId, projectId);
   return (pageLayers?.layers as Layer[]) || [];
 }
 
-async function savePageLayers(pageId: string, layers: Layer[]): Promise<void> {
-  await upsertDraftLayers(pageId, layers);
+async function savePageLayers(pageId: string, layers: Layer[], projectId?: string | null): Promise<void> {
+  await upsertDraftLayers(pageId, layers, undefined, projectId);
   broadcastLayersChanged(pageId, layers).catch(() => {});
 }
 
-export function registerLayerTools(server: McpServer) {
+export function registerLayerTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
     'get_layers',
     `Get the full layer tree for a page. Returns all layers with their design properties,
@@ -41,7 +42,7 @@ text content, children, and settings. Use this to understand the current page st
 before making changes.`,
     { page_id: z.string().describe('The page ID') },
     async ({ page_id }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: JSON.stringify(layers, null, 2) }] };
     },
   );
@@ -76,7 +77,7 @@ NESTING RULES:
       custom_name: z.string().optional().describe('Custom display name for the layer'),
     },
     async ({ page_id, parent_layer_id, position, template, text_content, rich_content, custom_name }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
 
       const parent = findLayerById(layers, parent_layer_id);
       if (!parent) {
@@ -99,7 +100,7 @@ NESTING RULES:
       }
 
       const updated = insertLayer(layers, parent_layer_id, newLayer, position);
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
 
       return {
         content: [{
@@ -138,7 +139,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
       design: designSchema,
     },
     async ({ page_id, layer_id, breakpoint, ui_state, design }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
 
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
@@ -149,7 +150,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
         applyDesignToLayer(l, design as Record<string, Record<string, unknown>>, breakpoint, ui_state),
       );
 
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
 
       const updatedLayer = findLayerById(updated, layer_id);
       const stateLabel = ui_state !== 'neutral' ? ` (${ui_state} state)` : '';
@@ -177,7 +178,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
       text: z.string().describe('New text content'),
     },
     async ({ page_id, layer_id, text }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
 
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
@@ -192,7 +193,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
         },
       }));
 
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: `Updated text for "${layer.customName || layer.name}" to "${text}"` }] };
     },
   );
@@ -211,7 +212,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
       })).min(1).describe('Content blocks to set'),
     },
     async ({ page_id, layer_id, blocks }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
 
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
@@ -228,7 +229,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
         },
       }));
 
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return {
         content: [{
           type: 'text' as const,
@@ -249,7 +250,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
       layer_id: z.string().describe('The layer ID to delete'),
     },
     async ({ page_id, layer_id }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
 
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
@@ -260,7 +261,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
       }
 
       const updated = removeLayer(layers, layer_id);
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: `Deleted layer "${layer.customName || layer.name}" (${layer_id})` }] };
     },
   );
@@ -275,7 +276,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
       position: z.number().optional().describe('Position within new parent. Omit to append at end.'),
     },
     async ({ page_id, layer_id, new_parent_id, position }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
 
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
@@ -290,7 +291,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
       }
 
       const updated = moveLayerInTree(layers, layer_id, new_parent_id, position);
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: `Moved "${layer.customName || layer.name}" into "${newParent.customName || newParent.name}"` }] };
     },
   );
@@ -305,7 +306,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
       alt: z.string().optional().describe('Image alt text for accessibility'),
     },
     async ({ page_id, layer_id, asset_id, alt }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
@@ -322,7 +323,7 @@ For gradient text: also set backgroundClip: "text" and color to "transparent".`,
         },
       }));
 
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: `Set image for "${layer.customName || layer.name}" to asset ${asset_id}` }] };
     },
   );
@@ -349,7 +350,7 @@ LINK TYPES:
       target: z.enum(['_blank', '_self']).optional().describe('Link target. _blank opens new tab.'),
     },
     async ({ page_id, layer_id, link_type, url, page_id_target, email, phone, asset_id, target }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
@@ -368,7 +369,7 @@ LINK TYPES:
         variables: { ...l.variables, link },
       }));
 
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: `Set ${link_type} link on "${layer.customName || layer.name}"` }] };
     },
   );
@@ -386,7 +387,7 @@ LINK TYPES:
       poster_asset_id: z.string().optional().describe('Asset ID for poster/thumbnail image'),
     },
     async ({ page_id, layer_id, source_type, asset_id, youtube_id, url, poster_asset_id }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
@@ -406,7 +407,7 @@ LINK TYPES:
         variables: { ...l.variables, video: videoVar },
       }));
 
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: `Set video source for "${layer.customName || layer.name}"` }] };
     },
   );
@@ -421,7 +422,7 @@ LINK TYPES:
       url: z.string().optional().describe('Direct URL for the background image'),
     },
     async ({ page_id, layer_id, asset_id, url }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
@@ -439,7 +440,7 @@ LINK TYPES:
         variables: { ...l.variables, backgroundImage: { src } },
       }));
 
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: `Set background image for "${layer.customName || layer.name}"` }] };
     },
   );
@@ -489,7 +490,7 @@ COMMON USES:
       }).optional().describe('Lightbox settings (only for lightbox layers)'),
     },
     async ({ page_id, layer_id, tag, html_id, html_embed_code, custom_attributes, custom_name, slider, lightbox }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
@@ -511,7 +512,7 @@ COMMON USES:
         };
       });
 
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: `Updated settings for "${layer.customName || layer.name}"` }] };
     },
   );
@@ -525,7 +526,7 @@ COMMON USES:
       url: z.string().describe('The URL to embed in the iframe'),
     },
     async ({ page_id, layer_id, url }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
@@ -539,7 +540,7 @@ COMMON USES:
         },
       }));
 
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: `Set iframe URL for "${layer.customName || layer.name}" to "${url}"` }] };
     },
   );

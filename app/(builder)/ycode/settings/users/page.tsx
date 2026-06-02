@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
@@ -64,7 +64,7 @@ export default function UsersSettingsPage() {
 
   const fetchUsers = async () => {
     try {
-      const response = await novumFetch('/ycode/api/auth/users');
+      const response = await studioFetch('/ycode/api/auth/users');
       const result = await response.json();
       if (result.data) {
         setActiveUsers(result.data.activeUsers || []);
@@ -92,7 +92,7 @@ export default function UsersSettingsPage() {
     setInviteSuccess(null);
 
     try {
-      const response = await novumFetch('/ycode/api/auth/invite', {
+      const response = await studioFetch('/ycode/api/auth/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -138,7 +138,7 @@ export default function UsersSettingsPage() {
     if (!userToDelete) return;
 
     try {
-      const response = await novumFetch(`/ycode/api/auth/users?id=${userToDelete.id}`, {
+      const response = await studioFetch(`/ycode/api/auth/users?id=${userToDelete.id}`, {
         method: 'DELETE',
       });
 
@@ -159,7 +159,7 @@ export default function UsersSettingsPage() {
 
   const handleResendInvite = async (email: string) => {
     try {
-      const response = await novumFetch('/ycode/api/auth/invite', {
+      const response = await studioFetch('/ycode/api/auth/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

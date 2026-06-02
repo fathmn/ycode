@@ -9,8 +9,8 @@ import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
 import { generatePageMetadata } from '@/lib/generate-page-metadata';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
-import { projectLookupFromHost, resolveNovumProjectId, resolveSingleNovumProjectIdForUser } from '@/lib/project-scope';
-import { canAccessNovumProjectForUser } from '@/lib/novum-platform';
+import { projectLookupFromHost, resolveStudioProjectId, resolveSingleStudioProjectIdForUser } from '@/lib/project-scope';
+import { canAccessStudioProjectForUser } from '@/lib/studio-platform';
 import { getAuthUser } from '@/lib/supabase-auth';
 import type { Metadata } from 'next';
 
@@ -35,10 +35,10 @@ async function getPreviewProjectLookup(searchParams: { [key: string]: string | s
   if (explicit) return explicit;
 
   const requestHeaders = await headers();
-  const explicitHeader = requestHeaders.get('x-novum-project-slug')?.trim();
+  const explicitHeader = requestHeaders.get('x-studio-project-slug')?.trim();
   if (explicitHeader) return explicitHeader;
 
-  const host = requestHeaders.get('x-forwarded-host') || requestHeaders.get('host') || '';
+  const host = requestHeaders.get('host') || requestHeaders.get('x-forwarded-host') || '';
   return projectLookupFromHost(host);
 }
 
@@ -55,10 +55,10 @@ const resolvePreviewContext = cache(async (previewProjectParam: string | null) =
   if (!actorUserId) return null;
 
   const previewProjectId = previewProjectParam
-    ? await resolveNovumProjectId(previewProjectParam)
-    : await resolveSingleNovumProjectIdForUser(actorUserId);
+    ? await resolveStudioProjectId(previewProjectParam)
+    : await resolveSingleStudioProjectIdForUser(actorUserId);
   if (!previewProjectId) return null;
-  if (!(await canAccessNovumProjectForUser(previewProjectId, actorUserId))) return null;
+  if (!(await canAccessStudioProjectForUser(previewProjectId, actorUserId))) return null;
 
   const ycodeCoreProjectId = previewProjectId;
   const data = await fetchHomepage(false, undefined, undefined, undefined, undefined, ycodeCoreProjectId);
@@ -107,7 +107,7 @@ export default async function Home({ searchParams }: { searchParams: PreviewSear
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
         <div className="text-center p-8">
           <h1 className="text-6xl font-bold text-gray-900 mb-4">
-            Ycode Preview
+            Studio Vorschau
           </h1>
           <p className="text-xl text-gray-600 mb-8">
             No homepage found. Create an index page in the builder.
@@ -199,8 +199,8 @@ export async function generateMetadata({ searchParams }: { searchParams: Preview
 
   if (!data || !data.pageLayers) {
     return {
-      title: 'Preview - Ycode',
-      description: 'Preview - Built with Ycode',
+      title: 'Studio Vorschau',
+      description: 'Vorschau im Studio',
       robots: { index: false, follow: false },
     };
   }

@@ -295,9 +295,55 @@ export function buildFontsCss(fonts: Font[]): string {
 
 /** Get Google Font stylesheet URLs for <link> elements (more reliable than @import) */
 export function getGoogleFontLinks(fonts: Font[]): string[] {
-  return fonts
+  return Array.from(new Set(fonts
     .filter(f => f.type === 'google')
-    .map(f => buildGoogleFontUrl(f));
+    .map(f => buildGoogleFontUrl(f))));
+}
+
+function normalizeFontUrl(value: string): string {
+  return value.replace(/&amp;/g, '&').trim();
+}
+
+const GOOGLE_FONT_LINK_TAG_REGEX = /<link\b(?=[^>]*\bhref\s*=\s*["']([^"']*fonts\.googleapis\.com\/css2[^"']*)["'])[^>]*>/gi;
+
+function getGoogleFontUrlsFromHeadHtml(html: string): Set<string> {
+  const urls = new Set<string>();
+  GOOGLE_FONT_LINK_TAG_REGEX.lastIndex = 0;
+
+  let match: RegExpExecArray | null;
+  while ((match = GOOGLE_FONT_LINK_TAG_REGEX.exec(html)) !== null) {
+    urls.add(normalizeFontUrl(match[1] || ''));
+  }
+
+  return urls;
+}
+
+export function filterGoogleFontLinksAgainstHeadHtml(links: string[], ...headHtmlSources: Array<string | null | undefined>): string[] {
+  const headHtml = headHtmlSources
+    .filter((value): value is string => Boolean(value))
+    .map(normalizeFontUrl)
+    .join('\n');
+
+  if (!headHtml) return links;
+
+  return links.filter((link) => !headHtml.includes(normalizeFontUrl(link)));
+}
+
+export function removeDuplicateGoogleFontLinksFromHeadHtml(html: string, ...alreadySeenHtmlSources: Array<string | null | undefined>): string {
+  if (!html) return html;
+
+  const seen = new Set<string>();
+  for (const source of alreadySeenHtmlSources) {
+    if (!source) continue;
+    getGoogleFontUrlsFromHeadHtml(source).forEach((url) => seen.add(url));
+  }
+
+  if (seen.size === 0) return html;
+
+  return html.replace(GOOGLE_FONT_LINK_TAG_REGEX, (tag, href) => {
+    const normalizedHref = normalizeFontUrl(href || '');
+    return seen.has(normalizedHref) ? '' : tag;
+  });
 }
 
 /** Build CSS for custom fonts only (@font-face rules, no @import) */

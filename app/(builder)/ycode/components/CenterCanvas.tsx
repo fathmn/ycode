@@ -678,7 +678,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
   useEffect(() => {
     const updateSelectedProject = () => setSelectedProjectSlug(getSelectedPreviewProjectSlug());
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === 'studio:selected-project-slug' || event.key === 'novum:selected-project-slug') {
+      if (event.key === 'studio:selected-project-slug' || event.key === 'studio:selected-project-slug') {
         updateSelectedProject();
       }
     };

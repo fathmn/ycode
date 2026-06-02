@@ -1293,18 +1293,18 @@ export default function AnimationInitializer({ layers, injectInitialCSS, initial
       if (controller.signal.aborted) return;
       const clientHeartbeat = buildPreviewClientHeartbeat();
       if (!clientHeartbeat.ok) return;
-      studioFetch('/ycode/api/novum/preview-rendered', {
+      studioFetch('/ycode/api/studio/preview-rendered', {
         method: 'POST',
         headers: previewProjectParam
-          ? { 'content-type': 'application/json', 'x-novum-project-slug': previewProjectParam }
+          ? { 'content-type': 'application/json', 'x-studio-project-slug': previewProjectParam }
           : { 'content-type': 'application/json' },
         body: JSON.stringify({ previewUrl, clientHeartbeat }),
         credentials: 'same-origin',
         signal: controller.signal,
       }).then((response) => {
         if (response.ok) {
-          window.localStorage?.setItem('novum:last-rendered-preview-url', previewUrl);
-          window.dispatchEvent(new CustomEvent('novum:preview-rendered', { detail: { previewUrl } }));
+          window.localStorage?.setItem('studio:last-rendered-preview-url', previewUrl);
+          window.dispatchEvent(new CustomEvent('studio:preview-rendered', { detail: { previewUrl } }));
         }
       }).catch(() => {
         // The publish gate reports a clear error if no rendered preview is recorded.

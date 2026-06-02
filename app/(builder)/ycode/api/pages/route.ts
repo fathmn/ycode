@@ -2,6 +2,21 @@ import { NextRequest } from 'next/server';
 import { getAllPages, createPage } from '@/lib/repositories/pageRepository';
 import { upsertDraftLayers } from '@/lib/repositories/pageLayersRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const PAGE_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+const PAGE_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -21,6 +36,9 @@ export const revalidate = 0;
  */
 export async function GET(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, PAGE_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
     // Parse query parameters
     const { searchParams } = new URL(request.url);
     const filters: Record<string, any> = {};
@@ -45,7 +63,7 @@ export async function GET(request: NextRequest) {
       filters.depth = parseInt(depth, 10);
     }
 
-    const pages = await getAllPages(filters);
+    const pages = await getAllPages(filters, roleCheck.context.project.id);
 
     return noCache({
       data: pages,
@@ -69,12 +87,15 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, PAGE_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const body = await request.json();
 
     const {
       name,
       slug,
-      is_published = false,
       page_folder_id = null,
       order = 0,
       depth = 0,
@@ -132,13 +153,13 @@ export async function POST(request: NextRequest) {
 
     // Increment sibling orders if inserting (safe to call when appending - only updates order >= startOrder)
     const { incrementSiblingOrders } = await import('@/lib/services/pageService');
-    await incrementSiblingOrders(order, depth, normalizedPageFolderId);
+    await incrementSiblingOrders(order, depth, normalizedPageFolderId, projectId);
 
     // Create page
     const page = await createPage({
       name,
       slug: finalSlug,
-      is_published,
+      is_published: false,
       page_folder_id: normalizedPageFolderId,
       order,
       depth,
@@ -146,7 +167,7 @@ export async function POST(request: NextRequest) {
       is_dynamic,
       error_page,
       settings,
-    });
+    }, undefined, projectId);
 
     // Create initial draft with Body container
     const bodyLayer = {
@@ -156,7 +177,7 @@ export async function POST(request: NextRequest) {
       children: [],
     };
 
-    await upsertDraftLayers(page.id, [bodyLayer]);
+    await upsertDraftLayers(page.id, [bodyLayer], undefined, projectId);
 
     return noCache({
       data: page,

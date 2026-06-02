@@ -4,6 +4,7 @@ import type { Layer } from '@/types';
 import { getDraftLayers, upsertDraftLayers } from '@/lib/repositories/pageLayersRepository';
 import { getLayoutTemplate } from '@/lib/templates/blocks';
 import { findLayerById, insertLayer, canHaveChildren, generateId } from '@/lib/mcp/utils';
+import type { McpProjectContext } from '@/lib/mcp/project-context';
 
 const LAYOUT_CATALOG = [
   { key: 'hero-001', category: 'Hero', description: 'Two-column hero with heading, text, and image' },
@@ -56,7 +57,7 @@ const LAYOUT_CATALOG = [
   { key: 'footer-003', category: 'Footer', description: 'Footer with newsletter signup' },
 ];
 
-export function registerLayoutTools(server: McpServer) {
+export function registerLayoutTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
     'list_layouts',
     `List all available pre-built layout templates organized by category.
@@ -91,7 +92,7 @@ Use list_layouts to see available layouts.`,
         return { content: [{ type: 'text' as const, text: `Error: Unknown layout "${layout_key}". Use list_layouts to see available layouts.` }], isError: true };
       }
 
-      const pageLayers = await getDraftLayers(page_id);
+      const pageLayers = await getDraftLayers(page_id, projectContext.projectId);
       let layers = (pageLayers?.layers as Layer[]) || [];
 
       // Try the main project's layout template system
@@ -148,7 +149,7 @@ Use list_layouts to see available layouts.`,
         }
       }
 
-      await upsertDraftLayers(page_id, layers);
+      await upsertDraftLayers(page_id, layers, undefined, projectContext.projectId);
 
       return {
         content: [{

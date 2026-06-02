@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 
 import { useState, useEffect } from 'react';
 import { marked } from 'marked';
@@ -78,7 +78,7 @@ export default function UpdatesSettingsPage() {
   const checkForUpdates = async () => {
     setLoading(true);
     try {
-      const response = await novumFetch('/ycode/api/updates/check');
+      const response = await studioFetch('/ycode/api/updates/check');
       if (response.ok) {
         const data = await response.json();
         setUpdateInfo(data);
@@ -105,7 +105,7 @@ export default function UpdatesSettingsPage() {
     setReleasesLoading(true);
     setReleasesError(null);
     try {
-      const response = await novumFetch('/ycode/api/updates/releases');
+      const response = await studioFetch('/ycode/api/updates/releases');
       if (response.ok) {
         const data: ReleasesResponse = await response.json();
         setReleases(data.releases || []);

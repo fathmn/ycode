@@ -9,7 +9,7 @@ import type {
   AirtableConnection,
   AirtableFieldMapping,
 } from './types';
-import { novumFetch, studioProjectsApi } from '@/lib/api';
+import { studioFetch, studioProjectsApi } from '@/lib/api';
 import { isStudioOperatorRole } from '@/lib/studio-roles';
 
 const BASE = '/ycode/api/apps/airtable';
@@ -18,7 +18,7 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' } as const;
 import { ToastError } from '@/lib/toast-error';
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await novumFetch(url, init);
+  const res = await studioFetch(url, init);
   const body = await res.json();
   if (body.error) {
     throw body.detail

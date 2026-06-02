@@ -26,8 +26,6 @@ export function projectLookupFromHost(host: string | null | undefined): string |
     [
       'studio.novum-partners.de',
       hostnameFromUrl(process.env.NEXT_PUBLIC_SITE_URL),
-      hostnameFromUrl(process.env.VERCEL_PROJECT_PRODUCTION_URL),
-      hostnameFromUrl(process.env.VERCEL_URL),
       ...(process.env.STUDIO_APP_HOSTS || '').split(',').map((value) => hostnameFromUrl(value.trim())),
     ].filter((value): value is string => Boolean(value))
   );

@@ -6,8 +6,8 @@ import PageRenderer from '@/components/PageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
-import { projectLookupFromHost, resolveNovumProjectId, resolveSingleNovumProjectIdForCurrentUser } from '@/lib/project-scope';
-import { canAccessNovumProject } from '@/lib/novum-platform';
+import { projectLookupFromHost, resolveStudioProjectId, resolveSingleStudioProjectIdForCurrentUser } from '@/lib/project-scope';
+import { canAccessStudioProject } from '@/lib/studio-platform';
 
 import { generatePageMetadata } from '@/lib/generate-page-metadata';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
@@ -33,10 +33,10 @@ async function getPreviewProjectLookup(searchParams: { [key: string]: string | s
   if (explicit) return explicit;
 
   const requestHeaders = await headers();
-  const explicitHeader = requestHeaders.get('x-novum-project-slug')?.trim();
+  const explicitHeader = requestHeaders.get('x-studio-project-slug')?.trim();
   if (explicitHeader) return explicitHeader;
 
-  const host = requestHeaders.get('x-forwarded-host') || requestHeaders.get('host') || '';
+  const host = requestHeaders.get('host') || requestHeaders.get('x-forwarded-host') || '';
   return projectLookupFromHost(host);
 }
 
@@ -58,12 +58,12 @@ export default async function Page({
   const { slug } = await params;
   const previewProjectParam = await getPreviewProjectLookup(await searchParams);
   const previewProjectId = previewProjectParam
-    ? await resolveNovumProjectId(previewProjectParam)
-    : await resolveSingleNovumProjectIdForCurrentUser();
+    ? await resolveStudioProjectId(previewProjectParam)
+    : await resolveSingleStudioProjectIdForCurrentUser();
   if (!previewProjectId) {
     notFound();
   }
-  if (!(await canAccessNovumProject(previewProjectId))) {
+  if (!(await canAccessStudioProject(previewProjectId))) {
     notFound();
   }
   const ycodeCoreProjectId = previewProjectId;
@@ -193,15 +193,15 @@ export async function generateMetadata({
   const { slug } = await params;
   const previewProjectParam = await getPreviewProjectLookup(await searchParams);
   const previewProjectId = previewProjectParam
-    ? await resolveNovumProjectId(previewProjectParam)
-    : await resolveSingleNovumProjectIdForCurrentUser();
+    ? await resolveStudioProjectId(previewProjectParam)
+    : await resolveSingleStudioProjectIdForCurrentUser();
   if (!previewProjectId) {
     return {
       title: 'Preview - Page Not Found',
       robots: { index: false, follow: false },
     };
   }
-  if (!(await canAccessNovumProject(previewProjectId))) {
+  if (!(await canAccessStudioProject(previewProjectId))) {
     return {
       title: 'Preview - Page Not Found',
       robots: { index: false, follow: false },

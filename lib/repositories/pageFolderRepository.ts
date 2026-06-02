@@ -5,6 +5,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import type { PageFolder } from '../../types';
 import { incrementSiblingOrders } from '../services/pageService';
 
@@ -42,6 +43,39 @@ export interface UpdatePageFolderData {
   page_folder_id?: string | null;
 }
 
+function normalizePageFolderId(folderId?: string | null): string | null {
+  if (folderId === undefined || folderId === null) return null;
+  const trimmed = folderId.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined' || trimmed.startsWith('temp-')) {
+    return null;
+  }
+  return trimmed;
+}
+
+async function assertParentFolderInProject(
+  client: any,
+  parentFolderId: string | null,
+  projectId?: string | null
+): Promise<void> {
+  if (!parentFolderId) return;
+
+  let query = client
+    .from('page_folders')
+    .select('id')
+    .eq('id', parentFolderId)
+    .eq('is_published', false)
+    .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
+
+  const { data, error } = await query.maybeSingle();
+  if (error) {
+    throw new Error(`Failed to validate parent folder: ${error.message}`);
+  }
+  if (!data) {
+    throw new Error('Parent folder not found for this project');
+  }
+}
+
 /**
  * Retrieves all page folders from the database
  *
@@ -49,7 +83,7 @@ export interface UpdatePageFolderData {
  * @returns Promise resolving to array of page folders, ordered by order field (ascending)
  * @throws Error if Supabase query fails
  */
-export async function getAllPageFolders(filters?: QueryFilters): Promise<PageFolder[]> {
+export async function getAllPageFolders(filters?: QueryFilters, projectId?: string | null): Promise<PageFolder[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -67,6 +101,7 @@ export async function getAllPageFolders(filters?: QueryFilters): Promise<PageFol
       query = query.eq(column, value);
     });
   }
+  query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
 
   const { data, error } = await query.order('order', { ascending: true });
 
@@ -82,20 +117,22 @@ export async function getAllPageFolders(filters?: QueryFilters): Promise<PageFol
  * Filters by is_published to avoid .single() failure when both draft and
  * published rows exist (composite PK is id + is_published).
  */
-export async function getPageFolderById(id: string, isPublished = false): Promise<PageFolder | null> {
+export async function getPageFolderById(id: string, isPublished = false, projectId?: string | null): Promise<PageFolder | null> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('page_folders')
     .select('*')
     .eq('id', id)
     .eq('is_published', isPublished)
-    .is('deleted_at', null)
-    .single();
+    .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
+
+  const { data, error } = await query.single();
 
   if (error) {
     if (error.code === 'PGRST116') {
@@ -114,7 +151,8 @@ export async function getPageFolderById(id: string, isPublished = false): Promis
  */
 export async function getChildFolders(
   parentId: string | null,
-  orderBy: 'order' | 'created_at' = 'order'
+  orderBy: 'order' | 'created_at' = 'order',
+  projectId?: string | null
 ): Promise<PageFolder[]> {
   const client = await getSupabaseAdmin();
 
@@ -122,10 +160,11 @@ export async function getChildFolders(
     throw new Error('Supabase not configured');
   }
 
-  const query = client
+  let query = client
     .from('page_folders')
     .select('*')
     .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
 
   // Handle null vs non-null parent_id
   const finalQuery = parentId === null
@@ -144,16 +183,27 @@ export async function getChildFolders(
 /**
  * Create new page folder
  */
-export async function createPageFolder(folderData: CreatePageFolderData): Promise<PageFolder> {
+export async function createPageFolder(folderData: CreatePageFolderData, projectId?: string | null): Promise<PageFolder> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'page_folders', projectId);
+  const normalizedParentFolderId = normalizePageFolderId(folderData.page_folder_id);
+  await assertParentFolderInProject(client, normalizedParentFolderId, projectId);
+
+  const insertData = {
+    ...folderData,
+    page_folder_id: normalizedParentFolderId,
+    is_published: false,
+    ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
+  };
+
   const { data, error } = await client
     .from('page_folders')
-    .insert(folderData)
+    .insert(insertData)
     .select()
     .single();
 
@@ -167,20 +217,40 @@ export async function createPageFolder(folderData: CreatePageFolderData): Promis
 /**
  * Update page folder
  */
-export async function updatePageFolder(id: string, updates: UpdatePageFolderData): Promise<PageFolder> {
+export async function updatePageFolder(id: string, updates: UpdatePageFolderData, projectId?: string | null): Promise<PageFolder> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  const existingFolder = await getPageFolderById(id, false, projectId);
+  if (!existingFolder) {
+    throw new Error('Folder not found');
+  }
+
+  const normalizedUpdates =
+    updates.page_folder_id !== undefined
+      ? { ...updates, page_folder_id: normalizePageFolderId(updates.page_folder_id) }
+      : updates;
+
+  if (normalizedUpdates.page_folder_id === id) {
+    throw new Error('A folder cannot be its own parent');
+  }
+  if (normalizedUpdates.page_folder_id !== undefined) {
+    await assertParentFolderInProject(client, normalizedUpdates.page_folder_id, projectId);
+  }
+
+  const { is_published: _ignoredIsPublished, ...draftUpdates } = normalizedUpdates as any;
+
+  let updateQuery = client
     .from('page_folders')
-    .update(updates)
+    .update(draftUpdates)
     .eq('id', id)
-    .eq('is_published', false)
-    .select()
-    .single();
+    .eq('is_published', false);
+  updateQuery = (await applyProjectScopeToQuery(updateQuery, client, 'page_folders', projectId)).query;
+
+  const { data, error } = await updateQuery.select().single();
 
   if (error) {
     throw new Error(`Failed to update page folder: ${error.message}`);
@@ -199,7 +269,7 @@ export async function updatePageFolder(id: string, updates: UpdatePageFolderData
  * @param folderId - Parent folder ID
  * @returns Array of all descendant folder IDs
  */
-async function getDescendantFolderIdsFromDB(folderId: string): Promise<string[]> {
+async function getDescendantFolderIdsFromDB(folderId: string, projectId?: string | null): Promise<string[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -207,10 +277,13 @@ async function getDescendantFolderIdsFromDB(folderId: string): Promise<string[]>
   }
 
   // Fetch all non-deleted folders once
-  const { data: allFolders, error } = await client
+  let query = client
     .from('page_folders')
     .select('id, page_folder_id')
     .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
+
+  const { data: allFolders, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch folders: ${error.message}`);
@@ -249,7 +322,7 @@ async function getDescendantFolderIdsFromDB(folderId: string): Promise<string[]>
  * Batch update order for multiple folders
  * @param updates - Array of { id, order } objects
  */
-export async function batchUpdateFolderOrder(updates: Array<{ id: string; order: number }>): Promise<void> {
+export async function batchUpdateFolderOrder(updates: Array<{ id: string; order: number }>, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -257,14 +330,16 @@ export async function batchUpdateFolderOrder(updates: Array<{ id: string; order:
   }
 
   // Update each folder's order (drafts only - users edit drafts)
-  const promises = updates.map(({ id, order }) =>
-    client
+  const promises = updates.map(async ({ id, order }) => {
+    let query = client
       .from('page_folders')
       .update({ order })
       .eq('id', id)
       .eq('is_published', false)
-      .is('deleted_at', null)
-  );
+      .is('deleted_at', null);
+    query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
+    return query;
+  });
 
   const results = await Promise.all(promises);
 
@@ -280,12 +355,14 @@ export async function batchUpdateFolderOrder(updates: Array<{ id: string; order:
  * @param parentId - Parent folder ID (null for root)
  * @param depth - Depth level of the siblings to reorder
  */
-export async function reorderSiblings(parentId: string | null, depth: number): Promise<void> {
+export async function reorderSiblings(parentId: string | null, depth: number, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
+  const hasFolderProjectScope = await resolveProjectScopeForWrite(client, 'page_folders', projectId);
+  const hasPageProjectScope = await resolveProjectScopeForWrite(client, 'pages', projectId);
 
   // Fetch sibling folders - filter by parent_id AND depth (drafts only)
   let foldersQuery = client
@@ -300,6 +377,7 @@ export async function reorderSiblings(parentId: string | null, depth: number): P
   } else {
     foldersQuery = foldersQuery.eq('page_folder_id', parentId);
   }
+  foldersQuery = (await applyProjectScopeToQuery(foldersQuery, client, 'page_folders', projectId)).query;
 
   const { data: siblingFolders, error: foldersError } = await foldersQuery.order('order', { ascending: true });
 
@@ -321,6 +399,7 @@ export async function reorderSiblings(parentId: string | null, depth: number): P
   } else {
     pagesQuery = pagesQuery.eq('page_folder_id', parentId);
   }
+  pagesQuery = (await applyProjectScopeToQuery(pagesQuery, client, 'pages', projectId)).query;
 
   const { data: siblingPages, error: pagesError } = await pagesQuery.order('order', { ascending: true });
 
@@ -356,10 +435,15 @@ export async function reorderSiblings(parentId: string | null, depth: number): P
     const { batchUpdateColumn } = await import('../knex-helpers');
     const knex = await getKnexClient();
 
+    const extraWhereClause = hasFolderProjectScope && projectId
+      ? 'AND is_published = false AND deleted_at IS NULL AND project_id = ?'
+      : 'AND is_published = false AND deleted_at IS NULL';
+
     await batchUpdateColumn(knex, 'page_folders', 'order',
       folderUpdates.map(u => ({ id: u.id, value: u.order })),
       {
-        extraWhereClause: 'AND is_published = false AND deleted_at IS NULL',
+        extraWhereClause,
+        extraWhereParams: hasFolderProjectScope && projectId ? [projectId] : [],
         castType: 'integer',
       }
     );
@@ -370,10 +454,15 @@ export async function reorderSiblings(parentId: string | null, depth: number): P
     const { batchUpdateColumn } = await import('../knex-helpers');
     const knex = await getKnexClient();
 
+    const extraWhereClause = hasPageProjectScope && projectId
+      ? 'AND is_published = false AND deleted_at IS NULL AND error_page IS NULL AND project_id = ?'
+      : 'AND is_published = false AND deleted_at IS NULL AND error_page IS NULL';
+
     await batchUpdateColumn(knex, 'pages', 'order',
       pageUpdates.map(u => ({ id: u.id, value: u.order })),
       {
-        extraWhereClause: 'AND is_published = false AND deleted_at IS NULL AND error_page IS NULL',
+        extraWhereClause,
+        extraWhereParams: hasPageProjectScope && projectId ? [projectId] : [],
         castType: 'integer',
       }
     );
@@ -386,7 +475,7 @@ export async function reorderSiblings(parentId: string | null, depth: number): P
  * Recursively deletes all child folders, pages, and their page_layers
  * After deletion, reorders remaining folders with the same parent_id
  */
-export async function deletePageFolder(id: string): Promise<void> {
+export async function deletePageFolder(id: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -396,22 +485,25 @@ export async function deletePageFolder(id: string): Promise<void> {
   const deletedAt = new Date().toISOString();
 
   // Get the folder before deletion to know its parent_id and depth
-  const folderToDelete = await getPageFolderById(id);
+  const folderToDelete = await getPageFolderById(id, false, projectId);
   if (!folderToDelete) {
     throw new Error('Folder not found');
   }
 
   // Query 1: Get all descendant folder IDs from database
-  const descendantFolderIds = await getDescendantFolderIdsFromDB(id);
+  const descendantFolderIds = await getDescendantFolderIdsFromDB(id, projectId);
   const allFolderIds = [id, ...descendantFolderIds];
 
   // Query 2: Get all draft page IDs within these folders
-  const { data: affectedPages, error: fetchPagesError } = await client
+  let affectedPagesQuery = client
     .from('pages')
     .select('id')
     .in('page_folder_id', allFolderIds)
     .eq('is_published', false)
     .is('deleted_at', null);
+  affectedPagesQuery = (await applyProjectScopeToQuery(affectedPagesQuery, client, 'pages', projectId)).query;
+
+  const { data: affectedPages, error: fetchPagesError } = await affectedPagesQuery;
 
   if (fetchPagesError) {
     throw new Error(`Failed to fetch pages in folder: ${fetchPagesError.message}`);
@@ -421,12 +513,15 @@ export async function deletePageFolder(id: string): Promise<void> {
 
   // Query 3: Soft-delete all draft page_layers for affected pages (if any)
   if (affectedPageIds.length > 0) {
-    const { error: layersError } = await client
+    let layersQuery = client
       .from('page_layers')
       .update({ deleted_at: deletedAt })
       .in('page_id', affectedPageIds)
       .eq('is_published', false)
       .is('deleted_at', null);
+    layersQuery = (await applyProjectScopeToQuery(layersQuery, client, 'page_layers', projectId)).query;
+
+    const { error: layersError } = await layersQuery;
 
     if (layersError) {
       throw new Error(`Failed to delete page layers: ${layersError.message}`);
@@ -434,24 +529,30 @@ export async function deletePageFolder(id: string): Promise<void> {
   }
 
   // Query 4: Soft-delete all draft pages within this folder and its descendants
-  const { error: pagesError } = await client
+  let pagesQuery = client
     .from('pages')
     .update({ deleted_at: deletedAt })
     .in('page_folder_id', allFolderIds)
     .eq('is_published', false)
     .is('deleted_at', null);
+  pagesQuery = (await applyProjectScopeToQuery(pagesQuery, client, 'pages', projectId)).query;
+
+  const { error: pagesError } = await pagesQuery;
 
   if (pagesError) {
     throw new Error(`Failed to delete pages in folder: ${pagesError.message}`);
   }
 
   // Query 5: Soft-delete ALL draft folders (parent + descendants) in a single query
-  const { error: foldersError } = await client
+  let foldersQuery = client
     .from('page_folders')
     .update({ deleted_at: deletedAt })
     .in('id', allFolderIds)
     .eq('is_published', false)
     .is('deleted_at', null);
+  foldersQuery = (await applyProjectScopeToQuery(foldersQuery, client, 'page_folders', projectId)).query;
+
+  const { error: foldersError } = await foldersQuery;
 
   if (foldersError) {
     throw new Error(`Failed to delete folders: ${foldersError.message}`);
@@ -459,7 +560,7 @@ export async function deletePageFolder(id: string): Promise<void> {
 
   // Reorder remaining siblings (both pages and folders) with the same parent_id and depth
   try {
-    await reorderSiblings(folderToDelete.page_folder_id, folderToDelete.depth);
+    await reorderSiblings(folderToDelete.page_folder_id, folderToDelete.depth, projectId);
   } catch (reorderError) {
     console.error('[deletePageFolder] Failed to reorder siblings:', reorderError);
     // Don't fail the deletion if reordering fails
@@ -696,7 +797,7 @@ export async function getPageFolderBySlug(slug: string, filters?: QueryFilters):
  * Updates the order field for multiple folders in a single operation
  * @param updates - Array of { id, order } objects
  */
-export async function reorderFolders(updates: Array<{ id: string; order: number }>): Promise<void> {
+export async function reorderFolders(updates: Array<{ id: string; order: number }>, projectId?: string | null): Promise<void> {
   if (updates.length === 0) {
     return;
   }
@@ -704,11 +805,20 @@ export async function reorderFolders(updates: Array<{ id: string; order: number 
   const { getKnexClient } = await import('../knex-client');
   const { batchUpdateColumn } = await import('../knex-helpers');
   const knex = await getKnexClient();
+  const client = await getSupabaseAdmin();
+  if (!client) {
+    throw new Error('Supabase not configured');
+  }
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'page_folders', projectId);
+  const extraWhereClause = hasProjectScope && projectId
+    ? 'AND is_published = false AND deleted_at IS NULL AND project_id = ?'
+    : 'AND is_published = false AND deleted_at IS NULL';
 
   await batchUpdateColumn(knex, 'page_folders', 'order',
     updates.map(u => ({ id: u.id, value: u.order })),
     {
-      extraWhereClause: 'AND is_published = false AND deleted_at IS NULL',
+      extraWhereClause,
+      extraWhereParams: hasProjectScope && projectId ? [projectId] : [],
       castType: 'integer',
     }
   );
@@ -720,7 +830,7 @@ export async function reorderFolders(updates: Array<{ id: string; order: number 
  * @param folderId - ID of the folder to duplicate
  * @returns The newly created folder
  */
-export async function duplicatePageFolder(folderId: string): Promise<PageFolder> {
+export async function duplicatePageFolder(folderId: string, projectId?: string | null): Promise<PageFolder> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -728,7 +838,7 @@ export async function duplicatePageFolder(folderId: string): Promise<PageFolder>
   }
 
   // Get the original folder
-  const originalFolder = await getPageFolderById(folderId);
+  const originalFolder = await getPageFolderById(folderId, false, projectId);
   if (!originalFolder) {
     throw new Error('Folder not found');
   }
@@ -753,6 +863,7 @@ export async function duplicatePageFolder(folderId: string): Promise<PageFolder>
   } else {
     query = query.eq('page_folder_id', originalFolder.page_folder_id);
   }
+  query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
 
   const { data: existingFolders } = await query;
 
@@ -773,9 +884,10 @@ export async function duplicatePageFolder(folderId: string): Promise<PageFolder>
   const newOrder = originalFolder.order + 1;
 
   // Increment order for all siblings (folders and pages) that come after the original folder
-  await incrementSiblingOrders(newOrder, originalFolder.depth, originalFolder.page_folder_id);
+  await incrementSiblingOrders(newOrder, originalFolder.depth, originalFolder.page_folder_id, projectId);
 
   // Create the new folder
+  const hasFolderProjectScope = await resolveProjectScopeForWrite(client, 'page_folders', projectId);
   const { data: newFolder, error: folderError } = await client
     .from('page_folders')
     .insert({
@@ -786,6 +898,7 @@ export async function duplicatePageFolder(folderId: string): Promise<PageFolder>
       order: newOrder,
       depth: originalFolder.depth,
       settings: originalFolder.settings || {},
+      ...(hasFolderProjectScope && projectId ? { project_id: projectId } : {}),
     })
     .select()
     .single();
@@ -795,7 +908,7 @@ export async function duplicatePageFolder(folderId: string): Promise<PageFolder>
   }
 
   // Now recursively duplicate all child folders and pages
-  await duplicateFolderContents(client, folderId, newFolder.id);
+  await duplicateFolderContents(client, folderId, newFolder.id, projectId);
 
   return newFolder;
 }
@@ -809,27 +922,34 @@ export async function duplicatePageFolder(folderId: string): Promise<PageFolder>
 async function duplicateFolderContents(
   client: any,
   originalFolderId: string,
-  newFolderId: string
+  newFolderId: string,
+  projectId?: string | null
 ): Promise<void> {
   // Get all child folders
-  const { data: childFolders, error: foldersError } = await client
+  let childFoldersQuery = client
     .from('page_folders')
     .select('*')
     .eq('page_folder_id', originalFolderId)
     .is('deleted_at', null)
     .order('order', { ascending: true });
+  childFoldersQuery = (await applyProjectScopeToQuery(childFoldersQuery, client, 'page_folders', projectId)).query;
+
+  const { data: childFolders, error: foldersError } = await childFoldersQuery;
 
   if (foldersError) {
     throw new Error(`Failed to fetch child folders: ${foldersError.message}`);
   }
 
   // Get all child pages
-  const { data: childPages, error: pagesError } = await client
+  let childPagesQuery = client
     .from('pages')
     .select('*')
     .eq('page_folder_id', originalFolderId)
     .is('deleted_at', null)
     .order('order', { ascending: true });
+  childPagesQuery = (await applyProjectScopeToQuery(childPagesQuery, client, 'pages', projectId)).query;
+
+  const { data: childPages, error: pagesError } = await childPagesQuery;
 
   if (pagesError) {
     throw new Error(`Failed to fetch child pages: ${pagesError.message}`);
@@ -842,6 +962,7 @@ async function duplicateFolderContents(
     for (const folder of childFolders) {
       const timestamp = Date.now() + Math.random(); // Add randomness for uniqueness
       const newFolderSlug = `folder-${Math.floor(timestamp)}`;
+      const hasChildFolderProjectScope = await resolveProjectScopeForWrite(client, 'page_folders', projectId);
 
       const { data: duplicatedFolder, error: dupError } = await client
         .from('page_folders')
@@ -853,6 +974,7 @@ async function duplicateFolderContents(
           order: folder.order,
           depth: folder.depth,
           settings: folder.settings || {},
+          ...(hasChildFolderProjectScope && projectId ? { project_id: projectId } : {}),
         })
         .select()
         .single();
@@ -864,7 +986,7 @@ async function duplicateFolderContents(
       folderIdMap.set(folder.id, duplicatedFolder.id);
 
       // Recursively duplicate this folder's contents
-      await duplicateFolderContents(client, folder.id, duplicatedFolder.id);
+      await duplicateFolderContents(client, folder.id, duplicatedFolder.id, projectId);
     }
   }
 
@@ -873,6 +995,7 @@ async function duplicateFolderContents(
     for (const page of childPages) {
       const timestamp = Date.now() + Math.random();
       const newPageSlug = page.is_index ? '' : `page-${Math.floor(timestamp)}`;
+      const hasPageProjectScope = await resolveProjectScopeForWrite(client, 'pages', projectId);
 
       const { data: duplicatedPage, error: dupError } = await client
         .from('pages')
@@ -887,6 +1010,7 @@ async function duplicateFolderContents(
           is_dynamic: page.is_dynamic,
           error_page: page.error_page,
           settings: page.settings || {},
+          ...(hasPageProjectScope && projectId ? { project_id: projectId } : {}),
         })
         .select()
         .single();
@@ -896,24 +1020,28 @@ async function duplicateFolderContents(
       }
 
       // Duplicate the page's draft layers if they exist
-      const { data: originalLayers, error: layersError } = await client
+      let originalLayersQuery = client
         .from('page_layers')
         .select('*')
         .eq('page_id', page.id)
         .eq('is_published', false)
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
+        .limit(1);
+      originalLayersQuery = (await applyProjectScopeToQuery(originalLayersQuery, client, 'page_layers', projectId)).query;
+
+      const { data: originalLayers, error: layersError } = await originalLayersQuery.single();
 
       // If there are draft layers, duplicate them for the new page
       if (!layersError && originalLayers) {
+        const hasLayerProjectScope = await resolveProjectScopeForWrite(client, 'page_layers', projectId);
         await client
           .from('page_layers')
           .insert({
             page_id: duplicatedPage.id,
             layers: originalLayers.layers,
             is_published: false,
+            ...(hasLayerProjectScope && projectId ? { project_id: projectId } : {}),
           });
       }
     }

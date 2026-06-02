@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 
 import { useState, useRef, useEffect } from 'react';
 import Image from 'next/image';
@@ -138,7 +138,7 @@ export default function ProfilePage() {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await novumFetch('/ycode/api/profile/avatar', {
+      const response = await studioFetch('/ycode/api/profile/avatar', {
         method: 'POST',
         body: formData,
       });
@@ -174,7 +174,7 @@ export default function ProfilePage() {
     setNameError(null);
 
     try {
-      const response = await novumFetch('/ycode/api/profile/name', {
+      const response = await studioFetch('/ycode/api/profile/name', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: nameInput.trim() }),
@@ -213,7 +213,7 @@ export default function ProfilePage() {
     setEmailError(null);
 
     try {
-      const response = await novumFetch('/ycode/api/profile/email', {
+      const response = await studioFetch('/ycode/api/profile/email', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -265,7 +265,7 @@ export default function ProfilePage() {
     setPasswordError(null);
 
     try {
-      const response = await novumFetch('/ycode/api/profile/password', {
+      const response = await studioFetch('/ycode/api/profile/password', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -308,7 +308,7 @@ export default function ProfilePage() {
     setDeleteError(null);
 
     try {
-      const response = await novumFetch('/ycode/api/profile', {
+      const response = await studioFetch('/ycode/api/profile', {
         method: 'DELETE',
       });
 

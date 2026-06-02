@@ -8,15 +8,11 @@ import {
   deleteFormSubmission,
   markAllAsRead,
 } from '@/lib/repositories/formSubmissionRepository';
-import { resolveNovumProjectId } from '@/lib/project-scope';
+import { resolveMcpProjectId, type McpProjectContext } from '@/lib/mcp/project-context';
 
-const projectSchema = z.string().optional().describe('Optional Novum project slug, studio path slug, or domain for project-scoped form data');
+const projectSchema = z.string().optional().describe('Optional Studio project slug, studio path slug, or domain for project-scoped form data');
 
-async function resolveMcpProjectId(project?: string): Promise<string | null> {
-  return project ? resolveNovumProjectId(project) : null;
-}
-
-export function registerFormTools(server: McpServer) {
+export function registerFormTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
     'list_forms',
     'List all forms that have received submissions, with counts and latest submission date.',
@@ -24,7 +20,7 @@ export function registerFormTools(server: McpServer) {
       project: projectSchema,
     },
     async ({ project }) => {
-      const projectId = await resolveMcpProjectId(project);
+      const projectId = await resolveMcpProjectId(projectContext, project);
       const summaries = await getFormSummaries(projectId);
       return {
         content: [{
@@ -44,7 +40,7 @@ export function registerFormTools(server: McpServer) {
       project: projectSchema,
     },
     async ({ form_id, status, project }) => {
-      const projectId = await resolveMcpProjectId(project);
+      const projectId = await resolveMcpProjectId(projectContext, project);
       const submissions = await getAllFormSubmissions(form_id, status, projectId);
       return {
         content: [{
@@ -69,7 +65,7 @@ export function registerFormTools(server: McpServer) {
       project: projectSchema,
     },
     async ({ submission_id, project }) => {
-      const projectId = await resolveMcpProjectId(project);
+      const projectId = await resolveMcpProjectId(projectContext, project);
       const submission = await getFormSubmissionById(submission_id, projectId);
       if (!submission) {
         return { content: [{ type: 'text' as const, text: `Error: Submission "${submission_id}" not found.` }], isError: true };
@@ -89,7 +85,7 @@ export function registerFormTools(server: McpServer) {
       project: projectSchema,
     },
     async ({ submission_id, status, project }) => {
-      const projectId = await resolveMcpProjectId(project);
+      const projectId = await resolveMcpProjectId(projectContext, project);
       const submission = await updateFormSubmission(submission_id, { status }, projectId);
       return {
         content: [{
@@ -108,7 +104,7 @@ export function registerFormTools(server: McpServer) {
       project: projectSchema,
     },
     async ({ form_id, project }) => {
-      const projectId = await resolveMcpProjectId(project);
+      const projectId = await resolveMcpProjectId(projectContext, project);
       await markAllAsRead(form_id, projectId);
       return {
         content: [{ type: 'text' as const, text: `All new submissions for form ${form_id} marked as read.` }],
@@ -124,7 +120,7 @@ export function registerFormTools(server: McpServer) {
       project: projectSchema,
     },
     async ({ submission_id, project }) => {
-      const projectId = await resolveMcpProjectId(project);
+      const projectId = await resolveMcpProjectId(projectContext, project);
       await deleteFormSubmission(submission_id, projectId);
       return {
         content: [{ type: 'text' as const, text: `Submission ${submission_id} deleted successfully.` }],

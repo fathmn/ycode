@@ -1,6 +1,6 @@
 'use client';
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 /**
  * CSVImportDialog Component
  *
@@ -208,7 +208,7 @@ export function CSVImportDialog({
 
     try {
       // Create import job
-      const response = await novumFetch(`/ycode/api/collections/${collectionId}/import`, {
+      const response = await studioFetch(`/ycode/api/collections/${collectionId}/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -240,7 +240,7 @@ export function CSVImportDialog({
 
     while (!abortRef.current) {
       try {
-        const response = await novumFetch('/ycode/api/collections/import/process', {
+        const response = await studioFetch('/ycode/api/collections/import/process', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ importId: id }),

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPageBySlug } from '@/lib/repositories/pageRepository';
-import { getPublishedLayers } from '@/lib/repositories/pageLayersRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole } from '@/lib/studio-platform';
 
 /**
  * GET /ycode/api/pages/slug/[slug]
@@ -14,7 +14,16 @@ export async function GET(
 ) {
   try {
     const { slug } = await params;
-    const page = await getPageBySlug(slug);
+    const roleCheck = await requireStudioProjectRole(request, [
+      'studio_admin',
+      'studio_developer',
+      'customer_owner',
+      'customer_editor',
+      'customer_viewer',
+    ]);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const page = await getPageBySlug(slug, undefined, roleCheck.context.project.id);
 
     if (!page) {
       return noCache(

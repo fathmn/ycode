@@ -10,7 +10,7 @@ import PasswordForm from '@/components/PasswordForm';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
-import { buildCustomFontsCss, buildFontClassesCss, getGoogleFontLinks } from '@/lib/font-utils';
+import { buildCustomFontsCss, buildFontClassesCss, filterGoogleFontLinksAgainstHeadHtml, getGoogleFontLinks, removeDuplicateGoogleFontLinksFromHeadHtml } from '@/lib/font-utils';
 import { collectLayerAssetIds, getAssetProxyUrl } from '@/lib/asset-utils';
 import { getAllPages } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
@@ -24,7 +24,7 @@ import { parseSafeBodyStyle } from '@/lib/body-style';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
 import { castValue } from '@/lib/collection-utils';
-import { canRenderNovumCustomCode } from '@/lib/novum-platform';
+import { canRenderStudioCustomCode } from '@/lib/studio-platform';
 import type { Layer, Component, Page, CollectionItemWithValues, CollectionField, Locale, PageFolder, Font, ColorVariable, Asset } from '@/types';
 
 interface PageLinkRef { collection_item_id: string; page_id: string }
@@ -477,7 +477,7 @@ export default async function PageRenderer({
   gaMeasurementId,
   globalCustomCodeHead,
   globalCustomCodeBody,
-  ycodeBadge = true,
+  ycodeBadge = false,
   passwordProtection,
 }: PageRendererProps) {
   const sharedDbScopedRender = isProjectScopeRequired();
@@ -607,6 +607,7 @@ export default async function PageRenderer({
   const pageCustomCodeHead = page.is_dynamic && collectionItem
     ? resolveCustomCodePlaceholders(rawPageCustomCodeHead, collectionItem, collectionFields)
     : rawPageCustomCodeHead;
+  const dedupedPageCustomCodeHead = removeDuplicateGoogleFontLinksFromHeadHtml(pageCustomCodeHead, globalCustomCodeHead);
 
   const pageCustomCodeBody = page.is_dynamic && collectionItem
     ? resolveCustomCodePlaceholders(rawPageCustomCodeBody, collectionItem, collectionFields)
@@ -615,7 +616,7 @@ export default async function PageRenderer({
     ? (page as Page & { project_id?: string }).project_id || null
     : null;
   const customCodeRenderProjectId = explicitCustomCodeProjectId || renderProjectId || pageProjectId;
-  const allowCustomCodeExecution = await canRenderNovumCustomCode(customCodeRenderProjectId, !isPreview, {
+  const allowCustomCodeExecution = await canRenderStudioCustomCode(customCodeRenderProjectId, !isPreview, {
     requireProject: isProjectScopeRequired() || Boolean(process.env.STUDIO_YCODE_SITE_KEY && process.env.STUDIO_YCODE_SITE_KEY !== 'default'),
   });
 
@@ -646,7 +647,11 @@ export default async function PageRenderer({
       ? await getRenderFonts(renderProjectId, isPreview)
       : (isPreview ? await getAllDraftFonts() : await getPublishedFonts());
     fontsCss = buildCustomFontsCss(fonts) + buildFontClassesCss(fonts);
-    googleFontLinkUrls = getGoogleFontLinks(fonts);
+    googleFontLinkUrls = filterGoogleFontLinksAgainstHeadHtml(
+      getGoogleFontLinks(fonts),
+      globalCustomCodeHead,
+      dedupedPageCustomCodeHead,
+    );
   } catch (error) {
     handleRenderFetchError('Error loading fonts', error);
   }
@@ -727,7 +732,7 @@ export default async function PageRenderer({
       )}
 
       {/* Page-specific custom head code — React 19 hoists meta/link/style/title to <head> */}
-      {allowCustomCodeExecution && pageCustomCodeHead && renderRootLayoutHeadCode(pageCustomCodeHead, 'page-head')}
+      {allowCustomCodeExecution && dedupedPageCustomCodeHead && renderRootLayoutHeadCode(dedupedPageCustomCodeHead, 'page-head')}
 
       {/* Strip native browser appearance from form elements so Tailwind classes apply */}
       <style
@@ -892,13 +897,13 @@ export default async function PageRenderer({
         <CustomCodeInjector html={pageCustomCodeBody} />
       )}
 
-      {/* Ycode badge (only on published pages, not in preview) */}
+      {/* Studio badge (only on published pages, not in preview) */}
       {ycodeBadge && !isPreview && (
         <a
-          href="https://ycode.com"
+          href="https://studio.novum-partners.de"
           target="_blank"
           rel="noopener noreferrer"
-          aria-label="This website was built using Ycode."
+          aria-label="Diese Website wird mit Studio verwaltet."
           style={{
             height: 'auto',
             background: '#050606',

@@ -7,7 +7,7 @@
  * Tracks version history and current position for each entity
  */
 
-import { novumFetch } from '@/lib/api';
+import { studioFetch } from '@/lib/api';
 import { create } from 'zustand';
 import type { Version, VersionEntityType, VersionHistoryItem } from '@/types';
 
@@ -164,7 +164,7 @@ export const useVersionsStore = create<VersionsStore>((set, get) => ({
     }));
 
     try {
-      const response = await novumFetch(
+      const response = await studioFetch(
         `/ycode/api/versions?entityType=${entityType}&entityId=${entityId}&limit=100`
       );
       const result = await response.json();
@@ -331,7 +331,7 @@ export const useVersionsStore = create<VersionsStore>((set, get) => ({
     // Fetch if not cached
     if (!version) {
       try {
-        const response = await novumFetch(`/ycode/api/versions/${versionId}`);
+        const response = await studioFetch(`/ycode/api/versions/${versionId}`);
         const result = await response.json();
         if (result.data) {
           version = result.data;
@@ -362,7 +362,7 @@ export const useVersionsStore = create<VersionsStore>((set, get) => ({
       // Fetch if not cached
       if (!previousVersion) {
         try {
-          const response = await novumFetch(`/ycode/api/versions/${previousVersionId}`);
+          const response = await studioFetch(`/ycode/api/versions/${previousVersionId}`);
           const result = await response.json();
           if (result.data) {
             previousVersion = result.data;
@@ -417,7 +417,7 @@ export const useVersionsStore = create<VersionsStore>((set, get) => ({
     // Fetch if not cached
     if (!version) {
       try {
-        const response = await novumFetch(`/ycode/api/versions/${versionId}`);
+        const response = await studioFetch(`/ycode/api/versions/${versionId}`);
         const result = await response.json();
         if (result.data) {
           version = result.data;
@@ -491,7 +491,7 @@ export const useVersionsStore = create<VersionsStore>((set, get) => ({
 
     if (!version) {
       try {
-        const response = await novumFetch(`/ycode/api/versions/${versionId}`);
+        const response = await studioFetch(`/ycode/api/versions/${versionId}`);
         const result = await response.json();
         if (result.data) {
           version = result.data;

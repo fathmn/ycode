@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getAllDraftPages } from '@/lib/repositories/pageRepository';
 import { getAllDraftLayers } from '@/lib/repositories/pageLayersRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
@@ -11,6 +11,15 @@ import { getAllAssets } from '@/lib/repositories/assetRepository';
 import { getAllAssetFolders } from '@/lib/repositories/assetFolderRepository';
 import { getAllFonts } from '@/lib/repositories/fontRepository';
 import { getMapboxAccessToken, getGoogleMapsEmbedApiKey } from '@/lib/map-server';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const EDITOR_INIT_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
 
 /**
  * GET /ycode/api/editor/init
@@ -27,16 +36,20 @@ import { getMapboxAccessToken, getGoogleMapsEmbedApiKey } from '@/lib/map-server
  * - All asset folders
  * - All fonts
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, EDITOR_INIT_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     // Load all data in parallel (only drafts for editor)
     const [pages, drafts, folders, components, styles, settings, collections, locales, assets, assetFolders, fonts, resolvedMapboxToken, resolvedGoogleMapsEmbedKey] = await Promise.all([
-      getAllDraftPages(),
-      getAllDraftLayers(),
-      getAllPageFolders({ is_published: false }),
+      getAllDraftPages(false, projectId),
+      getAllDraftLayers(projectId),
+      getAllPageFolders({ is_published: false }, projectId),
       getAllComponents(),
       getAllStyles(),
-      getAllSettings(),
+      getAllSettings(projectId),
       getAllCollections(),
       getAllLocales(),
       getAllAssets(),
