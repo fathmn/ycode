@@ -54,5 +54,5 @@ export function getImageSrcsetWidthsForLayer(layer: ImageLayerLike): number[] {
 }
 
 export function getFallbackImageWidthForLayer(layer: ImageLayerLike): number {
-  return isSmallBrandImageLayer(layer) ? 320 : 1920;
+  return isSmallBrandImageLayer(layer) ? 160 : 1920;
 }
