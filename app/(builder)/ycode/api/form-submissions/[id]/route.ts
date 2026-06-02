@@ -16,16 +16,16 @@ interface RouteParams {
 }
 
 const FORM_READ_ROLES: NovumRole[] = [
-  'novum_admin',
-  'novum_developer',
+  'studio_admin',
+  'studio_developer',
   'customer_owner',
   'customer_editor',
   'customer_viewer',
 ];
 
 const FORM_WRITE_ROLES: NovumRole[] = [
-  'novum_admin',
-  'novum_developer',
+  'studio_admin',
+  'studio_developer',
   'customer_owner',
   'customer_editor',
 ];

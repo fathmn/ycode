@@ -88,8 +88,8 @@ export async function POST(_request: NextRequest) {
 
   try {
     const novumRole = await requireNovumProjectRole(_request, [
-      'novum_admin',
-      'novum_developer',
+      'studio_admin',
+      'studio_developer',
       'customer_owner',
       'customer_editor',
     ]);

@@ -53,8 +53,8 @@ export async function resolvePublicFormSubmissionProjectScope(
   if (!projectId) return { projectId: null, definitionState: 'any' };
 
   const canAccessPreviewProject = await canAccessNovumProject(projectId, [
-    'novum_admin',
-    'novum_developer',
+    'studio_admin',
+    'studio_developer',
     'customer_owner',
     'customer_editor',
   ]);

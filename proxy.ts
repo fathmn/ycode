@@ -5,6 +5,15 @@ import { NOVUM_PREVIEW_NONCE_COOKIE } from '@/lib/novum-preview-nonce';
 import { projectLookupFromHost } from '@/lib/project-host';
 import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
 import { getConfiguredSiteAdminRoleForUser } from '@/lib/novum-site-admin';
+import {
+  CUSTOMER_OWNER_ROLE,
+  STUDIO_OPERATOR_ROLES,
+  STUDIO_READ_ROLES,
+  STUDIO_WRITE_ROLES,
+  type StudioRole,
+  hasAllowedStudioRole,
+  normalizeStudioRole,
+} from '@/lib/studio-roles';
 
 /**
  * Public API routes that skip authentication.
@@ -142,10 +151,10 @@ const BUILDER_ONLY_MUTATION_PREFIXES = [
 ];
 
 const MUTATING_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];
-const READ_ROLES = ['novum_admin', 'novum_developer', 'customer_owner', 'customer_editor', 'customer_viewer'];
-const WRITE_ROLES = ['novum_admin', 'novum_developer', 'customer_owner', 'customer_editor'];
-const PUBLISH_ROLES = ['novum_admin', 'novum_developer', 'customer_owner'];
-const ADMIN_DEVELOPER_ROLES = ['novum_admin', 'novum_developer'];
+const READ_ROLES = STUDIO_READ_ROLES;
+const WRITE_ROLES = STUDIO_WRITE_ROLES;
+const PUBLISH_ROLES: StudioRole[] = [...STUDIO_OPERATOR_ROLES, CUSTOMER_OWNER_ROLE];
+const ADMIN_DEVELOPER_ROLES = STUDIO_OPERATOR_ROLES;
 
 const ADMIN_DEVELOPER_API_PREFIXES = [
   '/ycode/api/api-keys',
@@ -198,7 +207,7 @@ function isMutatingRequest(method: string): boolean {
   return MUTATING_METHODS.includes(method.toUpperCase());
 }
 
-function getRequiredRoles(pathname: string, method: string): string[] | null {
+function getRequiredRoles(pathname: string, method: string): StudioRole[] | null {
   if (ADMIN_DEVELOPER_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
     return ADMIN_DEVELOPER_ROLES;
   }
@@ -907,7 +916,8 @@ async function verifyApiAuth(request: NextRequest): Promise<ApiAuthResult> {
       resolvedProjectId = membership.project_id || null;
     }
 
-    if (membershipError || !membership || !requiredRoles.includes(membership.role)) {
+    const normalizedMembershipRole = normalizeStudioRole(membership?.role);
+    if (membershipError || !normalizedMembershipRole || !hasAllowedStudioRole(normalizedMembershipRole, requiredRoles)) {
       return {
         ok: false,
         response: NextResponse.json(
@@ -921,7 +931,7 @@ async function verifyApiAuth(request: NextRequest): Promise<ApiAuthResult> {
       config,
       projectId: resolvedProjectId,
       actorUserId: user.id,
-      role: membership.role,
+      role: normalizedMembershipRole,
       request,
     });
 

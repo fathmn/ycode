@@ -7,7 +7,7 @@ import process from 'node:process';
 
 const DEFAULT_PROJECT_REF = 'ueeecqiswvxpfpmujrtj';
 const DEFAULT_SENDER_EMAIL = 'no-reply@novum-partners.de';
-const DEFAULT_SENDER_NAME = 'studio.novum partners';
+const DEFAULT_SENDER_NAME = 'Studio';
 const DEFAULT_SITE_URL = 'https://studio.novum-partners.de';
 
 function readArg(name) {
@@ -56,7 +56,7 @@ async function main() {
     body: JSON.stringify({
       smtp_admin_email: senderEmail,
       smtp_sender_name: senderName,
-      mailer_subjects_recovery: 'Passwort für studio.novum partners zurücksetzen',
+      mailer_subjects_recovery: 'Passwort für Studio zurücksetzen',
       mailer_templates_recovery_content: recoveryTemplate,
       uri_allow_list: Array.from(allowedRedirects).join(','),
     }),

@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import AnimationInitializer from '@/components/AnimationInitializer';
 import BodyClassApplier from '@/components/BodyClassApplier';
 import ContentHeightReporter from '@/components/ContentHeightReporter';
@@ -196,6 +197,10 @@ function safeGaMeasurementId(value?: string | null): string | null {
 
 function escapeStyleBoundary(css: string): string {
   return css.replace(/<\/style/gi, '<\\/style');
+}
+
+function fontStylesheetLoaderScript(url: string): string {
+  return `(function(){var href=${scriptJson(url)};if(document.querySelector('link[data-ycode-font-href="'+href.replace(/"/g,'\\"')+'"]'))return;var l=document.createElement('link');l.rel='stylesheet';l.href=href;l.dataset.ycodeFontHref=href;document.head.appendChild(l);})()`;
 }
 
 function bodyBootstrapScript(classes: string, style: string): string {
@@ -746,13 +751,23 @@ export default async function PageRenderer({
         />
       )}
 
-      {/* Load Google Fonts via <link> elements */}
+      {/* Load Google Fonts after first paint; direct stylesheets block mobile FCP/LCP. */}
       {googleFontLinkUrls.map((url, i) => (
-        <link
-          key={`gfont-${i}`}
-          rel="stylesheet"
-          href={url}
-        />
+        <Fragment key={`gfont-${i}`}>
+          <link
+            rel="preload"
+            as="style"
+            href={url}
+          />
+          <script
+            dangerouslySetInnerHTML={{ __html: fontStylesheetLoaderScript(url) }}
+          />
+          <noscript
+            dangerouslySetInnerHTML={{
+              __html: `<link rel="stylesheet" href="${url.replace(/"/g, '&quot;')}">`,
+            }}
+          />
+        </Fragment>
       ))}
 
       {/* Inject custom font @font-face rules and font class CSS */}

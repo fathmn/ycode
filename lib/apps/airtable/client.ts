@@ -10,6 +10,7 @@ import type {
   AirtableFieldMapping,
 } from './types';
 import { novumFetch, studioProjectsApi } from '@/lib/api';
+import { isStudioOperatorRole } from '@/lib/studio-roles';
 
 const BASE = '/ycode/api/apps/airtable';
 const JSON_HEADERS = { 'Content-Type': 'application/json' } as const;
@@ -56,7 +57,7 @@ function canFetchAdminConnections(): Promise<boolean> {
 
   canFetchConnectionsPromise = studioProjectsApi.getAssigned()
     .then((response) => response.data?.some((project) =>
-      project.role === 'novum_admin' || project.role === 'novum_developer'
+      isStudioOperatorRole(project.role)
     ) === true)
     .catch(() => false)
     .finally(() => {

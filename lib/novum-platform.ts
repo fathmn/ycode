@@ -7,6 +7,7 @@ import { NOVUM_PREVIEW_NONCE_COOKIE } from '@/lib/novum-preview-nonce';
 import { getAuthUser } from '@/lib/supabase-auth';
 import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
 import { getConfiguredSiteAdminRoleForUser } from '@/lib/novum-site-admin';
+import { STUDIO_READ_ROLES, type StudioRole, normalizeStudioRole } from '@/lib/studio-roles';
 
 const PREVIEW_MAX_AGE_HOURS = Number(process.env.NOVUM_PREVIEW_MAX_AGE_HOURS || 24);
 const PREVIEW_NONCE_MAX_AGE_MINUTES = Number(process.env.NOVUM_PREVIEW_NONCE_MAX_AGE_MINUTES || 30);
@@ -27,7 +28,7 @@ const DRAFT_FINGERPRINT_TABLES = [
   'translations',
 ];
 
-export type NovumRole = 'novum_admin' | 'novum_developer' | 'customer_owner' | 'customer_editor' | 'customer_viewer';
+export type NovumRole = StudioRole;
 
 type NovumProject = {
   id: string;
@@ -99,7 +100,7 @@ async function getProjectRoleForUser(client: any, projectId: string, actorUserId
     .eq('user_id', actorUserId)
     .maybeSingle();
 
-  if (!error && membership?.role) return membership.role;
+  if (!error && membership?.role) return normalizeStudioRole(membership.role);
   return null;
 }
 
@@ -194,7 +195,7 @@ async function requireNovumProjectRoleForProject(
 
 export async function canAccessNovumProject(
   projectId: string,
-  allowedRoles: NovumRole[] = ['novum_admin', 'novum_developer', 'customer_owner', 'customer_editor', 'customer_viewer']
+  allowedRoles: NovumRole[] = STUDIO_READ_ROLES
 ): Promise<boolean> {
   const auth = await getAuthUser();
   if (!auth?.user?.id) return false;
@@ -204,7 +205,7 @@ export async function canAccessNovumProject(
 export async function canAccessNovumProjectForUser(
   projectId: string,
   actorUserId: string,
-  allowedRoles: NovumRole[] = ['novum_admin', 'novum_developer', 'customer_owner', 'customer_editor', 'customer_viewer']
+  allowedRoles: NovumRole[] = STUDIO_READ_ROLES
 ): Promise<boolean> {
   if (!actorUserId) return false;
   const client = await getSupabaseAdmin();
@@ -301,8 +302,8 @@ export async function verifyNovumPublishGate(request: NextRequest): Promise<
   | { ok: false; response: Response }
 > {
   const roleCheck = await requireNovumProjectRole(request, [
-    'novum_admin',
-    'novum_developer',
+    'studio_admin',
+    'studio_developer',
     'customer_owner',
   ]);
   if (!roleCheck.ok) return roleCheck;
@@ -524,8 +525,8 @@ export async function recordExplicitNovumPreviewApproval(request: NextRequest): 
   }
 
   const roleCheck = await requireNovumProjectRole(request, [
-    'novum_admin',
-    'novum_developer',
+    'studio_admin',
+    'studio_developer',
     'customer_owner',
     'customer_editor',
   ]);
@@ -631,8 +632,8 @@ export async function recordNovumPreviewRendered(request: NextRequest): Promise<
   }
 
   const allowedPreviewRoles: NovumRole[] = [
-    'novum_admin',
-    'novum_developer',
+    'studio_admin',
+    'studio_developer',
     'customer_owner',
     'customer_editor',
   ];
@@ -1053,8 +1054,8 @@ export function getNovumPublishReadiness() {
 
 export async function getNovumPublishReadinessForRequest(request: NextRequest): Promise<Response> {
   const roleCheck = await requireNovumProjectRole(request, [
-    'novum_admin',
-    'novum_developer',
+    'studio_admin',
+    'studio_developer',
     'customer_owner',
     'customer_editor',
   ]);

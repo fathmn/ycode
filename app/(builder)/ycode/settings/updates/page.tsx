@@ -137,7 +137,7 @@ export default function UpdatesSettingsPage() {
           <div>
             <FieldLegend>Versionsstatus</FieldLegend>
             <FieldDescription>
-              Prüft, ob studio.novum partners auf dem aktuellen Stand der Open-Source-Basis ist.
+              Prüft, ob Studio auf dem aktuellen Stand der Open-Source-Basis ist.
             </FieldDescription>
           </div>
 

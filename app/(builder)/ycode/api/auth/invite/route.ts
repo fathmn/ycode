@@ -10,7 +10,7 @@ import { requireNovumProjectRole } from '@/lib/novum-platform';
  */
 export async function POST(request: NextRequest) {
   try {
-    const roleCheck = await requireNovumProjectRole(request, ['novum_admin', 'novum_developer']);
+    const roleCheck = await requireNovumProjectRole(request, ['studio_admin', 'studio_developer']);
     if (!roleCheck.ok) return roleCheck.response;
 
     const body = await request.json();

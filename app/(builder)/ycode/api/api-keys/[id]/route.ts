@@ -18,8 +18,8 @@ export async function GET(
   try {
     const { id } = await params;
     const roleCheck = await requireNovumProjectRole(request, [
-      'novum_admin',
-      'novum_developer',
+      'studio_admin',
+      'studio_developer',
     ]);
     if (!roleCheck.ok) return roleCheck.response;
 
@@ -55,8 +55,8 @@ export async function DELETE(
   try {
     const { id } = await params;
     const roleCheck = await requireNovumProjectRole(request, [
-      'novum_admin',
-      'novum_developer',
+      'studio_admin',
+      'studio_developer',
     ]);
     if (!roleCheck.ok) return roleCheck.response;
 

@@ -30,7 +30,7 @@ import { usePagesStore } from '@/stores/usePagesStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useLocalisationStore } from '@/stores/useLocalisationStore';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page-utils';
-import { isNovumOperatorRole } from '@/lib/settings-nav-items';
+import { isStudioOperatorRole } from '@/lib/studio-roles';
 import { studioProjectRoutePathFromSlug, ycodePathnameFromStudioProjectPath } from '@/lib/studio-project-path';
 
 // 5. Types
@@ -169,7 +169,7 @@ export default function HeaderBar({
   const [selectedProjectPathSlug, setSelectedProjectPathSlug] = useState<string | null>(null);
   const [selectedProjectRole, setSelectedProjectRole] = useState<string | null>(null);
   const [showTransferDialog, setShowTransferDialog] = useState(false);
-  const isNovumOperator = isNovumOperatorRole(selectedProjectRole);
+  const isStudioOperator = isStudioOperatorRole(selectedProjectRole);
   const studioRoute = useCallback((routePath: string) => (
     studioProjectRoutePathFromSlug(selectedProjectPathSlug, routePath)
   ), [selectedProjectPathSlug]);
@@ -380,10 +380,10 @@ export default function HeaderBar({
             <Button
               variant="secondary" size="sm"
               className="size-8!"
-              aria-label="studio.novum partners Menu"
-              title="studio.novum partners"
+              aria-label="Studio Menü"
+              title="Studio"
             >
-              <span className="text-[11px] font-semibold tracking-normal">np</span>
+              <span className="text-[11px] font-semibold tracking-normal">S</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start">
@@ -409,7 +409,7 @@ export default function HeaderBar({
               Dateien
             </DropdownMenuItem>
 
-            {isNovumOperator && (
+            {isStudioOperator && (
               <>
                 <DropdownMenuItem
                   onClick={() => router.push('/ycode/integrations/apps')}

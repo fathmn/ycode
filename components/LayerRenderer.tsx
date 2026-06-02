@@ -23,7 +23,14 @@ import { DEFAULT_ASSETS, ASSET_CATEGORIES, isAssetOfType } from '@/lib/asset-uti
 import { parseMultiAssetFieldValue, buildAssetVirtualValues } from '@/lib/multi-asset-utils';
 import { parseMultiReferenceValue, resolveReferenceFieldsSync } from '@/lib/collection-utils';
 import { MULTI_ASSET_COLLECTION_ID } from '@/lib/collection-field-utils';
-import { generateImageSrcset, getImageSizes, getOptimizedImageUrl } from '@/lib/asset-utils';
+import { generateImageSrcset, getOptimizedImageUrl } from '@/lib/asset-utils';
+import {
+  getFallbackImageWidthForLayer,
+  getImageFetchPriority,
+  getImageLoadingAttribute,
+  getImageSizesForLayer,
+  getImageSrcsetWidthsForLayer,
+} from '@/lib/image-rendering';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { toast } from 'sonner';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
@@ -2160,11 +2167,12 @@ const LayerItem: React.FC<{
         }
       }
 
-      const imgLoading = layer.attributes?.loading as string | undefined;
+      const imgLoading = (layer.attributes?.loading as string | undefined) || getImageLoadingAttribute(layer);
+      const imgFetchPriority = layer.attributes?.fetchPriority as string | undefined || getImageFetchPriority(layer);
 
-      const optimizedSrc = getOptimizedImageUrl(finalImageUrl, 1920, 85);
-      const srcset = generateImageSrcset(finalImageUrl);
-      const sizes = getImageSizes();
+      const optimizedSrc = getOptimizedImageUrl(finalImageUrl, getFallbackImageWidthForLayer(layer), 85);
+      const srcset = generateImageSrcset(finalImageUrl, getImageSrcsetWidthsForLayer(layer));
+      const sizes = getImageSizesForLayer(layer);
 
       const imageProps: Record<string, any> = {
         ...elementProps,
@@ -2175,6 +2183,7 @@ const LayerItem: React.FC<{
       if (imgWidth) imageProps.width = imgWidth;
       if (imgHeight) imageProps.height = imgHeight;
       if (imgLoading) imageProps.loading = imgLoading;
+      if (imgFetchPriority) imageProps.fetchPriority = imgFetchPriority;
 
       if (srcset) {
         imageProps.srcSet = srcset;

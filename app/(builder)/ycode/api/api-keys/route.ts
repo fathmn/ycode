@@ -14,8 +14,8 @@ export const revalidate = 0;
 export async function GET(request: NextRequest) {
   try {
     const roleCheck = await requireNovumProjectRole(request, [
-      'novum_admin',
-      'novum_developer',
+      'studio_admin',
+      'studio_developer',
     ]);
     if (!roleCheck.ok) return roleCheck.response;
 
@@ -66,8 +66,8 @@ export async function POST(request: NextRequest) {
     }
 
     const roleCheck = await requireNovumProjectRole(request, [
-      'novum_admin',
-      'novum_developer',
+      'studio_admin',
+      'studio_developer',
     ]);
     if (!roleCheck.ok) return roleCheck.response;
 

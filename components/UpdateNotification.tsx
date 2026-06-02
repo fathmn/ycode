@@ -69,7 +69,7 @@ export default function UpdateNotification() {
             </svg>
             <div>
               <p className="font-semibold">
-                Update für studio.novum partners verfügbar
+                Update für Studio verfügbar
               </p>
               <p className="text-sm text-blue-100">
                 Version {updateInfo.latestVersion} ist verfügbar. Installiert ist {updateInfo.currentVersion}.

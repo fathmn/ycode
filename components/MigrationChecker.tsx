@@ -1,6 +1,7 @@
 'use client';
 
 import { novumFetch } from '@/lib/api';
+import { isStudioOperatorRole } from '@/lib/studio-roles';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Label } from '@/components/ui/label';
@@ -45,7 +46,7 @@ export default function MigrationChecker({ onComplete }: MigrationCheckerProps) 
       const projectsResult = await projectsResponse.json().catch(() => null);
       const projects = Array.isArray(projectsResult?.data) ? projectsResult.data : [];
       const canRunMigrations = projects.some((project: { role?: string }) =>
-        project.role === 'novum_admin' || project.role === 'novum_developer'
+        isStudioOperatorRole(project.role)
       );
 
       if (!canRunMigrations) {

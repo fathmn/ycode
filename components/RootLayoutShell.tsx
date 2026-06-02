@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import DarkModeProvider from '@/components/DarkModeProvider';
 
 export const defaultMetadata: Metadata = {
-  title: 'studio.novum partners',
+  title: 'Studio',
   description: 'Kundenstudio für Websites von novum partners',
 };
 

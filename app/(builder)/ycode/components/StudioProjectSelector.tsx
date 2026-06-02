@@ -11,6 +11,7 @@ import {
 import Icon from '@/components/ui/icon';
 import { setSelectedStudioProjectSlug, studioProjectsApi } from '@/lib/api';
 import { findUniqueStudioProjectPathMatch, studioProjectPathFromSlug, studioProjectPathSlugFromPathname } from '@/lib/studio-project-path';
+import { isStudioOperatorRole } from '@/lib/studio-roles';
 
 const STORAGE_KEY = 'studio:selected-project-slug';
 const LEGACY_STORAGE_KEY = 'novum:selected-project-slug';
@@ -27,7 +28,7 @@ type StudioProject = {
 };
 
 function hasSiteAdminProjectRole(projects: StudioProject[]) {
-  return projects.some((project) => project.role === 'novum_admin' || project.role === 'novum_developer');
+  return projects.some((project) => isStudioOperatorRole(project.role));
 }
 
 function getStoredProjectSlug() {

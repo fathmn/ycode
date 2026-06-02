@@ -41,7 +41,7 @@ function LogoBottomRight() {
   return (
     <div className="pt-12 pb-8 flex items-center justify-center">
       <span className="text-[11px] font-medium tracking-[0.18em] text-white/45 uppercase">
-        studio.novum partners
+        Studio
       </span>
     </div>
   );
@@ -148,7 +148,7 @@ export default function WelcomePage() {
               size="sm"
               style={{ animationDelay: '2500ms', animationFillMode: 'both' }}
             >
-              Willkommen bei studio.novum partners
+              Willkommen bei Studio
             </Label>
             <Label
               variant="muted"

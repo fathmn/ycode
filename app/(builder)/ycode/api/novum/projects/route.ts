@@ -4,6 +4,7 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { extractSupabaseAccessToken } from '@/lib/supabase-cookie-token';
 import { findDuplicateStudioProjectPathSlugs, studioProjectPathSlug } from '@/lib/studio-project-path';
 import { getConfiguredSiteAdminRoleForUser } from '@/lib/novum-site-admin';
+import { type StudioRole, normalizeStudioRole } from '@/lib/studio-roles';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -100,13 +101,15 @@ export async function GET(request: NextRequest) {
           project.ycode_site_key !== getCurrentSiteKey()
         )
       ) return null;
-      return { role: membership.role, project };
+      const role = normalizeStudioRole(membership.role);
+      if (!role) return null;
+      return { role, project };
     })
-    .filter((membership): membership is { role: string; project: any } => Boolean(membership));
+    .filter((membership): membership is { role: StudioRole; project: any } => Boolean(membership));
 
   const siteAdminRole = getConfiguredSiteAdminRoleForUser(user);
 
-  let projectRows: Array<{ role: string; project: any }> = activeMemberships;
+  let projectRows: Array<{ role: StudioRole; project: any }> = activeMemberships;
   let activeSiteProjectsForPathCheck = activeMemberships.map((membership: any) => membership.project);
 
   if (siteAdminRole) {

@@ -278,10 +278,20 @@ function isProxyUrl(url: string): boolean {
   return url.startsWith('/a/');
 }
 
+function isTransformUnsupportedImage(url: string): boolean {
+  try {
+    const pathname = isProxyUrl(url) ? url.split('?')[0] : new URL(url).pathname;
+    return /\.(svg|gif)(?:$|\?)/i.test(pathname);
+  } catch {
+    return /\.(svg|gif)(?:$|\?)/i.test(url.split('?')[0] || url);
+  }
+}
+
 /**
  * Check if a URL supports image transformation params
  */
 function isTransformableUrl(url: string): boolean {
+  if (isTransformUnsupportedImage(url)) return false;
   if (isProxyUrl(url)) return true;
   try {
     const urlObj = new URL(url);

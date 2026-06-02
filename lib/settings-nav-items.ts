@@ -1,3 +1,5 @@
+import { isStudioOperatorRole } from '@/lib/studio-roles';
+
 /**
  * Settings navigation items for the settings sidebar.
  * Extracted for reuse and to allow cloud overlay to filter items.
@@ -19,11 +21,7 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
   { id: 'updates', label: 'Updates', path: '/ycode/settings/updates', operatorOnly: true },
 ];
 
-export function isNovumOperatorRole(role: string | null | undefined): boolean {
-  return role === 'novum_admin' || role === 'novum_developer';
-}
-
 export function visibleSettingsNavItems(roles: Array<string | null | undefined>): SettingsNavItem[] {
-  const isOperator = roles.some(isNovumOperatorRole);
+  const isOperator = roles.some(isStudioOperatorRole);
   return SETTINGS_NAV_ITEMS.filter((item) => !item.operatorOnly || isOperator);
 }

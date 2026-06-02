@@ -9,6 +9,7 @@ import {
 } from '@/lib/api';
 import { createBrowserClient } from '@/lib/supabase-browser';
 import { findUniqueStudioProjectPathMatch, studioProjectPathFromSlug, studioProjectPathSlugFromPathname } from '@/lib/studio-project-path';
+import { isStudioOperatorRole } from '@/lib/studio-roles';
 /**
  * Ycode Builder Main Component
  *
@@ -113,7 +114,7 @@ type StudioProject = {
 };
 
 function isSiteAdminProjectRole(role: string): boolean {
-  return role === 'novum_admin' || role === 'novum_developer';
+  return isStudioOperatorRole(role);
 }
 
 function projectForCurrentStudioPath(projects: StudioProject[]): StudioProject | null {
@@ -2022,7 +2023,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-neutral-950 py-10">
         <div className="absolute bottom-10 text-[11px] font-medium tracking-[0.18em] text-white/45 uppercase">
-          studio.novum partners
+          Studio
         </div>
 
         <div className="w-full max-w-sm animate-in fade-in slide-in-from-bottom-1 duration-700" style={{ animationFillMode: 'both' }}>
@@ -2109,12 +2110,12 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
       <div className="min-h-screen flex flex-col items-center justify-center bg-neutral-950 py-10">
 
         <div className="absolute bottom-10 text-[11px] font-medium tracking-[0.18em] text-white/45 uppercase">
-          studio.novum partners
+          Studio
         </div>
 
         <div className="w-full max-w-sm animate-in fade-in slide-in-from-bottom-1 duration-700" style={{ animationFillMode: 'both' }}>
           <div className="mb-8 flex flex-col items-center gap-1 text-center">
-            <Label className="text-white" size="sm">studio.novum partners</Label>
+            <Label className="text-white" size="sm">Studio</Label>
             <p className="text-xs text-white/50">Login für freigegebene Website-Projekte</p>
           </div>
 

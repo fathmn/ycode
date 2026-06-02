@@ -6,7 +6,14 @@ import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepos
 import type { Page, PageFolder, PageLayers, Component, ComponentVariable, CollectionItemWithValues, CollectionField, Layer, CollectionPaginationMeta, Translation, Locale } from '@/types';
 import { getCollectionVariable, resolveFieldValue, evaluateVisibility, getLayerHtmlTag, filterDisabledSliderLayers } from '@/lib/layer-utils';
 import { isFieldVariable, isAssetVariable, createDynamicTextVariable, createDynamicRichTextVariable, createAssetVariable, getDynamicTextContent, getVariableStringValue, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
-import { generateImageSrcset, getImageSizes, getOptimizedImageUrl, getAssetProxyUrl, DEFAULT_ASSETS, collectLayerAssetIds } from '@/lib/asset-utils';
+import { generateImageSrcset, getOptimizedImageUrl, getAssetProxyUrl, DEFAULT_ASSETS, collectLayerAssetIds } from '@/lib/asset-utils';
+import {
+  getFallbackImageWidthForLayer,
+  getImageFetchPriority,
+  getImageLoadingAttribute,
+  getImageSizesForLayer,
+  getImageSrcsetWidthsForLayer,
+} from '@/lib/image-rendering';
 import { resolveComponents, applyComponentOverrides } from '@/lib/resolve-components';
 import { isTiptapDoc, hasBlockElementsWithResolver } from '@/lib/tiptap-utils';
 import { castValue } from '@/lib/collection-utils';
@@ -3756,13 +3763,13 @@ function layerToHtml(
         resolvedSrcValue = undefined;
       }
       if (resolvedSrcValue && resolvedSrcValue.trim()) {
-        const optimizedSrc = getOptimizedImageUrl(resolvedSrcValue, 1920, 85);
+        const optimizedSrc = getOptimizedImageUrl(resolvedSrcValue, getFallbackImageWidthForLayer(layer), 85);
         attrs.push(`src="${escapeHtml(optimizedSrc)}"`);
 
-        const srcset = generateImageSrcset(resolvedSrcValue);
+        const srcset = generateImageSrcset(resolvedSrcValue, getImageSrcsetWidthsForLayer(layer));
         if (srcset) {
           attrs.push(`srcset="${escapeHtml(srcset)}"`);
-          attrs.push(`sizes="${escapeHtml(getImageSizes())}"`);
+          attrs.push(`sizes="${escapeHtml(getImageSizesForLayer(layer))}"`);
         }
       }
     }
@@ -3787,8 +3794,10 @@ function layerToHtml(
     if (imgWidth) attrs.push(`width="${escapeHtml(imgWidth)}"`);
     if (imgHeight) attrs.push(`height="${escapeHtml(imgHeight)}"`);
 
-    const imgLoadingAttr = layer.attributes?.loading;
+    const imgLoadingAttr = layer.attributes?.loading || getImageLoadingAttribute(layer);
     if (imgLoadingAttr) attrs.push(`loading="${escapeHtml(String(imgLoadingAttr))}"`);
+    const imgFetchPriorityAttr = layer.attributes?.fetchPriority || getImageFetchPriority(layer);
+    if (imgFetchPriorityAttr) attrs.push(`fetchpriority="${escapeHtml(String(imgFetchPriorityAttr))}"`);
   }
 
   // Handle YouTube video (VideoVariable with provider='youtube') - render as iframe

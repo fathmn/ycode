@@ -10,7 +10,7 @@ import { requireNovumProjectRole } from '@/lib/novum-platform';
  */
 export async function GET(request: NextRequest) {
   try {
-    const roleCheck = await requireNovumProjectRole(request, ['novum_admin', 'novum_developer']);
+    const roleCheck = await requireNovumProjectRole(request, ['studio_admin', 'studio_developer']);
     if (!roleCheck.ok) return roleCheck.response;
 
     const client = await getSupabaseAdmin();
@@ -112,7 +112,7 @@ export async function GET(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
-    const roleCheck = await requireNovumProjectRole(request, ['novum_admin', 'novum_developer']);
+    const roleCheck = await requireNovumProjectRole(request, ['studio_admin', 'studio_developer']);
     if (!roleCheck.ok) return roleCheck.response;
 
     const { searchParams } = new URL(request.url);
