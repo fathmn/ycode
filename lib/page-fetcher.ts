@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl, detectLocaleFromPath, matchPageWithTranslatedSlugs, matchDynamicPageWithTranslatedSlugs } from '@/lib/page-utils';
 import { getItemWithValues, getItemsWithValues, getItemIdsByFieldValue } from '@/lib/repositories/collectionItemRepository';
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
-import type { Page, PageFolder, PageLayers, Component, ComponentVariable, CollectionItemWithValues, CollectionField, Layer, CollectionPaginationMeta, Translation, Locale } from '@/types';
+import type { Page, PageFolder, PageLayers, Component, ComponentVariable, CollectionItemWithValues, CollectionField, Layer, CollectionPaginationMeta, Translation, Locale, Asset } from '@/types';
 import { getCollectionVariable, resolveFieldValue, evaluateVisibility, getLayerHtmlTag, filterDisabledSliderLayers } from '@/lib/layer-utils';
 import { isFieldVariable, isAssetVariable, createDynamicTextVariable, createDynamicRichTextVariable, createAssetVariable, getDynamicTextContent, getVariableStringValue, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
 import { generateImageSrcset, getOptimizedImageUrl, getAssetProxyUrl, DEFAULT_ASSETS, collectLayerAssetIds } from '@/lib/asset-utils';
@@ -4345,4 +4345,52 @@ function layerToHtml(
   }
 
   return elementHtml;
+}
+
+export async function renderPageLayersToHtml(input: {
+  layers: Layer[];
+  pages?: Page[];
+  folders?: PageFolder[];
+  collectionItemId?: string;
+  collectionItemData?: Record<string, any>;
+  pageCollectionItemData?: Record<string, any>;
+  pageCollectionSortedItemIds?: string[];
+  collectionItemSlugs?: Record<string, string>;
+  locale?: Locale | null;
+  translations?: Record<string, Translation>;
+  assetMap?: Record<string, Asset>;
+  components?: Component[];
+  isPreview?: boolean;
+}): Promise<string> {
+  const layers = input.layers || [];
+  await ensureMapTokens();
+  const anchorMap = buildAnchorMap(layers);
+  const pageLinkContext = {
+    pageCollectionItemId: input.collectionItemId,
+    pageCollectionSortedItemIds: input.pageCollectionSortedItemIds,
+    isPreview: input.isPreview,
+  };
+
+  return layers
+    .map((layer) =>
+      layerToHtml(
+        layer,
+        input.collectionItemId,
+        input.pages,
+        input.folders,
+        input.collectionItemSlugs,
+        input.locale,
+        input.translations,
+        anchorMap,
+        input.collectionItemData,
+        input.pageCollectionItemData,
+        input.assetMap,
+        undefined,
+        input.components,
+        undefined,
+        false,
+        pageLinkContext
+      )
+    )
+    .join('');
 }

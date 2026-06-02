@@ -1,7 +1,7 @@
 import { notFound, redirect, permanentRedirect } from 'next/navigation';
 import { unstable_noStore } from 'next/cache';
 import { fetchPageByPath, fetchErrorPage, PaginationContext } from '@/lib/page-fetcher';
-import PageRenderer from '@/components/PageRenderer';
+import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
@@ -64,7 +64,7 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
       const publishedCSS = await getSettingByKey('published_css');
 
       return (
-        <PageRenderer
+        <PublishedPageRenderer
           page={page}
           layers={pageLayers.layers || []}
           components={components}
@@ -93,7 +93,7 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
         const { page: errorPage, pageLayers: errorPageLayers, components: errorComponents } = errorPageData;
 
         return (
-          <PageRenderer
+          <PublishedPageRenderer
             page={errorPage}
             layers={errorPageLayers.layers || []}
             components={errorComponents}
@@ -129,7 +129,7 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
   const globalSettings = await fetchGlobalPageSettings();
 
   return (
-    <PageRenderer
+    <PublishedPageRenderer
       page={page}
       layers={pageLayers.layers || []}
       components={components}

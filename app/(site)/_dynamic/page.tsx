@@ -1,7 +1,7 @@
 import { unstable_noStore } from 'next/cache';
 import Link from 'next/link';
 import { fetchHomepage, fetchErrorPage, PaginationContext } from '@/lib/page-fetcher';
-import PageRenderer from '@/components/PageRenderer';
+import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
@@ -72,7 +72,7 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
         const { page: errorPage, pageLayers: errorPageLayers, components: errorComponents } = errorPageData;
 
         return (
-          <PageRenderer
+          <PublishedPageRenderer
             page={errorPage}
             layers={errorPageLayers.layers || []}
             components={errorComponents}
@@ -108,7 +108,7 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
   const globalSettings = await fetchGlobalPageSettings();
 
   return (
-    <PageRenderer
+    <PublishedPageRenderer
       page={data.page}
       layers={data.pageLayers.layers || []}
       components={[]}

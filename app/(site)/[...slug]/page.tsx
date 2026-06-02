@@ -5,7 +5,7 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { buildSlugPath } from '@/lib/page-utils';
 import { generatePageMetadata, fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { fetchPageByPath, fetchErrorPage } from '@/lib/page-fetcher';
-import PageRenderer from '@/components/PageRenderer';
+import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
@@ -268,7 +268,7 @@ export default async function Page({ params }: PageProps) {
       const { page: errorPage, pageLayers: errorPageLayers, components: errorComponents } = errorPageData;
 
       return (
-        <PageRenderer
+        <PublishedPageRenderer
           page={errorPage}
           layers={errorPageLayers.layers || []}
           components={errorComponents}
@@ -303,7 +303,7 @@ export default async function Page({ params }: PageProps) {
         const { page: errorPage, pageLayers: errorPageLayers, components: errorComponents } = errorPageData;
 
         return (
-          <PageRenderer
+          <PublishedPageRenderer
             page={errorPage}
             layers={errorPageLayers.layers || []}
             components={errorComponents}
@@ -340,7 +340,7 @@ export default async function Page({ params }: PageProps) {
   }
 
   return (
-    <PageRenderer
+    <PublishedPageRenderer
       page={page}
       layers={pageLayers.layers || []}
       components={components}
