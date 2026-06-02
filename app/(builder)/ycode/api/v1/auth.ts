@@ -4,6 +4,7 @@ import { validateApiKey as validateApiKeyFromRepo } from '@/lib/repositories/api
 export interface ApiKeyValidation {
   valid: boolean;
   error?: string;
+  projectId?: string | null;
 }
 
 /**
@@ -38,7 +39,7 @@ export async function validateApiKey(request: NextRequest): Promise<ApiKeyValida
       return { valid: false, error: 'Invalid API key' };
     }
 
-    return { valid: true };
+    return { valid: true, projectId: key.project_id ?? null };
   } catch (error) {
     console.error('API key validation error:', error);
     return { valid: false, error: 'API key validation failed. Please check your database configuration.' };

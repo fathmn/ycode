@@ -4,6 +4,7 @@ import {
   getAllFormSubmissions,
   createFormSubmission,
 } from '@/lib/repositories/formSubmissionRepository';
+import { ProjectScopeAuthorizationError, resolveApiKeyRequestProjectId } from '@/lib/request-project-scope';
 import type { FormSubmissionStatus } from '@/types';
 
 // Disable caching for this route
@@ -51,6 +52,7 @@ export async function GET(
   try {
     const { form_id } = await params;
     const { searchParams } = new URL(request.url);
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
     // Parse pagination parameters
     const pageParam = searchParams.get('page');
@@ -67,7 +69,7 @@ export async function GET(
     const status = statusParam && validStatuses.includes(statusParam) ? statusParam : undefined;
 
     // Get all submissions for this form (with optional status filter)
-    const allSubmissions = await getAllFormSubmissions(form_id, status);
+    const allSubmissions = await getAllFormSubmissions(form_id, status, projectId);
     const total = allSubmissions.length;
 
     // Apply pagination
@@ -94,6 +96,12 @@ export async function GET(
     });
   } catch (error) {
     console.error('Error fetching form submissions:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to fetch submissions', code: 'INTERNAL_ERROR' },
       { status: 500 }
@@ -133,6 +141,7 @@ export async function POST(
   try {
     const { form_id } = await params;
     const body = await request.json();
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
     // Validate payload
     if (!body.payload || typeof body.payload !== 'object') {
@@ -154,7 +163,7 @@ export async function POST(
       form_id,
       payload: body.payload,
       metadata,
-    });
+    }, projectId);
 
     return NextResponse.json(
       {
@@ -169,6 +178,12 @@ export async function POST(
     );
   } catch (error) {
     console.error('Error creating form submission:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to create submission', code: 'INTERNAL_ERROR' },
       { status: 500 }

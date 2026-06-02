@@ -72,3 +72,4 @@ next-env.d.ts
 
 # scripts
 release.sh
+.env*.local

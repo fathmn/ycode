@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getApiKeyById, deleteApiKey } from '@/lib/repositories/apiKeyRepository';
 import { noCache } from '@/lib/api-response';
+import { requireNovumProjectRole } from '@/lib/novum-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -16,7 +17,13 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const key = await getApiKeyById(id);
+    const roleCheck = await requireNovumProjectRole(request, [
+      'novum_admin',
+      'novum_developer',
+    ]);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const key = await getApiKeyById(id, roleCheck.context.project.id);
 
     if (!key) {
       return noCache(
@@ -47,9 +54,14 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
+    const roleCheck = await requireNovumProjectRole(request, [
+      'novum_admin',
+      'novum_developer',
+    ]);
+    if (!roleCheck.ok) return roleCheck.response;
 
     // Verify the key exists first
-    const existing = await getApiKeyById(id);
+    const existing = await getApiKeyById(id, roleCheck.context.project.id);
     if (!existing) {
       return noCache(
         { error: 'API key not found' },
@@ -57,7 +69,7 @@ export async function DELETE(
       );
     }
 
-    await deleteApiKey(id);
+    await deleteApiKey(id, roleCheck.context.project.id);
 
     return noCache({
       data: { deleted: true, id },

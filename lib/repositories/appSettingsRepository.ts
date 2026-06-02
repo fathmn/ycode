@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 
 /**
  * App Settings Repository
@@ -52,7 +53,8 @@ export async function getAppSettings(appId: string): Promise<AppSetting[]> {
  */
 export async function getAppSetting(
   appId: string,
-  key: string
+  key: string,
+  projectId?: string | null
 ): Promise<AppSetting | null> {
   const client = await getSupabaseAdmin();
 
@@ -60,12 +62,16 @@ export async function getAppSetting(
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('app_settings')
     .select('*')
     .eq('app_id', appId)
-    .eq('key', key)
-    .single();
+    .eq('key', key);
+  if (projectId !== undefined) {
+    query = (await applyProjectScopeToQuery(query, client, 'app_settings', projectId)).query;
+  }
+
+  const { data, error } = await query.single();
 
   if (error && error.code !== 'PGRST116') {
     throw new Error(`Failed to fetch app setting: ${error.message}`);
@@ -79,9 +85,10 @@ export async function getAppSetting(
  */
 export async function getAppSettingValue<T = unknown>(
   appId: string,
-  key: string
+  key: string,
+  projectId?: string | null
 ): Promise<T | null> {
-  const setting = await getAppSetting(appId, key);
+  const setting = await getAppSetting(appId, key, projectId);
   return setting ? (setting.value as T) : null;
 }
 

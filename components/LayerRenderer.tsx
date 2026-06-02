@@ -50,6 +50,7 @@ import { generateLinkHref, resolveLinkAttrs, isLinkAtCollectionBoundary, prefixP
 import { collectEditorHiddenLayerIds, type HiddenLayerInfo } from '@/lib/animation-utils';
 import AnimationInitializer from '@/components/AnimationInitializer';
 import { transformLayerIdsForInstance, resolveVariableLinks } from '@/lib/resolve-components';
+import { resolveFormLayerId } from '@/lib/form-layer';
 
 import type { DesignColorVariable } from '@/types';
 
@@ -2281,7 +2282,7 @@ const LayerItem: React.FC<{
 
     // Handle form submission when not in edit mode (preview and published)
     if (htmlTag === 'form' && !isEditMode) {
-      const formId = layer.settings?.id;
+      const formId = resolveFormLayerId(layer);
       const formSettings = layer.settings?.form;
 
       elementProps.onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -2389,9 +2390,14 @@ const LayerItem: React.FC<{
         });
 
         try {
+          const submissionHeaders = new Headers({ 'Content-Type': 'application/json' });
+          if (previewProjectParam) {
+            submissionHeaders.set('x-novum-project-slug', previewProjectParam);
+          }
+
           const response = await fetch('/ycode/api/form-submissions', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: submissionHeaders,
             body: JSON.stringify({
               form_id: formId || 'unnamed-form',
               payload,

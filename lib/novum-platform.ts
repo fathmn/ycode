@@ -27,7 +27,7 @@ const DRAFT_FINGERPRINT_TABLES = [
   'translations',
 ];
 
-type NovumRole = 'novum_admin' | 'novum_developer' | 'customer_owner' | 'customer_editor' | 'customer_viewer';
+export type NovumRole = 'novum_admin' | 'novum_developer' | 'customer_owner' | 'customer_editor' | 'customer_viewer';
 
 type NovumProject = {
   id: string;

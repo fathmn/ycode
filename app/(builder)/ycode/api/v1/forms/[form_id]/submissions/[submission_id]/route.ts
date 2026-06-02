@@ -5,6 +5,7 @@ import {
   updateFormSubmission,
   deleteFormSubmission,
 } from '@/lib/repositories/formSubmissionRepository';
+import { ProjectScopeAuthorizationError, resolveApiKeyRequestProjectId } from '@/lib/request-project-scope';
 import type { FormSubmissionStatus } from '@/types';
 
 // Disable caching for this route
@@ -37,8 +38,9 @@ export async function GET(
 
   try {
     const { form_id, submission_id } = await params;
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
-    const submission = await getFormSubmissionById(submission_id);
+    const submission = await getFormSubmissionById(submission_id, projectId);
 
     if (!submission) {
       return NextResponse.json(
@@ -65,6 +67,12 @@ export async function GET(
     });
   } catch (error) {
     console.error('Error fetching form submission:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to fetch submission', code: 'INTERNAL_ERROR' },
       { status: 500 }
@@ -96,9 +104,10 @@ export async function PATCH(
   try {
     const { form_id, submission_id } = await params;
     const body = await request.json();
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
     // Check if submission exists and belongs to the form
-    const existingSubmission = await getFormSubmissionById(submission_id);
+    const existingSubmission = await getFormSubmissionById(submission_id, projectId);
 
     if (!existingSubmission) {
       return NextResponse.json(
@@ -126,7 +135,7 @@ export async function PATCH(
     // Update the submission
     const updatedSubmission = await updateFormSubmission(submission_id, {
       status: body.status,
-    });
+    }, projectId);
 
     return NextResponse.json({
       id: updatedSubmission.id,
@@ -138,6 +147,12 @@ export async function PATCH(
     });
   } catch (error) {
     console.error('Error updating form submission:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to update submission', code: 'INTERNAL_ERROR' },
       { status: 500 }
@@ -163,9 +178,10 @@ export async function DELETE(
 
   try {
     const { form_id, submission_id } = await params;
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
     // Check if submission exists and belongs to the form
-    const existingSubmission = await getFormSubmissionById(submission_id);
+    const existingSubmission = await getFormSubmissionById(submission_id, projectId);
 
     if (!existingSubmission) {
       return NextResponse.json(
@@ -181,11 +197,17 @@ export async function DELETE(
       );
     }
 
-    await deleteFormSubmission(submission_id);
+    await deleteFormSubmission(submission_id, projectId);
 
     return new NextResponse(null, { status: 204 });
   } catch (error) {
     console.error('Error deleting form submission:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to delete submission', code: 'INTERNAL_ERROR' },
       { status: 500 }

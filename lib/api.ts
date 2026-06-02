@@ -8,6 +8,7 @@ import type { Page, PageLayers, Layer, Asset, AssetCategory, PageFolder, ApiResp
 import type { StatusAction } from '@/lib/collection-field-utils';
 import type { CollectionUsageResult, CollectionFieldUsageResult } from '@/lib/collection-usage-utils';
 import { createBrowserClient } from '@/lib/supabase-browser';
+import { studioProjectPathSlugFromPathname } from '@/lib/studio-project-path';
 
 // All API routes are now relative (Next.js API routes)
 const API_BASE = '';
@@ -29,6 +30,12 @@ export function getSelectedStudioProjectSlug(): string | null {
   return window.localStorage.getItem(STUDIO_PROJECT_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_NOVUM_PROJECT_STORAGE_KEY);
 }
 
+function getStudioProjectLookupForRequest(): string | null {
+  if (typeof window === 'undefined') return null;
+  const pathSlug = studioProjectPathSlugFromPathname(window.location.pathname);
+  return pathSlug ?? getSelectedStudioProjectSlug();
+}
+
 export function setSelectedStudioProjectSlug(slug: string): void {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(STUDIO_PROJECT_STORAGE_KEY, slug);
@@ -45,7 +52,7 @@ export function clearSelectedStudioProjectSlug(): void {
 
 export async function studioFetch(input: RequestInfo | URL, options: RequestInit = {}): Promise<Response> {
   const token = await getAuthToken();
-  const selectedProjectSlug = getSelectedStudioProjectSlug();
+  const selectedProjectSlug = getStudioProjectLookupForRequest();
   const headers = new Headers(options.headers);
 
   if (token && !headers.has('Authorization')) {

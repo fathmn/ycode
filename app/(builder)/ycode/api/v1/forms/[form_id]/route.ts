@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { validateApiKey, unauthorizedResponse } from '../../auth';
 import { getAllFormSubmissions } from '@/lib/repositories/formSubmissionRepository';
+import { ProjectScopeAuthorizationError, resolveApiKeyRequestProjectId } from '@/lib/request-project-scope';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -35,9 +36,10 @@ export async function GET(
 
   try {
     const { form_id } = await params;
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
     // Get all submissions for this form
-    const submissions = await getAllFormSubmissions(form_id);
+    const submissions = await getAllFormSubmissions(form_id, undefined, projectId);
 
     if (submissions.length === 0) {
       return NextResponse.json(
@@ -71,6 +73,12 @@ export async function GET(
     });
   } catch (error) {
     console.error('Error fetching form:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to fetch form', code: 'INTERNAL_ERROR' },
       { status: 500 }

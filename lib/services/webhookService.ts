@@ -28,6 +28,7 @@ export interface WebhookEvent {
   resourceId?: string;
   /** Resource type for filter matching ('form' or 'collection') */
   resourceType?: 'form' | 'collection';
+  projectId?: string | null;
 }
 
 export interface WebhookPayload {
@@ -61,7 +62,7 @@ export function generateWebhookSignature(payload: string, secret: string): strin
 export async function dispatchWebhookEvent(event: WebhookEvent): Promise<void> {
   try {
     // Get all enabled webhooks for this event type
-    const webhooks = await getWebhooksForEvent(event.type);
+    const webhooks = await getWebhooksForEvent(event.type, event.projectId);
 
     if (webhooks.length === 0) {
       return;
@@ -116,7 +117,7 @@ async function deliverToWebhook(webhook: Webhook, event: WebhookEvent): Promise<
       event_type: event.type,
       payload: payload as unknown as Record<string, unknown>,
       status: 'pending',
-    });
+    }, event.projectId);
     deliveryId = delivery.id;
   } catch (error) {
     console.error('Failed to create webhook delivery log:', error);
@@ -202,6 +203,7 @@ export async function dispatchFormSubmittedEvent(data: {
   form_id: string;
   submission_id: string;
   fields: Record<string, unknown>;
+  projectId?: string | null;
   metadata?: {
     page_url?: string;
     user_agent?: string;
@@ -219,6 +221,7 @@ export async function dispatchFormSubmittedEvent(data: {
     metadata: data.metadata,
     resourceType: 'form',
     resourceId: data.form_id,
+    projectId: data.projectId,
   });
 }
 

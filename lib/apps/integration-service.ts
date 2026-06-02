@@ -20,10 +20,11 @@ import type { MailerLiteConnection } from '@/lib/apps/mailerlite/types';
 export async function processAppIntegrations(
   formId: string,
   submissionId: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  projectId?: string | null
 ): Promise<void> {
   try {
-    await processMailerLiteIntegration(formId, payload);
+    await processMailerLiteIntegration(formId, payload, projectId);
   } catch (error) {
     console.error('[processAppIntegrations] Unexpected error:', error);
   }
@@ -34,17 +35,19 @@ export async function processAppIntegrations(
  */
 async function processMailerLiteIntegration(
   formId: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  projectId?: string | null
 ): Promise<void> {
   try {
     // Load MailerLite API key
-    const apiKey = await getAppSettingValue<string>('mailerlite', 'api_key');
+    const apiKey = await getAppSettingValue<string>('mailerlite', 'api_key', projectId);
     if (!apiKey) return; // MailerLite not configured
 
     // Load connections
     const connections = await getAppSettingValue<MailerLiteConnection[]>(
       'mailerlite',
-      'connections'
+      'connections',
+      projectId
     );
     if (!connections || connections.length === 0) return;
 

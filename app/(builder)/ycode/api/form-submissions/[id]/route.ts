@@ -5,6 +5,7 @@ import {
   deleteFormSubmission,
 } from '@/lib/repositories/formSubmissionRepository';
 import { noCache } from '@/lib/api-response';
+import { requireNovumProjectRole, type NovumRole } from '@/lib/novum-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -14,6 +15,27 @@ interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
+const FORM_READ_ROLES: NovumRole[] = [
+  'novum_admin',
+  'novum_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+
+const FORM_WRITE_ROLES: NovumRole[] = [
+  'novum_admin',
+  'novum_developer',
+  'customer_owner',
+  'customer_editor',
+];
+
+async function requireFormProjectId(request: NextRequest, roles: NovumRole[]) {
+  const roleCheck = await requireNovumProjectRole(request, roles);
+  if (!roleCheck.ok) return roleCheck;
+  return { ok: true as const, projectId: roleCheck.context.project.id };
+}
+
 /**
  * GET /ycode/api/form-submissions/[id]
  * Get a single form submission by ID
@@ -21,7 +43,10 @@ interface RouteParams {
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
-    const submission = await getFormSubmissionById(id);
+    const access = await requireFormProjectId(request, FORM_READ_ROLES);
+    if (!access.ok) return access.response;
+    const projectId = access.projectId;
+    const submission = await getFormSubmissionById(id, projectId);
 
     if (!submission) {
       return noCache({ error: 'Form submission not found' }, 404);
@@ -48,6 +73,9 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
     const body = await request.json();
+    const access = await requireFormProjectId(request, FORM_WRITE_ROLES);
+    if (!access.ok) return access.response;
+    const projectId = access.projectId;
 
     // Validate status if provided
     if (body.status && !['new', 'read', 'archived', 'spam'].includes(body.status)) {
@@ -56,7 +84,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
 
     const submission = await updateFormSubmission(id, {
       status: body.status,
-    });
+    }, projectId);
 
     return noCache({ data: submission });
   } catch (error) {
@@ -75,7 +103,10 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
-    await deleteFormSubmission(id);
+    const access = await requireFormProjectId(request, FORM_WRITE_ROLES);
+    if (!access.ok) return access.response;
+    const projectId = access.projectId;
+    await deleteFormSubmission(id, projectId);
 
     return noCache({ message: 'Form submission deleted successfully' });
   } catch (error) {

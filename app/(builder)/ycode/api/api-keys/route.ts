@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getAllApiKeys, createApiKey } from '@/lib/repositories/apiKeyRepository';
 import { noCache } from '@/lib/api-response';
+import { requireNovumProjectRole } from '@/lib/novum-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -10,9 +11,15 @@ export const revalidate = 0;
  * GET /ycode/api/api-keys
  * List all API keys (internal endpoint for settings UI)
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const keys = await getAllApiKeys();
+    const roleCheck = await requireNovumProjectRole(request, [
+      'novum_admin',
+      'novum_developer',
+    ]);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const keys = await getAllApiKeys(roleCheck.context.project.id);
 
     return noCache({
       data: keys,
@@ -58,7 +65,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const key = await createApiKey(name.trim());
+    const roleCheck = await requireNovumProjectRole(request, [
+      'novum_admin',
+      'novum_developer',
+    ]);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const key = await createApiKey(name.trim(), roleCheck.context.project.id);
 
     return noCache({
       data: key,

@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired, tableHasProjectScopeColumn } from '@/lib/project-scope';
 
 /**
  * Webhook Repository
@@ -142,17 +143,25 @@ export async function getWebhookById(id: string): Promise<Webhook | null> {
 /**
  * Get all enabled webhooks for a specific event type
  */
-export async function getWebhooksForEvent(eventType: WebhookEventType): Promise<Webhook[]> {
+export async function getWebhooksForEvent(
+  eventType: WebhookEventType,
+  projectId?: string | null
+): Promise<Webhook[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('webhooks')
     .select('*')
     .eq('enabled', true);
+  if (projectId !== undefined) {
+    query = (await applyProjectScopeToQuery(query, client, 'webhooks', projectId)).query;
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch webhooks for event: ${error.message}`);
@@ -319,7 +328,8 @@ export async function incrementWebhookFailureCount(id: string): Promise<void> {
  * Create a webhook delivery log entry
  */
 export async function createWebhookDelivery(
-  deliveryData: CreateWebhookDeliveryData
+  deliveryData: CreateWebhookDeliveryData,
+  projectId?: string | null
 ): Promise<WebhookDelivery> {
   const client = await getSupabaseAdmin();
 
@@ -327,16 +337,26 @@ export async function createWebhookDelivery(
     throw new Error('Supabase client not configured');
   }
 
+  const row: Record<string, unknown> = {
+    webhook_id: deliveryData.webhook_id,
+    event_type: deliveryData.event_type,
+    payload: deliveryData.payload,
+    status: deliveryData.status || 'pending',
+    attempts: deliveryData.attempts || 1,
+    created_at: new Date().toISOString(),
+  };
+  if (projectId !== undefined) {
+    const hasProjectScope = await tableHasProjectScopeColumn(client, 'webhook_deliveries');
+    if (hasProjectScope && projectId) {
+      row.project_id = projectId;
+    } else if (hasProjectScope && isSharedDbProjectScopeRequired()) {
+      throw new Error('Project scope is required for webhook_deliveries');
+    }
+  }
+
   const { data, error } = await client
     .from('webhook_deliveries')
-    .insert({
-      webhook_id: deliveryData.webhook_id,
-      event_type: deliveryData.event_type,
-      payload: deliveryData.payload,
-      status: deliveryData.status || 'pending',
-      attempts: deliveryData.attempts || 1,
-      created_at: new Date().toISOString(),
-    })
+    .insert(row)
     .select()
     .single();
 

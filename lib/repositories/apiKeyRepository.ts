@@ -1,4 +1,9 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import {
+  applyProjectScopeToQuery,
+  isSharedDbProjectScopeRequired,
+  tableHasProjectScopeColumn,
+} from '@/lib/project-scope';
 import { createHash, randomBytes } from 'crypto';
 
 /**
@@ -13,8 +18,17 @@ export interface ApiKey {
   name: string;
   key_prefix: string;
   last_used_at: string | null;
+  project_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+const API_KEY_FIELDS = 'id, name, key_prefix, last_used_at, created_at, updated_at';
+
+async function apiKeySelectFields(client: any): Promise<string> {
+  return (await tableHasProjectScopeColumn(client, 'api_keys'))
+    ? `${API_KEY_FIELDS}, project_id`
+    : API_KEY_FIELDS;
 }
 
 export interface ApiKeyWithPlainKey extends ApiKey {
@@ -39,30 +53,37 @@ function generateApiKey(): string {
 /**
  * Get all API keys (without hashes)
  */
-export async function getAllApiKeys(): Promise<ApiKey[]> {
+export async function getAllApiKeys(projectId?: string | null): Promise<ApiKey[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  const selectFields = await apiKeySelectFields(client);
+  let query = client
     .from('api_keys')
-    .select('id, name, key_prefix, last_used_at, created_at, updated_at')
+    .select(selectFields)
     .order('created_at', { ascending: false });
+  query = (await applyProjectScopeToQuery(query, client, 'api_keys', projectId)).query;
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch API keys: ${error.message}`);
   }
 
-  return data || [];
+  return (data || []) as unknown as ApiKey[];
 }
 
 /**
  * Create a new API key
  * Returns the key info including the plain key (shown only once)
  */
-export async function createApiKey(name: string): Promise<ApiKeyWithPlainKey> {
+export async function createApiKey(
+  name: string,
+  projectId?: string | null
+): Promise<ApiKeyWithPlainKey> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -74,16 +95,30 @@ export async function createApiKey(name: string): Promise<ApiKeyWithPlainKey> {
   const keyHash = hashApiKey(apiKey);
   const keyPrefix = apiKey.substring(0, 8); // First 8 chars for identification
 
+  const hasProjectScope = await tableHasProjectScopeColumn(client, 'api_keys');
+  if (!hasProjectScope && isSharedDbProjectScopeRequired()) {
+    throw new Error('Project scope column is required for API keys');
+  }
+  if (hasProjectScope && !projectId) {
+    throw new Error('Project scope is required for API keys');
+  }
+
+  const row: Record<string, any> = {
+    name,
+    key_hash: keyHash,
+    key_prefix: keyPrefix,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (hasProjectScope) {
+    row.project_id = projectId;
+  }
+
+  const selectFields = hasProjectScope ? `${API_KEY_FIELDS}, project_id` : API_KEY_FIELDS;
   const { data, error } = await client
     .from('api_keys')
-    .insert({
-      name,
-      key_hash: keyHash,
-      key_prefix: keyPrefix,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .select('id, name, key_prefix, last_used_at, created_at, updated_at')
+    .insert(row)
+    .select(selectFields)
     .single();
 
   if (error) {
@@ -91,7 +126,7 @@ export async function createApiKey(name: string): Promise<ApiKeyWithPlainKey> {
   }
 
   return {
-    ...data,
+    ...(data as unknown as ApiKey),
     api_key: apiKey, // Return plain key only on creation
   };
 }
@@ -99,17 +134,23 @@ export async function createApiKey(name: string): Promise<ApiKeyWithPlainKey> {
 /**
  * Delete an API key
  */
-export async function deleteApiKey(id: string): Promise<void> {
+export async function deleteApiKey(
+  id: string,
+  projectId?: string | null
+): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { error } = await client
+  let query = client
     .from('api_keys')
     .delete()
     .eq('id', id);
+  query = (await applyProjectScopeToQuery(query, client, 'api_keys', projectId)).query;
+
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to delete API key: ${error.message}`);
@@ -129,15 +170,24 @@ export async function validateApiKey(apiKey: string): Promise<ApiKey | null> {
   }
 
   const keyHash = hashApiKey(apiKey);
+  const hasProjectScope = await tableHasProjectScopeColumn(client, 'api_keys');
+  if (!hasProjectScope && isSharedDbProjectScopeRequired()) {
+    return null;
+  }
 
   // Find the key by hash
+  const selectFields = hasProjectScope ? `${API_KEY_FIELDS}, project_id` : API_KEY_FIELDS;
   const { data, error } = await client
     .from('api_keys')
-    .select('id, name, key_prefix, last_used_at, created_at, updated_at')
+    .select(selectFields)
     .eq('key_hash', keyHash)
     .single();
 
   if (error || !data) {
+    return null;
+  }
+  const key = data as unknown as ApiKey;
+  if (hasProjectScope && !key.project_id && isSharedDbProjectScopeRequired()) {
     return null;
   }
 
@@ -147,34 +197,40 @@ export async function validateApiKey(apiKey: string): Promise<ApiKey | null> {
       await client
         .from('api_keys')
         .update({ last_used_at: new Date().toISOString() })
-        .eq('id', data.id);
+        .eq('id', key.id);
     } catch (err) {
       console.error('Failed to update last_used_at:', err);
     }
   })();
 
-  return data;
+  return key;
 }
 
 /**
  * Get an API key by ID (without hash)
  */
-export async function getApiKeyById(id: string): Promise<ApiKey | null> {
+export async function getApiKeyById(
+  id: string,
+  projectId?: string | null
+): Promise<ApiKey | null> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  const selectFields = await apiKeySelectFields(client);
+  let query = client
     .from('api_keys')
-    .select('id, name, key_prefix, last_used_at, created_at, updated_at')
-    .eq('id', id)
-    .single();
+    .select(selectFields)
+    .eq('id', id);
+  query = (await applyProjectScopeToQuery(query, client, 'api_keys', projectId)).query;
+
+  const { data, error } = await query.single();
 
   if (error && error.code !== 'PGRST116') {
     throw new Error(`Failed to fetch API key: ${error.message}`);
   }
 
-  return data;
+  return (data as ApiKey | null);
 }

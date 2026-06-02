@@ -1,5 +1,6 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired, tableHasProjectScopeColumn } from '@/lib/project-scope';
+import { resolveFormLayerId } from '@/lib/form-layer';
 import type {
   Layer,
   FormSubmission,
@@ -22,7 +23,7 @@ import type {
 export async function getAllFormSubmissions(
   formId?: string,
   status?: FormSubmissionStatus,
-  _projectId?: string | null
+  projectId?: string | null
 ): Promise<FormSubmission[]> {
   const client = await getSupabaseAdmin();
 
@@ -43,6 +44,8 @@ export async function getAllFormSubmissions(
     query = query.eq('status', status);
   }
 
+  query = (await applyProjectScopeToQuery(query, client, 'form_submissions', projectId)).query;
+
   const { data, error } = await query;
 
   if (error) {
@@ -55,17 +58,23 @@ export async function getAllFormSubmissions(
 /**
  * Get form submission by ID
  */
-export async function getFormSubmissionById(id: string): Promise<FormSubmission | null> {
+export async function getFormSubmissionById(
+  id: string,
+  projectId?: string | null
+): Promise<FormSubmission | null> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('form_submissions')
     .select('*')
-    .eq('id', id)
+    .eq('id', id);
+  query = (await applyProjectScopeToQuery(query, client, 'form_submissions', projectId)).query;
+
+  const { data, error } = await query
     .single();
 
   if (error && error.code !== 'PGRST116') {
@@ -83,22 +92,28 @@ function collectFormIdsFromLayers(layers: Layer[] | unknown, formIds: Set<string
 
   for (const layer of layers as Layer[]) {
     if (!layer || typeof layer !== 'object') continue;
-    if (layer.name === 'form') {
-      const configuredId = typeof layer.settings?.id === 'string'
-        ? layer.settings.id.trim()
-        : '';
-      formIds.add(configuredId || 'unnamed-form');
-    }
+    const formId = resolveFormLayerId(layer);
+    if (formId) formIds.add(formId);
     collectFormIdsFromLayers(layer.children, formIds);
   }
 }
 
-async function getDefinedFormIds(client: any, projectId?: string | null): Promise<Set<string>> {
+function applyPublishedState(query: any, isPublished?: boolean): any {
+  return typeof isPublished === 'boolean'
+    ? query.eq('is_published', isPublished)
+    : query;
+}
+
+async function getDefinedFormIds(
+  client: any,
+  projectId?: string | null,
+  isPublished?: boolean
+): Promise<Set<string>> {
   let query = client
     .from('page_layers')
     .select('layers')
-    .eq('is_published', false)
     .is('deleted_at', null);
+  query = applyPublishedState(query, isPublished);
   query = (await applyProjectScopeToQuery(query, client, 'page_layers', projectId)).query;
 
   const { data, error } = await query;
@@ -110,7 +125,39 @@ async function getDefinedFormIds(client: any, projectId?: string | null): Promis
   for (const row of data || []) {
     collectFormIdsFromLayers(row.layers, formIds);
   }
+
+  let componentsQuery = client
+    .from('components')
+    .select('layers')
+    .is('deleted_at', null);
+  componentsQuery = applyPublishedState(componentsQuery, isPublished);
+  componentsQuery = (await applyProjectScopeToQuery(componentsQuery, client, 'components', projectId)).query;
+
+  const { data: components, error: componentsError } = await componentsQuery;
+  if (componentsError) {
+    throw new Error(`Failed to fetch component forms: ${componentsError.message}`);
+  }
+
+  for (const component of components || []) {
+    collectFormIdsFromLayers(component.layers, formIds);
+  }
+
   return formIds;
+}
+
+export async function hasDefinedFormId(
+  formId: string,
+  projectId?: string | null,
+  isPublished?: boolean
+): Promise<boolean> {
+  const client = await getSupabaseAdmin();
+
+  if (!client) {
+    throw new Error('Supabase client not configured');
+  }
+
+  const formIds = await getDefinedFormIds(client, projectId, isPublished);
+  return formIds.has(formId);
 }
 
 /**
@@ -126,13 +173,19 @@ export async function getFormSummaries(projectId?: string | null): Promise<FormS
     throw new Error('Supabase client not configured');
   }
 
-  const definedFormIds = await getDefinedFormIds(client, projectId);
+  const definedFormIds = await getDefinedFormIds(client, projectId, false);
 
   const submissionsQuery = client
     .from('form_submissions')
     .select('form_id, status, created_at')
     .order('created_at', { ascending: false });
-  const { data, error } = await submissionsQuery;
+  const scopedSubmissionsQuery = (await applyProjectScopeToQuery(
+    submissionsQuery,
+    client,
+    'form_submissions',
+    projectId
+  )).query;
+  const { data, error } = await scopedSubmissionsQuery;
 
   if (error) {
     throw new Error(`Failed to fetch form summaries: ${error.message}`);
@@ -158,6 +211,12 @@ export async function getFormSummaries(projectId?: string | null): Promise<FormS
       if (submission.status === 'new') {
         existing.new_count++;
       }
+      if (
+        !existing.latest_submission
+        || new Date(submission.created_at).getTime() > new Date(existing.latest_submission).getTime()
+      ) {
+        existing.latest_submission = submission.created_at;
+      }
     } else {
       formMap.set(submission.form_id, {
         form_id: submission.form_id,
@@ -182,7 +241,8 @@ export async function getFormSummaries(projectId?: string | null): Promise<FormS
  * Create a new form submission
  */
 export async function createFormSubmission(
-  submissionData: CreateFormSubmissionData
+  submissionData: CreateFormSubmissionData,
+  projectId?: string | null
 ): Promise<FormSubmission> {
   const client = await getSupabaseAdmin();
 
@@ -190,15 +250,23 @@ export async function createFormSubmission(
     throw new Error('Supabase client not configured');
   }
 
+  const row: Record<string, any> = {
+    form_id: submissionData.form_id,
+    payload: submissionData.payload,
+    metadata: submissionData.metadata || null,
+    status: 'new',
+    created_at: new Date().toISOString(),
+  };
+  const hasProjectScope = await tableHasProjectScopeColumn(client, 'form_submissions');
+  if (hasProjectScope && projectId) {
+    row.project_id = projectId;
+  } else if (hasProjectScope && isSharedDbProjectScopeRequired()) {
+    throw new Error('Project scope is required for form_submissions');
+  }
+
   const { data, error } = await client
     .from('form_submissions')
-    .insert({
-      form_id: submissionData.form_id,
-      payload: submissionData.payload,
-      metadata: submissionData.metadata || null,
-      status: 'new',
-      created_at: new Date().toISOString(),
-    })
+    .insert(row)
     .select()
     .single();
 
@@ -214,7 +282,8 @@ export async function createFormSubmission(
  */
 export async function updateFormSubmission(
   id: string,
-  submissionData: UpdateFormSubmissionData
+  submissionData: UpdateFormSubmissionData,
+  projectId?: string | null
 ): Promise<FormSubmission> {
   const client = await getSupabaseAdmin();
 
@@ -222,10 +291,13 @@ export async function updateFormSubmission(
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('form_submissions')
     .update(submissionData)
-    .eq('id', id)
+    .eq('id', id);
+  query = (await applyProjectScopeToQuery(query, client, 'form_submissions', projectId)).query;
+
+  const { data, error } = await query
     .select()
     .single();
 
@@ -239,17 +311,23 @@ export async function updateFormSubmission(
 /**
  * Delete a form submission
  */
-export async function deleteFormSubmission(id: string): Promise<void> {
+export async function deleteFormSubmission(
+  id: string,
+  projectId?: string | null
+): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { error } = await client
+  let query = client
     .from('form_submissions')
     .delete()
     .eq('id', id);
+  query = (await applyProjectScopeToQuery(query, client, 'form_submissions', projectId)).query;
+
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to delete form submission: ${error.message}`);
@@ -259,7 +337,10 @@ export async function deleteFormSubmission(id: string): Promise<void> {
 /**
  * Bulk delete form submissions by IDs
  */
-export async function bulkDeleteFormSubmissions(ids: string[]): Promise<void> {
+export async function bulkDeleteFormSubmissions(
+  ids: string[],
+  projectId?: string | null
+): Promise<void> {
   if (ids.length === 0) return;
 
   const client = await getSupabaseAdmin();
@@ -268,10 +349,13 @@ export async function bulkDeleteFormSubmissions(ids: string[]): Promise<void> {
     throw new Error('Supabase client not configured');
   }
 
-  const { error } = await client
+  let query = client
     .from('form_submissions')
     .delete()
     .in('id', ids);
+  query = (await applyProjectScopeToQuery(query, client, 'form_submissions', projectId)).query;
+
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to bulk delete form submissions: ${error.message}`);
@@ -281,17 +365,23 @@ export async function bulkDeleteFormSubmissions(ids: string[]): Promise<void> {
 /**
  * Delete all submissions for a form
  */
-export async function deleteFormSubmissionsByFormId(formId: string): Promise<void> {
+export async function deleteFormSubmissionsByFormId(
+  formId: string,
+  projectId?: string | null
+): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { error } = await client
+  let query = client
     .from('form_submissions')
     .delete()
     .eq('form_id', formId);
+  query = (await applyProjectScopeToQuery(query, client, 'form_submissions', projectId)).query;
+
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to delete form submissions: ${error.message}`);
@@ -301,18 +391,24 @@ export async function deleteFormSubmissionsByFormId(formId: string): Promise<voi
 /**
  * Mark all submissions for a form as read
  */
-export async function markAllAsRead(formId: string): Promise<void> {
+export async function markAllAsRead(
+  formId: string,
+  projectId?: string | null
+): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { error } = await client
+  let query = client
     .from('form_submissions')
     .update({ status: 'read' })
     .eq('form_id', formId)
     .eq('status', 'new');
+  query = (await applyProjectScopeToQuery(query, client, 'form_submissions', projectId)).query;
+
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to mark submissions as read: ${error.message}`);
