@@ -28,6 +28,12 @@ export const STUDIO_READ_ROLES: StudioRole[] = [
   CUSTOMER_VIEWER_ROLE,
 ];
 
+export const STUDIO_INTEGRATION_MANAGER_ROLES: StudioRole[] = [
+  STUDIO_ADMIN_ROLE,
+  STUDIO_DEVELOPER_ROLE,
+  CUSTOMER_OWNER_ROLE,
+];
+
 export function normalizeStudioRole(role: string | null | undefined): StudioRole | null {
   switch (role) {
     case STUDIO_ADMIN_ROLE:
@@ -55,4 +61,8 @@ export function hasAllowedStudioRole(
 
 export function isStudioOperatorRole(role: string | null | undefined): boolean {
   return hasAllowedStudioRole(role, STUDIO_OPERATOR_ROLES);
+}
+
+export function canManageStudioIntegrations(role: string | null | undefined): boolean {
+  return hasAllowedStudioRole(role, STUDIO_INTEGRATION_MANAGER_ROLES);
 }

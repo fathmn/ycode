@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { getSelectedStudioProjectSlug, studioProjectsApi } from '@/lib/api';
 import { studioProjectPathFromSlug, studioProjectPathSlugFromPathname, studioProjectRoutePathFromSlug } from '@/lib/studio-project-path';
-import { isStudioOperatorRole } from '@/lib/studio-roles';
+import { canManageStudioIntegrations } from '@/lib/studio-roles';
 
 const INTEGRATIONS_ITEMS = [
   { id: 'apps', label: 'Apps', path: '/ycode/integrations/apps' },
@@ -46,7 +46,7 @@ export default function IntegrationsContent({ children }: IntegrationsContentPro
         || response.data[0];
 
       setProjectPathSlug(selectedProject?.studio_path_slug || null);
-      setIsAllowed(isStudioOperatorRole(selectedProject?.role));
+      setIsAllowed(canManageStudioIntegrations(selectedProject?.role));
       setRoleLoaded(true);
     });
 

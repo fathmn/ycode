@@ -8,6 +8,7 @@ import { findStudioProjectHostMatches } from '@/lib/studio-project-hostnames';
 import { getConfiguredSiteAdminRoleForUser } from '@/lib/studio-site-admin';
 import {
   CUSTOMER_OWNER_ROLE,
+  STUDIO_INTEGRATION_MANAGER_ROLES,
   STUDIO_OPERATOR_ROLES,
   STUDIO_READ_ROLES,
   STUDIO_WRITE_ROLES,
@@ -63,6 +64,10 @@ const PROJECT_SCOPE_TABLES = [
   'locales',
   'translations',
   'page_folders',
+  'app_settings',
+  'webhooks',
+  'webhook_deliveries',
+  'api_keys',
 ];
 
 const DRAFT_FINGERPRINT_TABLES = [
@@ -156,20 +161,24 @@ const READ_ROLES = STUDIO_READ_ROLES;
 const WRITE_ROLES = STUDIO_WRITE_ROLES;
 const PUBLISH_ROLES: StudioRole[] = [...STUDIO_OPERATOR_ROLES, CUSTOMER_OWNER_ROLE];
 const ADMIN_DEVELOPER_ROLES = STUDIO_OPERATOR_ROLES;
+const INTEGRATION_MANAGER_ROLES = STUDIO_INTEGRATION_MANAGER_ROLES;
 
 const ADMIN_DEVELOPER_API_PREFIXES = [
-  '/ycode/api/api-keys',
-  '/ycode/api/apps',
   '/ycode/api/auth/invite',
   '/ycode/api/auth/users',
   '/ycode/api/cache/',
   '/ycode/api/devtools/',
-  '/ycode/api/mcp-tokens',
   '/ycode/api/project/export',
   '/ycode/api/project/import',
   '/ycode/api/setup/connect',
   '/ycode/api/setup/migrate',
   '/ycode/api/updates',
+];
+
+const PROJECT_INTEGRATION_API_PREFIXES = [
+  '/ycode/api/api-keys',
+  '/ycode/api/apps',
+  '/ycode/api/mcp-tokens',
   '/ycode/api/webhooks',
 ];
 
@@ -209,6 +218,10 @@ function isMutatingRequest(method: string): boolean {
 }
 
 function getRequiredRoles(pathname: string, method: string): StudioRole[] | null {
+  if (PROJECT_INTEGRATION_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+    return INTEGRATION_MANAGER_ROLES;
+  }
+
   if (ADMIN_DEVELOPER_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
     return ADMIN_DEVELOPER_ROLES;
   }

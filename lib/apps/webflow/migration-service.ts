@@ -78,14 +78,14 @@ const BULK_CHUNK_SIZE = 500;
 // =============================================================================
 
 /** Get the stored Webflow token, throwing if not configured. */
-export async function requireWebflowToken(): Promise<string> {
-  const token = await getAppSettingValue<string>(APP_ID, 'api_token');
+export async function requireWebflowToken(projectId?: string | null): Promise<string> {
+  const token = await getAppSettingValue<string>(APP_ID, 'api_token', projectId);
   if (!token) throw new Error('Webflow token not configured');
   return token;
 }
 
-export async function getImports(): Promise<WebflowImport[]> {
-  return (await getAppSettingValue<WebflowImport[]>(APP_ID, 'imports')) ?? [];
+export async function getImports(projectId?: string | null): Promise<WebflowImport[]> {
+  return (await getAppSettingValue<WebflowImport[]>(APP_ID, 'imports', projectId)) ?? [];
 }
 
 export async function saveImports(imports: WebflowImport[]): Promise<void> {

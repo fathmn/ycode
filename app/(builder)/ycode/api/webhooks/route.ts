@@ -6,14 +6,18 @@ import {
   type CreateWebhookData,
   type WebhookEventType,
 } from '@/lib/repositories/webhookRepository';
+import { requireStudioIntegrationManager } from '@/lib/studio-integration-access';
 
 /**
  * GET /ycode/api/webhooks
  * List all webhooks
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const webhooks = await getAllWebhooks();
+    const roleCheck = await requireStudioIntegrationManager(request);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const webhooks = await getAllWebhooks(roleCheck.context.project.id);
     return NextResponse.json({ data: webhooks });
   } catch (error) {
     console.error('Error fetching webhooks:', error);
@@ -32,6 +36,9 @@ export async function GET() {
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioIntegrationManager(request);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const body = await request.json();
     const { name, url, events, secret, generateSecret, filters } = body;
 
@@ -74,6 +81,7 @@ export async function POST(request: NextRequest) {
     }
 
     const webhookData: CreateWebhookData = {
+      project_id: roleCheck.context.project.id,
       name: name.trim(),
       url: url.trim(),
       events: events as WebhookEventType[],

@@ -49,20 +49,20 @@ const SYNC_LOCK_TIMEOUT_MS = 120_000;
 // =============================================================================
 
 /** Get the stored Airtable API token, throwing if not configured */
-export async function requireAirtableToken(): Promise<string> {
-  const token = await getAppSettingValue<string>(APP_ID, 'api_token');
+export async function requireAirtableToken(projectId?: string | null): Promise<string> {
+  const token = await getAppSettingValue<string>(APP_ID, 'api_token', projectId);
   if (!token) throw new Error('Airtable token not configured');
   return token;
 }
 
 /** Load all Airtable connections from app_settings */
-export async function getConnections(): Promise<AirtableConnection[]> {
-  return (await getAppSettingValue<AirtableConnection[]>(APP_ID, 'connections')) ?? [];
+export async function getConnections(projectId?: string | null): Promise<AirtableConnection[]> {
+  return (await getAppSettingValue<AirtableConnection[]>(APP_ID, 'connections', projectId)) ?? [];
 }
 
 /** Persist connections back to app_settings */
-export async function saveConnections(connections: AirtableConnection[]): Promise<void> {
-  await setAppSetting(APP_ID, 'connections', connections);
+export async function saveConnections(connections: AirtableConnection[], projectId?: string | null): Promise<void> {
+  await setAppSetting(APP_ID, 'connections', connections, projectId);
 }
 
 /** Find a connection by ID */
@@ -102,11 +102,11 @@ export async function updateConnection(
  * Clean up all registered Airtable webhooks before disconnecting.
  * Best-effort — failures are logged but don't block disconnect.
  */
-export async function cleanupWebhooks(): Promise<void> {
-  const token = await getAppSettingValue<string>(APP_ID, 'api_token');
+export async function cleanupWebhooks(projectId?: string | null): Promise<void> {
+  const token = await getAppSettingValue<string>(APP_ID, 'api_token', projectId);
   if (!token) return;
 
-  const connections = await getConnections();
+  const connections = await getConnections(projectId);
   const seen = new Set<string>();
 
   for (const conn of connections) {

@@ -28,8 +28,10 @@ async function main() {
   const siteUrl = readArg('site-url') || DEFAULT_SITE_URL;
   const recoveryTemplatePath = path.join(process.cwd(), 'supabase', 'auth-email-templates', 'recovery.html');
   const inviteTemplatePath = path.join(process.cwd(), 'supabase', 'auth-email-templates', 'invite.html');
+  const magicLinkTemplatePath = path.join(process.cwd(), 'supabase', 'auth-email-templates', 'magiclink.html');
   const recoveryTemplate = await fs.readFile(recoveryTemplatePath, 'utf8');
   const inviteTemplate = await fs.readFile(inviteTemplatePath, 'utf8');
+  const magicLinkTemplate = await fs.readFile(magicLinkTemplatePath, 'utf8');
   const endpoint = `https://api.supabase.com/v1/projects/${projectRef}/config/auth`;
   const headers = {
     Authorization: `Bearer ${accessToken}`,
@@ -59,8 +61,10 @@ async function main() {
       smtp_admin_email: senderEmail,
       smtp_sender_name: senderName,
       mailer_subjects_invite: 'Einladung zu Studio',
+      mailer_subjects_magic_link: 'Login zu Studio',
       mailer_subjects_recovery: 'Passwort für Studio zurücksetzen',
       mailer_templates_invite_content: inviteTemplate,
+      mailer_templates_magic_link_content: magicLinkTemplate,
       mailer_templates_recovery_content: recoveryTemplate,
       uri_allow_list: Array.from(allowedRedirects).join(','),
     }),
@@ -81,8 +85,10 @@ async function main() {
       'smtp_admin_email',
       'smtp_sender_name',
       'mailer_subjects_invite',
+      'mailer_subjects_magic_link',
       'mailer_subjects_recovery',
       'mailer_templates_invite_content',
+      'mailer_templates_magic_link_content',
       'mailer_templates_recovery_content',
       'uri_allow_list',
     ],

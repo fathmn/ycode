@@ -33,6 +33,7 @@ export interface WebhookFilters {
 
 export interface Webhook {
   id: string;
+  project_id?: string | null;
   name: string;
   url: string;
   secret: string | null;
@@ -59,6 +60,7 @@ export interface WebhookDelivery {
 }
 
 export interface CreateWebhookData {
+  project_id?: string | null;
   name: string;
   url: string;
   secret?: string;
@@ -98,17 +100,20 @@ export interface UpdateWebhookDeliveryData {
 /**
  * Get all webhooks
  */
-export async function getAllWebhooks(): Promise<Webhook[]> {
+export async function getAllWebhooks(projectId?: string | null): Promise<Webhook[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('webhooks')
     .select('*')
     .order('created_at', { ascending: false });
+  query = (await applyProjectScopeToQuery(query, client, 'webhooks', projectId)).query;
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch webhooks: ${error.message}`);
@@ -120,18 +125,20 @@ export async function getAllWebhooks(): Promise<Webhook[]> {
 /**
  * Get webhook by ID
  */
-export async function getWebhookById(id: string): Promise<Webhook | null> {
+export async function getWebhookById(id: string, projectId?: string | null): Promise<Webhook | null> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('webhooks')
     .select('*')
-    .eq('id', id)
-    .single();
+    .eq('id', id);
+  query = (await applyProjectScopeToQuery(query, client, 'webhooks', projectId)).query;
+
+  const { data, error } = await query.single();
 
   if (error && error.code !== 'PGRST116') {
     throw new Error(`Failed to fetch webhook: ${error.message}`);
@@ -183,19 +190,29 @@ export async function createWebhook(webhookData: CreateWebhookData): Promise<Web
     throw new Error('Supabase client not configured');
   }
 
+  const row: Record<string, unknown> = {
+    name: webhookData.name,
+    url: webhookData.url,
+    secret: webhookData.secret || null,
+    events: webhookData.events,
+    filters: webhookData.filters || null,
+    enabled: true,
+    failure_count: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (webhookData.project_id !== undefined) {
+    const hasProjectScope = await tableHasProjectScopeColumn(client, 'webhooks');
+    if (hasProjectScope && webhookData.project_id) {
+      row.project_id = webhookData.project_id;
+    } else if (hasProjectScope && isSharedDbProjectScopeRequired()) {
+      throw new Error('Project scope is required for webhooks');
+    }
+  }
+
   const { data, error } = await client
     .from('webhooks')
-    .insert({
-      name: webhookData.name,
-      url: webhookData.url,
-      secret: webhookData.secret || null,
-      events: webhookData.events,
-      filters: webhookData.filters || null,
-      enabled: true,
-      failure_count: 0,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
+    .insert(row)
     .select()
     .single();
 
@@ -209,7 +226,7 @@ export async function createWebhook(webhookData: CreateWebhookData): Promise<Web
 /**
  * Update a webhook
  */
-export async function updateWebhook(id: string, updates: UpdateWebhookData): Promise<Webhook> {
+export async function updateWebhook(id: string, updates: UpdateWebhookData, projectId?: string | null): Promise<Webhook> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -227,12 +244,14 @@ export async function updateWebhook(id: string, updates: UpdateWebhookData): Pro
   if (updates.filters !== undefined) updateData.filters = updates.filters;
   if (updates.enabled !== undefined) updateData.enabled = updates.enabled;
 
-  const { data, error } = await client
+  let query = client
     .from('webhooks')
     .update(updateData)
     .eq('id', id)
-    .select()
-    .single();
+    .select();
+  query = (await applyProjectScopeToQuery(query, client, 'webhooks', projectId)).query;
+
+  const { data, error } = await query.single();
 
   if (error) {
     throw new Error(`Failed to update webhook: ${error.message}`);
@@ -244,17 +263,20 @@ export async function updateWebhook(id: string, updates: UpdateWebhookData): Pro
 /**
  * Delete a webhook
  */
-export async function deleteWebhook(id: string): Promise<void> {
+export async function deleteWebhook(id: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { error } = await client
+  let query = client
     .from('webhooks')
     .delete()
     .eq('id', id);
+  query = (await applyProjectScopeToQuery(query, client, 'webhooks', projectId)).query;
+
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to delete webhook: ${error.message}`);
@@ -395,6 +417,7 @@ export async function updateWebhookDelivery(
  */
 export async function getWebhookDeliveries(
   webhookId: string,
+  projectId?: string | null,
   options: { limit?: number; offset?: number } = {}
 ): Promise<{ deliveries: WebhookDelivery[]; total: number }> {
   const client = await getSupabaseAdmin();
@@ -407,22 +430,28 @@ export async function getWebhookDeliveries(
   const offset = options.offset || 0;
 
   // Get total count
-  const { count, error: countError } = await client
+  let countQuery = client
     .from('webhook_deliveries')
     .select('*', { count: 'exact', head: true })
     .eq('webhook_id', webhookId);
+  countQuery = (await applyProjectScopeToQuery(countQuery, client, 'webhook_deliveries', projectId)).query;
+
+  const { count, error: countError } = await countQuery;
 
   if (countError) {
     throw new Error(`Failed to count webhook deliveries: ${countError.message}`);
   }
 
   // Get paginated results
-  const { data, error } = await client
+  let query = client
     .from('webhook_deliveries')
     .select('*')
     .eq('webhook_id', webhookId)
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1);
+  query = (await applyProjectScopeToQuery(query, client, 'webhook_deliveries', projectId)).query;
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch webhook deliveries: ${error.message}`);
@@ -467,6 +496,7 @@ export async function deleteOldWebhookDeliveries(olderThanDays: number = 30): Pr
 function mapWebhookFromDb(data: any): Webhook {
   return {
     id: data.id,
+    project_id: data.project_id ?? null,
     name: data.name,
     url: data.url,
     secret: data.secret,

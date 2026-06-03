@@ -3,6 +3,7 @@ import {
   getWebhookById,
   getWebhookDeliveries,
 } from '@/lib/repositories/webhookRepository';
+import { requireStudioIntegrationManager } from '@/lib/studio-integration-access';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -17,6 +18,9 @@ export async function GET(
   { params }: RouteParams
 ) {
   try {
+    const roleCheck = await requireStudioIntegrationManager(request);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { id } = await params;
     const { searchParams } = new URL(request.url);
 
@@ -24,7 +28,7 @@ export async function GET(
     const offset = parseInt(searchParams.get('offset') || '0', 10);
 
     // Verify webhook exists
-    const webhook = await getWebhookById(id);
+    const webhook = await getWebhookById(id, roleCheck.context.project.id);
     if (!webhook) {
       return NextResponse.json(
         { error: 'Webhook not found' },
@@ -32,7 +36,11 @@ export async function GET(
       );
     }
 
-    const { deliveries, total } = await getWebhookDeliveries(id, { limit, offset });
+    const { deliveries, total } = await getWebhookDeliveries(
+      id,
+      roleCheck.context.project.id,
+      { limit, offset }
+    );
 
     return NextResponse.json({
       data: deliveries,

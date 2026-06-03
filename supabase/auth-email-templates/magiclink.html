@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login zu Studio</title>
+  </head>
+  <body style="margin:0;background:#f5f5f3;color:#111111;font-family:Inter,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f5f3;padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border:1px solid #e6e3dc;">
+            <tr>
+              <td style="padding:32px 32px 20px;">
+                <img
+                  src="https://studio.novum-partners.de/novum-partners-logo-black.png"
+                  width="164"
+                  alt="novum partners"
+                  style="display:block;border:0;outline:none;text-decoration:none;width:164px;height:auto;"
+                >
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 32px 32px;">
+                <p style="margin:0 0 12px;font-size:12px;line-height:1.4;letter-spacing:.12em;text-transform:uppercase;color:#6f6a60;">
+                  Studio
+                </p>
+                <h1 style="margin:0 0 16px;font-size:28px;line-height:1.15;font-weight:500;color:#111111;">
+                  In Studio einloggen
+                </h1>
+                <p style="margin:0 0 24px;font-size:15px;line-height:1.65;color:#3d3933;">
+                  Öffne den Link, um dich in dein Studio-Konto einzuloggen. Der Link ist zeitlich begrenzt und kann nur einmal verwendet werden.
+                </p>
+                <p style="margin:0 0 28px;">
+                  <a
+                    href="{{ .SiteURL }}/ycode/api/auth/confirm?token_hash={{ .TokenHash }}&type=magiclink&redirect_to={{ .RedirectTo }}"
+                    style="display:inline-block;background:#111111;color:#ffffff;text-decoration:none;padding:14px 20px;font-size:14px;font-weight:600;letter-spacing:.01em;"
+                  >
+                    Bei Studio einloggen
+                  </a>
+                </p>
+                <p style="margin:0;font-size:13px;line-height:1.6;color:#6f6a60;">
+                  Falls du diesen Login-Link nicht angefordert hast, kannst du diese E-Mail ignorieren.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:20px 32px 28px;border-top:1px solid #ece9e2;">
+                <p style="margin:0;font-size:12px;line-height:1.55;color:#817a70;">
+                  Diese E-Mail wurde automatisch von Studio gesendet. Betreiber ist novum partners. Bitte nicht direkt auf diese Nachricht antworten.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

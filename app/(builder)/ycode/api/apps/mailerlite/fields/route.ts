@@ -1,6 +1,8 @@
+import { NextRequest } from 'next/server';
 import { getFields } from '@/lib/apps/mailerlite';
 import { getAppSettingValue } from '@/lib/repositories/appSettingsRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioIntegrationManager } from '@/lib/studio-integration-access';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -10,9 +12,16 @@ export const revalidate = 0;
  * GET /ycode/api/apps/mailerlite/fields
  * Fetch subscriber fields from MailerLite (proxied)
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const apiKey = await getAppSettingValue<string>('mailerlite', 'api_key');
+    const roleCheck = await requireStudioIntegrationManager(request);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const apiKey = await getAppSettingValue<string>(
+      'mailerlite',
+      'api_key',
+      roleCheck.context.project.id
+    );
 
     if (!apiKey) {
       return noCache(

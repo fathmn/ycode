@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getApiKeyById, deleteApiKey } from '@/lib/repositories/apiKeyRepository';
 import { noCache } from '@/lib/api-response';
-import { requireStudioProjectRole } from '@/lib/studio-platform';
+import { requireStudioIntegrationManager } from '@/lib/studio-integration-access';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -17,10 +17,7 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const roleCheck = await requireStudioProjectRole(request, [
-      'studio_admin',
-      'studio_developer',
-    ]);
+    const roleCheck = await requireStudioIntegrationManager(request);
     if (!roleCheck.ok) return roleCheck.response;
 
     const key = await getApiKeyById(id, roleCheck.context.project.id);
@@ -54,10 +51,7 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    const roleCheck = await requireStudioProjectRole(request, [
-      'studio_admin',
-      'studio_developer',
-    ]);
+    const roleCheck = await requireStudioIntegrationManager(request);
     if (!roleCheck.ok) return roleCheck.response;
 
     // Verify the key exists first

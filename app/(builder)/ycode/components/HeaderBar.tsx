@@ -30,7 +30,7 @@ import { usePagesStore } from '@/stores/usePagesStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useLocalisationStore } from '@/stores/useLocalisationStore';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page-utils';
-import { isStudioOperatorRole } from '@/lib/studio-roles';
+import { canManageStudioIntegrations, isStudioOperatorRole } from '@/lib/studio-roles';
 import { studioProjectRoutePathFromSlug, ycodePathnameFromStudioProjectPath } from '@/lib/studio-project-path';
 
 // 5. Types
@@ -170,6 +170,7 @@ export default function HeaderBar({
   const [selectedProjectRole, setSelectedProjectRole] = useState<string | null>(null);
   const [showTransferDialog, setShowTransferDialog] = useState(false);
   const isStudioOperator = isStudioOperatorRole(selectedProjectRole);
+  const canManageIntegrations = canManageStudioIntegrations(selectedProjectRole);
   const studioRoute = useCallback((routePath: string) => (
     studioProjectRoutePathFromSlug(selectedProjectPathSlug, routePath)
   ), [selectedProjectPathSlug]);
@@ -409,7 +410,7 @@ export default function HeaderBar({
               Dateien
             </DropdownMenuItem>
 
-            {isStudioOperator && (
+            {canManageIntegrations && (
               <>
                 <DropdownMenuItem
                   onClick={() => router.push(studioRoute('/integrations/apps'))}
@@ -417,11 +418,13 @@ export default function HeaderBar({
                   Integrationen
                 </DropdownMenuItem>
 
-                <DropdownMenuItem
-                  onClick={() => setShowTransferDialog(true)}
-                >
-                  Backup &amp; Restore
-                </DropdownMenuItem>
+                {isStudioOperator && (
+                  <DropdownMenuItem
+                    onClick={() => setShowTransferDialog(true)}
+                  >
+                    Backup &amp; Restore
+                  </DropdownMenuItem>
+                )}
               </>
             )}
 

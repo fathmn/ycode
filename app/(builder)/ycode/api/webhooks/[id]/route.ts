@@ -9,6 +9,7 @@ import {
   markWebhookTriggered,
   type UpdateWebhookData,
 } from '@/lib/repositories/webhookRepository';
+import { requireStudioIntegrationManager } from '@/lib/studio-integration-access';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -23,8 +24,11 @@ export async function GET(
   { params }: RouteParams
 ) {
   try {
+    const roleCheck = await requireStudioIntegrationManager(request);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { id } = await params;
-    const webhook = await getWebhookById(id);
+    const webhook = await getWebhookById(id, roleCheck.context.project.id);
 
     if (!webhook) {
       return NextResponse.json(
@@ -52,10 +56,13 @@ export async function PUT(
   { params }: RouteParams
 ) {
   try {
+    const roleCheck = await requireStudioIntegrationManager(request);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { id } = await params;
     const body = await request.json();
 
-    const existing = await getWebhookById(id);
+    const existing = await getWebhookById(id, roleCheck.context.project.id);
     if (!existing) {
       return NextResponse.json(
         { error: 'Webhook not found' },
@@ -84,7 +91,7 @@ export async function PUT(
       }
     }
 
-    const webhook = await updateWebhook(id, updates);
+    const webhook = await updateWebhook(id, updates, roleCheck.context.project.id);
 
     return NextResponse.json({ data: webhook });
   } catch (error) {
@@ -105,9 +112,12 @@ export async function DELETE(
   { params }: RouteParams
 ) {
   try {
+    const roleCheck = await requireStudioIntegrationManager(request);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { id } = await params;
 
-    const existing = await getWebhookById(id);
+    const existing = await getWebhookById(id, roleCheck.context.project.id);
     if (!existing) {
       return NextResponse.json(
         { error: 'Webhook not found' },
@@ -115,7 +125,7 @@ export async function DELETE(
       );
     }
 
-    await deleteWebhook(id);
+    await deleteWebhook(id, roleCheck.context.project.id);
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -136,9 +146,12 @@ export async function POST(
   { params }: RouteParams
 ) {
   try {
+    const roleCheck = await requireStudioIntegrationManager(request);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { id } = await params;
 
-    const webhook = await getWebhookById(id);
+    const webhook = await getWebhookById(id, roleCheck.context.project.id);
     if (!webhook) {
       return NextResponse.json(
         { error: 'Webhook not found' },
@@ -180,7 +193,7 @@ export async function POST(
       event_type: 'test',
       payload: testPayload,
       status: 'pending',
-    });
+    }, roleCheck.context.project.id);
 
     const startTime = Date.now();
 
