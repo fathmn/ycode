@@ -4065,12 +4065,18 @@ function layerToHtml(
     'autoFocus': 'autofocus',
   };
   if (layer.attributes) {
+    const managedAttributes = new Set([
+      'id',
+      'data-collection-empty-state',
+      'data-collection-has-items',
+    ]);
     const managedImageAttributes = tag === 'img'
       ? new Set(['src', 'srcSet', 'srcset', 'sizes', 'alt', 'width', 'height', 'loading', 'fetchPriority', 'fetchpriority', 'decoding'])
       : null;
     for (const [key, value] of Object.entries(layer.attributes)) {
       // Skip type attribute for elements converted to <a>
       if ((isButtonWithLink || isDivWithLink) && key === 'type') continue;
+      if (managedAttributes.has(key)) continue;
       if (managedImageAttributes?.has(key)) continue;
       if (value !== undefined && value !== null) {
         const htmlKey = jsxToHtmlAttrMap[key] || key;
