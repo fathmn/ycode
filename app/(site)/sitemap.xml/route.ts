@@ -23,6 +23,9 @@ import { getSiteBaseUrl } from '@/lib/url-utils';
 import { ProjectScopeAuthorizationError, resolvePublicContentRequestProjectScope } from '@/lib/request-project-scope';
 import type { SitemapSettings, Translation, CollectionItem } from '@/types';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export async function GET(request: NextRequest) {
   try {
     const hasSupabaseCredentials = await credentials.exists();
