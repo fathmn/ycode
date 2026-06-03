@@ -407,9 +407,11 @@ function initializeStudioPageTransition(): Array<() => void> {
   if (target.dataset.studioPageTransitionRan === '1') return [];
 
   const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-  if (reduce || typeof target.animate !== 'function') {
+  const isMobile = window.matchMedia?.('(max-width: 767px)').matches ?? false;
+  if (reduce || isMobile || typeof target.animate !== 'function') {
     target.style.opacity = '';
     target.style.transform = '';
+    target.style.willChange = '';
     target.dataset.studioPageTransitionRan = '1';
     return [];
   }
@@ -428,13 +430,13 @@ function initializeStudioPageTransition(): Array<() => void> {
   }
 
   const previousWillChange = target.style.willChange;
-  target.style.willChange = 'opacity, transform';
+  target.style.willChange = 'transform';
   const animation = target.animate(
     [
-      { opacity: 0, transform: 'translateY(20px)' },
-      { opacity: 1, transform: 'translateY(0)' },
+      { transform: 'translateY(12px)' },
+      { transform: 'translateY(0)' },
     ],
-    { duration: 700, easing: 'cubic-bezier(0.16, 1, 0.3, 1)', fill: 'both' },
+    { duration: 360, easing: 'cubic-bezier(0.16, 1, 0.3, 1)', fill: 'both' },
   );
   target.dataset.studioPageTransitionRan = '1';
   animation.finished.then(() => {

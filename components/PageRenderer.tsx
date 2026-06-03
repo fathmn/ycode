@@ -220,9 +220,9 @@ function hasStudioPageTransition(layers: Layer[]): boolean {
 
 function pageTransitionInitialCss(): string {
   return [
-    '@keyframes ycode-studio-page-transition{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}',
-    '@media (prefers-reduced-motion:no-preference){[data-studio-page-transition]{opacity:0;transform:translateY(20px);animation:ycode-studio-page-transition 700ms cubic-bezier(0.16,1,0.3,1) forwards}}',
-    '@media (prefers-reduced-motion:reduce){[data-studio-page-transition]{opacity:1;transform:none;animation:none}}',
+    '@keyframes ycode-studio-page-transition{from{transform:translateY(12px)}to{transform:translateY(0)}}',
+    '@media (prefers-reduced-motion:no-preference) and (min-width:768px){[data-studio-page-transition]{opacity:1;will-change:transform;animation:ycode-studio-page-transition 360ms cubic-bezier(0.16,1,0.3,1) both}}',
+    '@media (max-width:767px),(prefers-reduced-motion:reduce){[data-studio-page-transition]{opacity:1;transform:none;animation:none}}',
   ].join('');
 }
 
