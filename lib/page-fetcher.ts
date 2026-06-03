@@ -3575,6 +3575,10 @@ function layerToHtml(
 
   // Get the HTML tag
   let tag = getLayerHtmlTag(layer);
+  const resolvedFormLayerId = resolveFormLayerId(layer);
+  if (resolvedFormLayerId) {
+    tag = 'form';
+  }
 
   // Buttons with link settings render as <a> directly instead of being
   // wrapped in <a><button></button></a> which is invalid HTML
@@ -3634,7 +3638,7 @@ function layerToHtml(
   }
 
   if (tag === 'form') {
-    const formId = resolveFormLayerId(layer);
+    const formId = resolvedFormLayerId;
     const formSettings = layer.settings?.form;
     const formAttributes = layer.attributes || {};
     if (!formAttributes['data-studio-import-submit-mode'] && !formAttributes['data-studio-import-submit-endpoint']) {
