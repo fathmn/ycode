@@ -21,12 +21,13 @@ export function resolveFormLayerId(layer: Pick<Layer, 'name' | 'settings' | 'att
       || attributes['data-studio-import-submit-endpoint']
       || attributes['data-studio-import-form']
   );
-  const hasStudioImportSourceForm = Boolean(studioImport.sourceFormId);
+
+  // sourceFormId is metadata used to name a form after import. It is not a
+  // reliable form signal by itself because wrapper layers can carry it too.
   const isFormLayer = layerName === 'form'
     || tag === 'form'
     || hasFormSettings
-    || hasStudioImportSubmit
-    || hasStudioImportSourceForm;
+    || hasStudioImportSubmit;
 
   if (!isFormLayer) return null;
 

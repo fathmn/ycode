@@ -10,7 +10,6 @@ import { studioFetch } from '@/lib/api';
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Spinner } from '@/components/ui/spinner';
@@ -80,6 +79,38 @@ type SortConfig = {
   column: string;
   direction: 'asc' | 'desc';
 } | null;
+
+function formatFormTitle(formId: string): string {
+  const normalized = formId.trim().toLowerCase();
+  if (normalized === 'contact' || normalized === 'kontakt') {
+    return 'Kontaktformular';
+  }
+
+  return formId
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatSubmissionCount(count: number): string {
+  return `${count} ${count === 1 ? 'Einsendung' : 'Einsendungen'}`;
+}
+
+function getStatusLabel(status: FormSubmissionStatus): string {
+  switch (status) {
+    case 'new':
+      return 'Neu';
+    case 'read':
+      return 'Gelesen';
+    case 'archived':
+      return 'Archiviert';
+    case 'spam':
+      return 'Spam';
+    default:
+      return status;
+  }
+}
 
 // API function to delete all submissions for a form
 async function deleteForm(formId: string): Promise<void> {
@@ -219,6 +250,11 @@ export default function FormsPage() {
     });
     return Array.from(keys);
   }, [submissions]);
+
+  const selectedSummary = useMemo(
+    () => summaries.find((summary) => summary.form_id === selectedFormId) || null,
+    [selectedFormId, summaries]
+  );
 
   const handleStatusChange = async (submissionId: string, status: FormSubmissionStatus) => {
     try {
@@ -374,7 +410,7 @@ export default function FormsPage() {
     }
   };
 
-  // Delete a form and all its submissions
+  // Delete all submissions for a form. The form definition itself stays visible.
   const handleDeleteForm = (formId: string) => {
     setFormToDelete(formId);
     setShowDeleteFormDialog(true);
@@ -385,15 +421,23 @@ export default function FormsPage() {
 
     try {
       await deleteForm(formToDelete);
-      // Remove from summaries
-      setSummaries((prev) => prev.filter((s) => s.form_id !== formToDelete));
-      // Clear submissions if this was the selected form
+      setSummaries((prev) =>
+        prev.map((summary) =>
+          summary.form_id === formToDelete
+            ? {
+              ...summary,
+              submission_count: 0,
+              new_count: 0,
+              latest_submission: null,
+            }
+            : summary
+        )
+      );
       if (selectedFormId === formToDelete) {
-        setSelectedFormId(null);
         setSubmissions([]);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete form');
+      setError(err instanceof Error ? err.message : 'Failed to delete submissions');
     } finally {
       setFormToDelete(null);
       setShowDeleteFormDialog(false);
@@ -420,9 +464,9 @@ export default function FormsPage() {
   };
 
   const formsSidebar = (
-    <div className="w-64 shrink-0 bg-background border-r flex flex-col overflow-hidden px-4">
+    <div className="w-72 shrink-0 bg-background border-r flex flex-col overflow-hidden px-4">
       <header className="py-5 flex items-center justify-between shrink-0">
-        <span className="font-medium">Forms</span>
+        <span className="font-medium">Formulare</span>
         <Button
           variant="ghost"
           size="xs"
@@ -440,19 +484,31 @@ export default function FormsPage() {
               <div
                 key={summary.form_id}
                 className={cn(
-                  'group px-3 h-8 rounded-lg flex gap-2 items-center justify-between text-left w-full cursor-pointer',
+                  'group px-3 py-2 rounded-lg flex gap-2 items-center justify-between text-left w-full cursor-pointer',
                   isSelected
                     ? 'bg-primary text-primary-foreground'
                     : 'hover:bg-secondary/50 text-secondary-foreground/80 dark:text-muted-foreground'
                 )}
                 onClick={() => setSelectedFormId(summary.form_id)}
               >
-                <div className="flex gap-2 items-center truncate">
+                <div className="flex gap-2 items-start min-w-0">
                   <Icon name="form" className="size-3 shrink-0" />
-                  <span className="truncate">{summary.form_id}</span>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm">{formatFormTitle(summary.form_id)}</div>
+                    <div
+                      className={cn(
+                        'truncate text-[11px]',
+                        isSelected ? 'text-primary-foreground/70' : 'text-muted-foreground'
+                      )}
+                    >
+                      ID: {summary.form_id}
+                    </div>
+                  </div>
                 </div>
                 <div className="relative flex items-center">
-                  <span className="text-xs opacity-50 group-hover:opacity-0">{summary.submission_count}</span>
+                  <span className="text-xs opacity-60 group-hover:opacity-0">
+                    {summary.submission_count}
+                  </span>
 
                   <div className="absolute right-0 opacity-0 group-hover:opacity-100">
                     <DropdownMenu
@@ -476,7 +532,7 @@ export default function FormsPage() {
                             handleDeleteForm(summary.form_id);
                           }}
                         >
-                          Delete
+                          Einsendungen löschen
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -488,9 +544,9 @@ export default function FormsPage() {
 
           {summaries.length === 0 && !isLoading && (
             <Empty>
-              <EmptyTitle>No Forms</EmptyTitle>
+              <EmptyTitle>Keine Formulare</EmptyTitle>
               <EmptyDescription>
-                Form submissions will appear here when visitors submit forms on your website.
+                Auf den Seiten dieses Projekts wurde noch kein Formular erkannt.
               </EmptyDescription>
             </Empty>
           )}
@@ -514,9 +570,9 @@ export default function FormsPage() {
         {formsSidebar}
         <div className="flex-1 flex items-center justify-center">
           <Empty>
-            <EmptyTitle>No Form Selected</EmptyTitle>
+            <EmptyTitle>Kein Formular ausgewählt</EmptyTitle>
             <EmptyDescription>
-              Select a form from the sidebar to view its submissions.
+              Wähle links ein Formular aus, um Einsendungen zu prüfen.
             </EmptyDescription>
           </Empty>
         </div>
@@ -530,11 +586,42 @@ export default function FormsPage() {
 
       <div className="flex-1 flex flex-col">
         {/* Header */}
-        <div className="p-4 flex items-center justify-between border-b">
-          <div className="w-full max-w-72">
+        <div className="border-b">
+          <div className="p-4 flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="font-medium truncate">
+                {formatFormTitle(selectedFormId)}
+              </h1>
+              <p className="text-xs text-muted-foreground mt-1">
+                Formular-ID <span className="font-mono">{selectedFormId}</span>
+                {' · '}
+                {formatSubmissionCount(selectedSummary?.submission_count ?? submissions.length)}
+              </p>
+            </div>
+
+            <div className="flex gap-2 items-center shrink-0">
+              {selectedSubmissionIds.size > 0 && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={handleDeleteSelected}
+                >
+                  Löschen
+                  <Badge variant="secondary" className="text-[10px] px-1.5 ml-1">
+                    {selectedSubmissionIds.size}
+                  </Badge>
+                </Button>
+              )}
+              <span className="text-xs text-muted-foreground">
+                {formatSubmissionCount(filteredSubmissions.length)}
+              </span>
+            </div>
+          </div>
+
+          <div className="px-4 pb-4 w-full max-w-80">
             <InputGroup>
               <InputGroupInput
-                placeholder="Search submissions..."
+                placeholder="Einsendungen suchen..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -542,24 +629,6 @@ export default function FormsPage() {
                 <Icon name="search" className="size-3" />
               </InputGroupAddon>
             </InputGroup>
-          </div>
-
-          <div className="flex gap-2 items-center">
-            {selectedSubmissionIds.size > 0 && (
-              <Button
-                size="sm"
-                variant="destructive"
-                onClick={handleDeleteSelected}
-              >
-                Delete
-                <Badge variant="secondary" className="text-[10px] px-1.5 ml-1">
-                  {selectedSubmissionIds.size}
-                </Badge>
-              </Button>
-            )}
-            <span className="text-xs text-muted-foreground">
-              {filteredSubmissions.length} submission{filteredSubmissions.length !== 1 ? 's' : ''}
-            </span>
           </div>
         </div>
 
@@ -572,11 +641,11 @@ export default function FormsPage() {
           ) : filteredSubmissions.length === 0 ? (
             <div className="flex items-center justify-center p-8">
               <Empty>
-                <EmptyTitle>No Submissions</EmptyTitle>
+                <EmptyTitle>Noch keine Einsendungen</EmptyTitle>
                 <EmptyDescription>
                   {searchQuery
-                    ? `No submissions found matching "${searchQuery}"`
-                    : 'This form has no submissions yet.'}
+                    ? `Keine Einsendung passt zu "${searchQuery}".`
+                    : `Das Formular "${formatFormTitle(selectedFormId)}" ist erkannt und wartet auf echte Einsendungen.`}
                 </EmptyDescription>
               </Empty>
             </div>
@@ -608,7 +677,7 @@ export default function FormsPage() {
                       onClick={() => handleColumnClick('created_at')}
                       className="flex items-center gap-1 hover:opacity-50 cursor-pointer"
                     >
-                      Date
+                      Datum
                       {getSortIcon('created_at') && (
                         <span className="text-xs font-mono">{getSortIcon('created_at')}</span>
                       )}
@@ -654,7 +723,7 @@ export default function FormsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant={getStatusBadgeVariant(submission.status)}>
-                        {submission.status}
+                        {getStatusLabel(submission.status)}
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
@@ -686,7 +755,7 @@ export default function FormsPage() {
                               handleStatusChange(submission.id, 'new');
                             }}
                           >
-                            Mark as new
+                            Als neu markieren
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={(e) => {
@@ -694,7 +763,7 @@ export default function FormsPage() {
                               handleStatusChange(submission.id, 'read');
                             }}
                           >
-                            Mark as read
+                            Als gelesen markieren
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={(e) => {
@@ -702,7 +771,7 @@ export default function FormsPage() {
                               handleStatusChange(submission.id, 'archived');
                             }}
                           >
-                            Archive
+                            Archivieren
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={(e) => {
@@ -710,7 +779,7 @@ export default function FormsPage() {
                               handleStatusChange(submission.id, 'spam');
                             }}
                           >
-                            Mark as spam
+                            Als Spam markieren
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
@@ -720,7 +789,7 @@ export default function FormsPage() {
                             }}
                             className="text-destructive"
                           >
-                            Delete
+                            Löschen
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -737,7 +806,7 @@ export default function FormsPage() {
       <Sheet open={!!selectedSubmission} onOpenChange={(open) => !open && setSelectedSubmission(null)}>
         <SheetContent className="sm:max-w-lg overflow-y-auto">
           <SheetHeader>
-            <SheetTitle>Submission Details</SheetTitle>
+            <SheetTitle>Einsendung</SheetTitle>
           </SheetHeader>
 
           {selectedSubmission && (
@@ -745,7 +814,7 @@ export default function FormsPage() {
               {/* Status & Date */}
               <div className="flex items-center justify-between">
                 <Badge variant={getStatusBadgeVariant(selectedSubmission.status)}>
-                  {selectedSubmission.status}
+                  {getStatusLabel(selectedSubmission.status)}
                 </Badge>
                 <span className="text-xs text-muted-foreground">
                   {formatDate(selectedSubmission.created_at, 'MMM D YYYY, HH:mm')}
@@ -764,9 +833,9 @@ export default function FormsPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="new">New</SelectItem>
-                    <SelectItem value="read">Read</SelectItem>
-                    <SelectItem value="archived">Archived</SelectItem>
+                    <SelectItem value="new">Neu</SelectItem>
+                    <SelectItem value="read">Gelesen</SelectItem>
+                    <SelectItem value="archived">Archiviert</SelectItem>
                     <SelectItem value="spam">Spam</SelectItem>
                   </SelectContent>
                 </Select>
@@ -774,7 +843,7 @@ export default function FormsPage() {
 
               {/* Payload Fields */}
               <div className="space-y-4">
-                <h3 className="font-medium text-xs">Form Data</h3>
+                <h3 className="font-medium text-xs">Formulardaten</h3>
                 {Object.entries(selectedSubmission.payload).map(([key, value]) => (
                   <div key={key} className="space-y-1">
                     <label className="text-xs font-medium capitalize text-muted-foreground">
@@ -794,7 +863,7 @@ export default function FormsPage() {
                   <div className="space-y-2 text-xs text-muted-foreground">
                     {selectedSubmission.metadata.page_url && (
                       <div>
-                        <span className="font-medium">Page: </span>
+                        <span className="font-medium">Seite: </span>
                         {selectedSubmission.metadata.page_url}
                       </div>
                     )}
@@ -806,7 +875,7 @@ export default function FormsPage() {
                     )}
                     {selectedSubmission.metadata.user_agent && (
                       <div>
-                        <span className="font-medium">User Agent: </span>
+                        <span className="font-medium">Browser: </span>
                         <span className="break-all">{selectedSubmission.metadata.user_agent}</span>
                       </div>
                     )}
@@ -821,7 +890,7 @@ export default function FormsPage() {
                   size="sm"
                   onClick={() => handleDelete(selectedSubmission.id)}
                 >
-                  Delete submission
+                  Einsendung löschen
                 </Button>
               </div>
             </div>
@@ -833,9 +902,9 @@ export default function FormsPage() {
       <ConfirmDialog
         open={showDeleteFormDialog}
         onOpenChange={setShowDeleteFormDialog}
-        title="Delete form?"
-        description={`Are you sure you want to delete "${formToDelete}"? This will permanently delete all ${summaries.find(s => s.form_id === formToDelete)?.submission_count || 0} submissions. This action cannot be undone.`}
-        confirmLabel="Delete"
+        title="Einsendungen löschen?"
+        description={`Das Formular "${formToDelete ? formatFormTitle(formToDelete) : ''}" bleibt erhalten. Es werden nur ${summaries.find(s => s.form_id === formToDelete)?.submission_count || 0} Einsendungen dauerhaft gelöscht.`}
+        confirmLabel="Löschen"
         confirmVariant="destructive"
         onConfirm={handleConfirmDeleteForm}
       />
@@ -844,9 +913,9 @@ export default function FormsPage() {
       <ConfirmDialog
         open={showDeleteSubmissionDialog}
         onOpenChange={setShowDeleteSubmissionDialog}
-        title="Delete submission?"
-        description="Are you sure you want to delete this submission? This action cannot be undone."
-        confirmLabel="Delete"
+        title="Einsendung löschen?"
+        description="Diese Einsendung wird dauerhaft gelöscht."
+        confirmLabel="Löschen"
         confirmVariant="destructive"
         onConfirm={handleConfirmDeleteSubmission}
       />
@@ -855,9 +924,9 @@ export default function FormsPage() {
       <ConfirmDialog
         open={showBulkDeleteDialog}
         onOpenChange={setShowBulkDeleteDialog}
-        title={`Delete ${selectedSubmissionIds.size} submission${selectedSubmissionIds.size !== 1 ? 's' : ''}?`}
-        description={`Are you sure you want to delete ${selectedSubmissionIds.size} submission${selectedSubmissionIds.size !== 1 ? 's' : ''}? This action cannot be undone.`}
-        confirmLabel="Delete"
+        title={`${selectedSubmissionIds.size} Einsendungen löschen?`}
+        description="Die ausgewählten Einsendungen werden dauerhaft gelöscht."
+        confirmLabel="Löschen"
         confirmVariant="destructive"
         onConfirm={handleConfirmBulkDelete}
       />

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { validateApiKey, unauthorizedResponse } from '../../auth';
-import { getAllFormSubmissions } from '@/lib/repositories/formSubmissionRepository';
+import { getAllFormSubmissions, getFormSummaries } from '@/lib/repositories/formSubmissionRepository';
 import { ProjectScopeAuthorizationError, resolveApiKeyRequestProjectId } from '@/lib/request-project-scope';
 
 // Disable caching for this route
@@ -38,15 +38,16 @@ export async function GET(
     const { form_id } = await params;
     const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
-    // Get all submissions for this form
-    const submissions = await getAllFormSubmissions(form_id, undefined, projectId);
-
-    if (submissions.length === 0) {
+    const summaries = await getFormSummaries(projectId);
+    const summary = summaries.find((formSummary) => formSummary.form_id === form_id);
+    if (!summary) {
       return NextResponse.json(
         { error: 'Form not found', code: 'NOT_FOUND' },
         { status: 404 }
       );
     }
+
+    const submissions = await getAllFormSubmissions(form_id, undefined, projectId);
 
     // Calculate status counts
     const statusCounts = {
@@ -67,9 +68,9 @@ export async function GET(
 
     return NextResponse.json({
       id: form_id,
-      submissionCount: submissions.length,
+      submissionCount: summary.submission_count,
       statusCounts,
-      latestSubmission,
+      latestSubmission: summary.latest_submission || latestSubmission,
     });
   } catch (error) {
     console.error('Error fetching form:', error);
