@@ -109,17 +109,17 @@ async function compileCss(classNames: string[]): Promise<string> {
  *
  * This is the server-side equivalent of the client's generateAndSaveCSS.
  */
-export async function generateAndSaveDraftCSS(): Promise<string> {
+export async function generateAndSaveDraftCSS(projectId?: string | null): Promise<string> {
   const allLayers: Layer[] = [];
 
-  const draftPageLayers = await getAllDraftLayers();
+  const draftPageLayers = await getAllDraftLayers(projectId);
   for (const pl of draftPageLayers) {
     if (pl.layers && Array.isArray(pl.layers)) {
       allLayers.push(...pl.layers);
     }
   }
 
-  const components: Component[] = await getAllComponents(false);
+  const components: Component[] = await getAllComponents(false, projectId);
   for (const component of components) {
     if (component.layers && Array.isArray(component.layers)) {
       allLayers.push(...component.layers);
@@ -130,7 +130,7 @@ export async function generateAndSaveDraftCSS(): Promise<string> {
   const classNames = Array.from(classes);
   const css = await compileCss(classNames);
 
-  await setSetting('draft_css', css);
+  await setSetting('draft_css', css, projectId);
 
   return css;
 }

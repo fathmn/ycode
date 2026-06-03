@@ -224,7 +224,7 @@ function parseSpacingShorthand(val: string, prefix: string, sides: [string, stri
 const DISPLAY_MAP: Record<string, string> = {
   flex: 'flex', 'inline-flex': 'inline-flex', grid: 'grid',
   'inline-grid': 'inline-grid', block: 'block', 'inline-block': 'inline-block',
-  inline: 'inline', none: 'hidden',
+  inline: 'inline', contents: 'contents', none: 'hidden',
 };
 const FLEX_DIR_MAP: Record<string, string> = {
   row: 'flex-row', 'row-reverse': 'flex-row-reverse',
@@ -294,7 +294,7 @@ function sanitizeCssValue(val: string): string {
   return v;
 }
 
-function styleToClasses(style: string): string[] {
+export function styleToClasses(style: string): string[] {
   const classes: string[] = [];
   const decls = style.split(';').map(d => d.trim()).filter(Boolean);
 
@@ -368,6 +368,12 @@ function styleToClasses(style: string): string[] {
       case 'line-height': classes.push(`leading-[${val}]`); break;
       case 'letter-spacing': classes.push(`tracking-[${val}]`); break;
       case 'background-color': classes.push(`bg-[${val}]`); break;
+      case 'background-size': classes.push(`bg-[${val}]`); break;
+      case 'background-position': classes.push(`bg-[${val.replace(/\s+/g, '_')}]`); break;
+      case 'background-repeat':
+        if (val === 'no-repeat') classes.push('bg-no-repeat');
+        else if (['repeat', 'repeat-x', 'repeat-y', 'repeat-round', 'repeat-space'].includes(val)) classes.push(`bg-${val}`);
+        break;
       case 'border-radius': classes.push(`rounded-[${val}]`); break;
       case 'border-top-left-radius': classes.push(`rounded-tl-[${val}]`); break;
       case 'border-top-right-radius': classes.push(`rounded-tr-[${val}]`); break;
@@ -389,7 +395,14 @@ function styleToClasses(style: string): string[] {
       case 'right': classes.push(`right-[${val}]`); break;
       case 'bottom': classes.push(`bottom-[${val}]`); break;
       case 'left': classes.push(`left-[${val}]`); break;
+      case 'inset': classes.push(`top-[${val}]`, `right-[${val}]`, `bottom-[${val}]`, `left-[${val}]`); break;
+      case 'inset-block-start': classes.push(`top-[${val}]`); break;
+      case 'inset-inline-end': classes.push(`right-[${val}]`); break;
+      case 'inset-block-end': classes.push(`bottom-[${val}]`); break;
+      case 'inset-inline-start': classes.push(`left-[${val}]`); break;
       case 'z-index': classes.push(`z-[${val}]`); break;
+      case 'grid-template-columns': classes.push(`grid-cols-[${val.replace(/\s+/g, '_')}]`); break;
+      case 'grid-template-rows': classes.push(`grid-rows-[${val.replace(/\s+/g, '_')}]`); break;
       case 'overflow-x':
         if (['hidden', 'auto', 'scroll', 'visible'].includes(val))
           classes.push(`overflow-x-${val}`);
@@ -551,7 +564,7 @@ function makeTextLayer(textOrDoc: string | object): Layer {
   };
 }
 
-function cleanDesign(design: Layer['design']): Layer['design'] | undefined {
+export function cleanImportDesign(design: Layer['design']): Layer['design'] | undefined {
   if (!design) return undefined;
 
   const cleaned: Record<string, any> = {};
@@ -609,7 +622,7 @@ function elementToLayer(el: Element): Layer | null {
   const classes = resolveImportClasses(el);
 
   const rawDesign = classes ? classesToDesign(classes) : undefined;
-  const design = cleanDesign(rawDesign);
+  const design = cleanImportDesign(rawDesign);
 
   const layer: Layer = {
     id: generateId('lyr'),

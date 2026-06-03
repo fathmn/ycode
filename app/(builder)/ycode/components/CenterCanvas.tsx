@@ -2849,7 +2849,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
                 size="sm"
                 onClick={() => window.open(previewUrl, '_blank')}
               >
-                Open in new tab
+                In neuem Tab öffnen
                 <Icon name="external-link" />
               </Button>
             )}
@@ -2862,9 +2862,10 @@ const CenterCanvas = React.memo(function CenterCanvas({
           className="flex-1 relative flex items-start overflow-auto"
           style={{ padding: `${CANVAS_BORDER}px` }}
         >
-          {isPreviewLoading && !previewFrameSrc && (
-            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-background">
+          {isPreviewLoading && (
+            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-neutral-950 text-neutral-200">
               <Spinner />
+              <p className="text-sm text-neutral-400">Vorschau wird geladen...</p>
             </div>
           )}
           <div
@@ -2908,6 +2909,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
                 style={{
                   display: 'block',
                   height: `${previewFrameHeight}px`,
+                  opacity: isPreviewLoading ? 0 : 1,
                   position: 'sticky',
                   top: 0,
                 }}

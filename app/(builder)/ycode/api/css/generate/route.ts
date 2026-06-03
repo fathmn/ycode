@@ -10,13 +10,22 @@ export const dynamic = 'force-dynamic';
  * Called by the MCP server after saving layers so that published
  * sites always have up-to-date CSS.
  */
-export async function POST() {
+export async function POST(request: Request) {
   try {
-    const css = await generateAndSaveDraftCSS();
+    let projectId: string | null = null;
+    try {
+      const body = await request.json();
+      projectId = typeof body?.projectId === 'string' ? body.projectId : null;
+    } catch {
+      projectId = null;
+    }
+
+    const css = await generateAndSaveDraftCSS(projectId);
 
     return NextResponse.json({
       data: {
         message: 'CSS generated and saved to draft_css',
+        projectId,
         length: css.length,
       },
     });
