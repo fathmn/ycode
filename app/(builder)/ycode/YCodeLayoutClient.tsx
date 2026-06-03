@@ -1,10 +1,16 @@
 'use client';
 
-import { Suspense, useEffect } from 'react';
+import dynamic from 'next/dynamic';
+import { Suspense, useMemo } from 'react';
+import type { ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
-import YCodeBuilder from './components/YCodeBuilderMain';
-import { useEditorUrl } from '@/hooks/use-editor-url';
-import { useAuthStore } from '@/stores/useAuthStore';
+import BuilderLoading from '@/components/BuilderLoading';
+import StudioAuthGate from './components/StudioAuthGate';
+
+const YCodeBuilder = dynamic(() => import('./components/YCodeBuilderMain'), {
+  ssr: false,
+  loading: () => <BuilderLoading message="Studio wird geladen..." />,
+});
 
 /**
  * YCode Editor Layout (Client Component)
@@ -30,42 +36,40 @@ import { useAuthStore } from '@/stores/useAuthStore';
  * the UI accordingly without remounting.
  */
 
-// Inner component that uses useSearchParams (via useEditorUrl)
-function YCodeLayoutInner({ children }: { children: React.ReactNode }) {
+function YCodeLayoutInner({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { routeType } = useEditorUrl();
-  const { initialize } = useAuthStore();
-
-  // Initialize auth only within /ycode routes (not on public pages)
-  useEffect(() => {
-    initialize();
-  }, [initialize]);
 
   // Exclude standalone routes from YCodeBuilder
   // These routes should render independently without the editor UI
   const prefixRoutes = ['/ycode/preview', '/ycode/devtools/'];
   const exactRoutes = ['/ycode/welcome', '/ycode/accept-invite'];
-
-  if (
+  const isStandaloneRoute = Boolean(
     prefixRoutes.some(route => pathname?.startsWith(route))
     || exactRoutes.includes(pathname || '')
-  ) {
+  );
+
+  const routeRendersChildren = useMemo(() => Boolean(
+    pathname?.startsWith('/ycode/settings')
+    || pathname?.startsWith('/ycode/localization')
+    || pathname?.startsWith('/ycode/profile')
+    || pathname?.startsWith('/ycode/forms')
+    || pathname?.startsWith('/ycode/integrations')
+  ), [pathname]);
+
+  if (isStandaloneRoute) {
     return <>{children}</>;
   }
 
-  // For settings, localization, profile, forms, and integrations routes, pass children to YCodeBuilder so it can render them
-  if (routeType === 'settings' || routeType === 'localization' || routeType === 'profile' || routeType === 'forms' || routeType === 'integrations') {
-    return <YCodeBuilder>{children}</YCodeBuilder>;
-  }
-
-  // YCodeBuilder handles all rendering based on URL
-  // Children are ignored - routes are just for URL structure
-  return <YCodeBuilder />;
+  return (
+    <StudioAuthGate>
+      <YCodeBuilder>{routeRendersChildren ? children : undefined}</YCodeBuilder>
+    </StudioAuthGate>
+  );
 }
 
 // Client layout wrapped in Suspense to handle useSearchParams
 // Required by Next.js 14+ to prevent static rendering bailout
-export default function YCodeLayoutClient({ children }: { children: React.ReactNode }) {
+export default function YCodeLayoutClient({ children }: { children: ReactNode }) {
   return (
     <Suspense fallback={null}>
       <YCodeLayoutInner>{children}</YCodeLayoutInner>

@@ -571,12 +571,13 @@ export default async function PublishedPageRenderer({
     if (isProjectScopeRequired()) throw error;
   }
 
+  const dedupedGlobalCustomCodeHead = removeDuplicateGoogleFontLinksFromHeadHtml(globalCustomCodeHead || '');
   const rawPageCustomCodeHead = page.settings?.custom_code?.head || '';
   const rawPageCustomCodeBody = page.settings?.custom_code?.body || '';
   const pageCustomCodeHead = page.is_dynamic && collectionItem
     ? resolveCustomCodePlaceholders(rawPageCustomCodeHead, collectionItem, collectionFields)
     : rawPageCustomCodeHead;
-  const dedupedPageCustomCodeHead = removeDuplicateGoogleFontLinksFromHeadHtml(pageCustomCodeHead, globalCustomCodeHead);
+  const dedupedPageCustomCodeHead = removeDuplicateGoogleFontLinksFromHeadHtml(pageCustomCodeHead, dedupedGlobalCustomCodeHead);
   const pageCustomCodeBody = page.is_dynamic && collectionItem
     ? resolveCustomCodePlaceholders(rawPageCustomCodeBody, collectionItem, collectionFields)
     : rawPageCustomCodeBody;
@@ -599,7 +600,7 @@ export default async function PublishedPageRenderer({
     fontsCss = buildCustomFontsCss(fonts) + buildFontClassesCss(fonts);
     googleFontLinkUrls = filterGoogleFontLinksAgainstHeadHtml(
       getGoogleFontLinks(fonts),
-      globalCustomCodeHead,
+      dedupedGlobalCustomCodeHead,
       dedupedPageCustomCodeHead,
     );
   } catch (error) {
@@ -669,8 +670,8 @@ export default async function PublishedPageRenderer({
 
   return (
     <>
-      {allowCustomCodeExecution && process.env.SKIP_SETUP === 'true' && globalCustomCodeHead && (
-        renderRootLayoutHeadCode(globalCustomCodeHead, 'global-head')
+      {allowCustomCodeExecution && process.env.SKIP_SETUP === 'true' && dedupedGlobalCustomCodeHead && (
+        renderRootLayoutHeadCode(dedupedGlobalCustomCodeHead, 'global-head')
       )}
       {allowCustomCodeExecution && dedupedPageCustomCodeHead && renderRootLayoutHeadCode(dedupedPageCustomCodeHead, 'page-head')}
 

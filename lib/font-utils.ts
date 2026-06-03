@@ -301,7 +301,9 @@ export function getGoogleFontLinks(fonts: Font[]): string[] {
 }
 
 function normalizeFontUrl(value: string): string {
-  return value.replace(/&amp;/g, '&').trim();
+  return value
+    .replace(/&amp;/gi, '&')
+    .trim();
 }
 
 const GOOGLE_FONT_LINK_TAG_REGEX = /<link\b(?=[^>]*\bhref\s*=\s*["']([^"']*fonts\.googleapis\.com\/css2[^"']*)["'])[^>]*>/gi;
@@ -319,14 +321,19 @@ function getGoogleFontUrlsFromHeadHtml(html: string): Set<string> {
 }
 
 export function filterGoogleFontLinksAgainstHeadHtml(links: string[], ...headHtmlSources: Array<string | null | undefined>): string[] {
+  const normalizedLinks = Array.from(new Map(
+    links.map((link) => [normalizeFontUrl(link), link])
+  ).values());
+
   const headHtml = headHtmlSources
     .filter((value): value is string => Boolean(value))
-    .map(normalizeFontUrl)
     .join('\n');
 
-  if (!headHtml) return links;
+  if (!headHtml) return normalizedLinks;
 
-  return links.filter((link) => !headHtml.includes(normalizeFontUrl(link)));
+  const existingUrls = getGoogleFontUrlsFromHeadHtml(headHtml);
+
+  return normalizedLinks.filter((link) => !existingUrls.has(normalizeFontUrl(link)));
 }
 
 export function removeDuplicateGoogleFontLinksFromHeadHtml(html: string, ...alreadySeenHtmlSources: Array<string | null | undefined>): string {
@@ -338,11 +345,11 @@ export function removeDuplicateGoogleFontLinksFromHeadHtml(html: string, ...alre
     getGoogleFontUrlsFromHeadHtml(source).forEach((url) => seen.add(url));
   }
 
-  if (seen.size === 0) return html;
-
   return html.replace(GOOGLE_FONT_LINK_TAG_REGEX, (tag, href) => {
     const normalizedHref = normalizeFontUrl(href || '');
-    return seen.has(normalizedHref) ? '' : tag;
+    if (seen.has(normalizedHref)) return '';
+    seen.add(normalizedHref);
+    return tag;
   });
 }
 

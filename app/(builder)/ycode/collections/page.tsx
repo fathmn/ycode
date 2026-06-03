@@ -1,14 +1,10 @@
-'use client';
-
-import YCodeBuilder from '../components/YCodeBuilderMain';
-
 /**
  * Base route for collections view
  * URL: /ycode/collections
  *
- * This route renders the same YCodeBuilder component.
- * Shows all collections or empty state when no collections exist.
+ * The YCodeBuilder component is rendered by YCodeLayoutClient after auth.
+ * This route exists only to give Next.js a stable URL target.
  */
 export default function CollectionsRoute() {
-  return <YCodeBuilder />;
+  return null;
 }

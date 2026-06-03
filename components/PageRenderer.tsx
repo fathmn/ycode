@@ -600,6 +600,8 @@ export default async function PageRenderer({
     handleRenderFetchError('Error fetching link resolution data', error);
   }
 
+  const dedupedGlobalCustomCodeHead = removeDuplicateGoogleFontLinksFromHeadHtml(globalCustomCodeHead || '');
+
   // Extract custom code from page settings and resolve placeholders for dynamic pages
   const rawPageCustomCodeHead = page.settings?.custom_code?.head || '';
   const rawPageCustomCodeBody = page.settings?.custom_code?.body || '';
@@ -607,7 +609,7 @@ export default async function PageRenderer({
   const pageCustomCodeHead = page.is_dynamic && collectionItem
     ? resolveCustomCodePlaceholders(rawPageCustomCodeHead, collectionItem, collectionFields)
     : rawPageCustomCodeHead;
-  const dedupedPageCustomCodeHead = removeDuplicateGoogleFontLinksFromHeadHtml(pageCustomCodeHead, globalCustomCodeHead);
+  const dedupedPageCustomCodeHead = removeDuplicateGoogleFontLinksFromHeadHtml(pageCustomCodeHead, dedupedGlobalCustomCodeHead);
 
   const pageCustomCodeBody = page.is_dynamic && collectionItem
     ? resolveCustomCodePlaceholders(rawPageCustomCodeBody, collectionItem, collectionFields)
@@ -649,7 +651,7 @@ export default async function PageRenderer({
     fontsCss = buildCustomFontsCss(fonts) + buildFontClassesCss(fonts);
     googleFontLinkUrls = filterGoogleFontLinksAgainstHeadHtml(
       getGoogleFontLinks(fonts),
-      globalCustomCodeHead,
+      dedupedGlobalCustomCodeHead,
       dedupedPageCustomCodeHead,
     );
   } catch (error) {
@@ -727,8 +729,8 @@ export default async function PageRenderer({
   return (
     <>
       {/* Global head code fallback when layout skips it (SKIP_SETUP mode) */}
-      {allowCustomCodeExecution && process.env.SKIP_SETUP === 'true' && globalCustomCodeHead && (
-        renderRootLayoutHeadCode(globalCustomCodeHead, 'global-head')
+      {allowCustomCodeExecution && process.env.SKIP_SETUP === 'true' && dedupedGlobalCustomCodeHead && (
+        renderRootLayoutHeadCode(dedupedGlobalCustomCodeHead, 'global-head')
       )}
 
       {/* Page-specific custom head code — React 19 hoists meta/link/style/title to <head> */}
