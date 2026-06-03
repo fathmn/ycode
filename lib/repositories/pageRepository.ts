@@ -795,7 +795,7 @@ export async function getAllDraftPages(includeDeleted = false, projectId?: strin
  * Get published pages by IDs
  * Used for batch publishing optimization
  */
-export async function getPublishedPagesByIds(ids: string[]): Promise<Page[]> {
+export async function getPublishedPagesByIds(ids: string[], projectId?: string | null): Promise<Page[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -806,12 +806,14 @@ export async function getPublishedPagesByIds(ids: string[]): Promise<Page[]> {
     return [];
   }
 
-  const { data, error } = await client
+  let query = client
     .from('pages')
     .select('*')
     .in('id', ids)
     .eq('is_published', true)
     .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch published pages: ${error.message}`);
@@ -1149,18 +1151,20 @@ export async function getUnpublishedPages(projectId?: string | null): Promise<Pa
  * Hard-delete soft-deleted draft pages and their published counterparts.
  * Page layers are cleaned up automatically via CASCADE.
  */
-export async function hardDeleteSoftDeletedPages(): Promise<{ count: number }> {
+export async function hardDeleteSoftDeletedPages(projectId?: string | null): Promise<{ count: number }> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { data: deletedDrafts, error } = await client
+  let deletedDraftsQuery = client
     .from('pages')
     .select('id')
     .eq('is_published', false)
     .not('deleted_at', 'is', null);
+  deletedDraftsQuery = (await applyProjectScopeToQuery(deletedDraftsQuery, client, 'pages', projectId)).query;
+  const { data: deletedDrafts, error } = await deletedDraftsQuery;
 
   if (error) {
     throw new Error(`Failed to fetch deleted draft pages: ${error.message}`);
@@ -1173,23 +1177,27 @@ export async function hardDeleteSoftDeletedPages(): Promise<{ count: number }> {
   const ids = deletedDrafts.map(p => p.id);
 
   // Delete published versions first (CASCADE removes page_layers)
-  const { error: pubError } = await client
+  let pubDeleteQuery = client
     .from('pages')
     .delete()
     .in('id', ids)
     .eq('is_published', true);
+  pubDeleteQuery = (await applyProjectScopeToQuery(pubDeleteQuery, client, 'pages', projectId)).query;
+  const { error: pubError } = await pubDeleteQuery;
 
   if (pubError) {
     console.error('Failed to delete published pages:', pubError);
   }
 
   // Delete soft-deleted draft versions (CASCADE removes page_layers)
-  const { error: draftError } = await client
+  let draftDeleteQuery = client
     .from('pages')
     .delete()
     .in('id', ids)
     .eq('is_published', false)
     .not('deleted_at', 'is', null);
+  draftDeleteQuery = (await applyProjectScopeToQuery(draftDeleteQuery, client, 'pages', projectId)).query;
+  const { error: draftError } = await draftDeleteQuery;
 
   if (draftError) {
     throw new Error(`Failed to delete draft pages: ${draftError.message}`);

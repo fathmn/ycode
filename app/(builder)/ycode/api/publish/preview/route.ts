@@ -7,6 +7,7 @@ import { getUnpublishedLayerStyles } from '@/lib/repositories/layerStyleReposito
 import { getUnpublishedAssets } from '@/lib/repositories/assetRepository';
 import { getDeletedDraftCount } from '@/lib/sync-utils';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -22,12 +23,24 @@ export interface PublishPreviewCounts {
   total: number;
 }
 
+const PUBLISH_PREVIEW_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+
 /**
  * GET /ycode/api/publish/preview
  * Count all pending changes (new, modified, deleted) per entity type.
  */
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, PUBLISH_PREVIEW_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     // Count changed + deleted in parallel for each entity type
     const [
       pagesChanged, pagesDeleted,
@@ -37,18 +50,18 @@ export async function GET(_request: NextRequest) {
       layerStylesChanged, layerStylesDeleted,
       assetsChanged, assetsDeleted,
     ] = await Promise.all([
-      getUnpublishedPagesCount(),
-      getDeletedDraftCount('pages'),
-      getUnpublishedCollections().then(c => c.length),
-      getDeletedDraftCount('collections'),
-      getTotalPublishableItemsCount(),
-      getDeletedDraftCount('collection_items'),
-      getUnpublishedComponents().then(c => c.length),
-      getDeletedDraftCount('components'),
-      getUnpublishedLayerStyles().then(s => s.length),
-      getDeletedDraftCount('layer_styles'),
-      getUnpublishedAssets().then(a => a.length),
-      getDeletedDraftCount('assets'),
+      getUnpublishedPagesCount(projectId),
+      getDeletedDraftCount('pages', projectId),
+      getUnpublishedCollections(projectId).then(c => c.length),
+      getDeletedDraftCount('collections', projectId),
+      getTotalPublishableItemsCount(projectId),
+      getDeletedDraftCount('collection_items', projectId),
+      getUnpublishedComponents(projectId).then(c => c.length),
+      getDeletedDraftCount('components', projectId),
+      getUnpublishedLayerStyles(projectId).then(s => s.length),
+      getDeletedDraftCount('layer_styles', projectId),
+      getUnpublishedAssets(projectId).then(a => a.length),
+      getDeletedDraftCount('assets', projectId),
     ]);
 
     const pages = pagesChanged + pagesDeleted;

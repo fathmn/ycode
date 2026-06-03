@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { getSelectedStudioProjectSlug, studioProjectsApi } from '@/lib/api';
-import { studioProjectPathFromSlug, studioProjectPathSlugFromPathname } from '@/lib/studio-project-path';
+import { studioProjectPathFromSlug, studioProjectPathSlugFromPathname, studioProjectRoutePathFromSlug } from '@/lib/studio-project-path';
 import { isStudioOperatorRole } from '@/lib/studio-roles';
 
 const INTEGRATIONS_ITEMS = [
@@ -73,12 +73,13 @@ export default function IntegrationsContent({ children }: IntegrationsContentPro
         <div className="flex-1 overflow-y-auto">
           <div className="space-y-0">
             {INTEGRATIONS_ITEMS.map((item) => {
-              const isActive = pathname === item.path;
+              const itemPath = studioProjectRoutePathFromSlug(projectPathSlug, item.path);
+              const isActive = pathname === item.path || pathname === itemPath;
 
               return (
                 <button
                   key={item.id}
-                  onClick={() => router.push(item.path)}
+                  onClick={() => router.push(itemPath)}
                   className={cn(
                     'group relative flex items-center h-8 outline-none focus:outline-none rounded-lg cursor-pointer select-none w-full text-left px-2 text-xs',
                     'hover:bg-secondary/50',

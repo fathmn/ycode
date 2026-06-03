@@ -5,6 +5,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import type { PageFolder } from '@/types';
 
 /**
@@ -20,28 +21,33 @@ export interface PublishFoldersResult {
  */
 async function collectAncestorFolderIds(
   pageIds: string[],
-  client: any
+  client: any,
+  projectId?: string | null
 ): Promise<Set<string>> {
   const folderIdsToPublish = new Set<string>();
 
   // Fetch pages to get their folder IDs
-  const { data: pagesToPublish } = await client
+  let pagesQuery = client
     .from('pages')
     .select('page_folder_id')
     .in('id', pageIds)
     .eq('is_published', false)
     .is('deleted_at', null);
+  pagesQuery = (await applyProjectScopeToQuery(pagesQuery, client, 'pages', projectId)).query;
+  const { data: pagesToPublish } = await pagesQuery;
 
   if (!pagesToPublish) {
     return folderIdsToPublish;
   }
 
   // Get all draft folders to traverse ancestors
-  const { data: allDraftFolders } = await client
+  let draftFoldersQuery = client
     .from('page_folders')
     .select('*')
     .eq('is_published', false)
     .is('deleted_at', null);
+  draftFoldersQuery = (await applyProjectScopeToQuery(draftFoldersQuery, client, 'page_folders', projectId)).query;
+  const { data: allDraftFolders } = await draftFoldersQuery;
 
   if (!allDraftFolders) {
     return folderIdsToPublish;
@@ -80,7 +86,8 @@ async function collectAncestorFolderIds(
  */
 export async function publishFolders(
   folderIds: string[] = [],
-  pageIds?: string[]
+  pageIds?: string[],
+  projectId?: string | null
 ): Promise<PublishFoldersResult> {
   const client = await getSupabaseAdmin();
 
@@ -93,7 +100,7 @@ export async function publishFolders(
 
   // Collect ancestor folders if page IDs provided
   if (!isPublishingAll && pageIds && pageIds.length > 0) {
-    const ancestorIds = await collectAncestorFolderIds(pageIds, client);
+    const ancestorIds = await collectAncestorFolderIds(pageIds, client, projectId);
     ancestorIds.forEach(id => folderIdsToPublish.add(id));
   }
 
@@ -103,10 +110,12 @@ export async function publishFolders(
   }
 
   // Get all draft folders (including soft-deleted for cleanup)
-  const { data: allDraftFolders, error: foldersError } = await client
+  let draftFoldersQuery = client
     .from('page_folders')
     .select('*')
     .eq('is_published', false);
+  draftFoldersQuery = (await applyProjectScopeToQuery(draftFoldersQuery, client, 'page_folders', projectId)).query;
+  const { data: allDraftFolders, error: foldersError } = await draftFoldersQuery;
 
   if (foldersError || !allDraftFolders) {
     throw new Error(`Failed to fetch folders: ${foldersError?.message}`);
@@ -135,11 +144,13 @@ export async function publishFolders(
   const allIdsToCheck = [...new Set([...folderIdsToCheck, ...parentFolderIds])];
 
   // Fetch all published folders we need to reference
-  const { data: existingPublished } = await client
+  let existingPublishedQuery = client
     .from('page_folders')
     .select('*')
     .eq('is_published', true)
     .in('id', allIdsToCheck);
+  existingPublishedQuery = (await applyProjectScopeToQuery(existingPublishedQuery, client, 'page_folders', projectId)).query;
+  const { data: existingPublished } = await existingPublishedQuery;
 
   const publishedFoldersById = new Map<string, PageFolder>(
     (existingPublished || []).map((f: PageFolder) => [f.id, f])
@@ -153,12 +164,14 @@ export async function publishFolders(
       .map((f: PageFolder) => f.id);
 
     if (idsToSoftDelete.length > 0) {
-      await client
+      let softDeleteQuery = client
         .from('page_folders')
         .update({ deleted_at: new Date().toISOString() })
         .eq('is_published', true)
         .in('id', idsToSoftDelete)
         .is('deleted_at', null);
+      softDeleteQuery = (await applyProjectScopeToQuery(softDeleteQuery, client, 'page_folders', projectId)).query;
+      await softDeleteQuery;
     }
   }
 
@@ -171,6 +184,7 @@ export async function publishFolders(
   const foldersBeingPublished = new Set<string>();
 
   // Prepare folders to upsert, resolving parent folder IDs to published versions
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'page_folders', projectId);
   const foldersToUpsert: Array<{
     id: string;
     name: string;
@@ -180,6 +194,7 @@ export async function publishFolders(
     depth: number;
     settings: PageFolder['settings'];
     is_published: boolean;
+    project_id?: string;
   }> = [];
 
   for (const folder of sortedFolders) {
@@ -224,6 +239,7 @@ export async function publishFolders(
       depth: folder.depth,
       settings: folder.settings,
       is_published: true,
+      ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
     });
   }
 

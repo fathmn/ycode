@@ -5,7 +5,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import { SUPABASE_QUERY_LIMIT, SUPABASE_WRITE_BATCH_SIZE } from '@/lib/supabase-constants';
 import type { AssetFolder, CreateAssetFolderData, UpdateAssetFolderData } from '../../types';
 
@@ -285,7 +285,7 @@ export async function reorderFolders(updates: Array<{ id: string; order: number 
  * Get all unpublished (draft) asset folders that have changes.
  * A folder needs publishing if no published version exists or its data differs.
  */
-export async function getUnpublishedAssetFolders(): Promise<AssetFolder[]> {
+export async function getUnpublishedAssetFolders(projectId?: string | null): Promise<AssetFolder[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -293,13 +293,15 @@ export async function getUnpublishedAssetFolders(): Promise<AssetFolder[]> {
   }
 
   // Fetch all draft folders
-  const { data: draftFolders, error } = await client
+  let draftFoldersQuery = client
     .from('asset_folders')
     .select('*')
     .eq('is_published', false)
     .is('deleted_at', null)
     .order('depth', { ascending: true })
     .order('order', { ascending: true });
+  draftFoldersQuery = (await applyProjectScopeToQuery(draftFoldersQuery, client, 'asset_folders', projectId)).query;
+  const { data: draftFolders, error } = await draftFoldersQuery;
 
   if (error) {
     throw new Error(`Failed to fetch draft asset folders: ${error.message}`);
@@ -311,11 +313,13 @@ export async function getUnpublishedAssetFolders(): Promise<AssetFolder[]> {
 
   // Batch fetch published folders for comparison
   const draftIds = draftFolders.map(f => f.id);
-  const { data: publishedFolders, error: publishedError } = await client
+  let publishedFoldersQuery = client
     .from('asset_folders')
     .select('*')
     .in('id', draftIds)
     .eq('is_published', true);
+  publishedFoldersQuery = (await applyProjectScopeToQuery(publishedFoldersQuery, client, 'asset_folders', projectId)).query;
+  const { data: publishedFolders, error: publishedError } = await publishedFoldersQuery;
 
   if (publishedError) {
     throw new Error(`Failed to fetch published asset folders: ${publishedError.message}`);
@@ -337,7 +341,7 @@ export async function getUnpublishedAssetFolders(): Promise<AssetFolder[]> {
 /**
  * Get soft-deleted draft asset folders
  */
-export async function getDeletedDraftAssetFolders(): Promise<AssetFolder[]> {
+export async function getDeletedDraftAssetFolders(projectId?: string | null): Promise<AssetFolder[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -348,12 +352,13 @@ export async function getDeletedDraftAssetFolders(): Promise<AssetFolder[]> {
   let offset = 0;
 
   while (true) {
-    const { data, error } = await client
+    let query = client
       .from('asset_folders')
       .select('*')
       .eq('is_published', false)
-      .not('deleted_at', 'is', null)
-      .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+      .not('deleted_at', 'is', null);
+    query = (await applyProjectScopeToQuery(query, client, 'asset_folders', projectId)).query;
+    const { data, error } = await query.range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
 
     if (error) {
       throw new Error(`Failed to fetch deleted draft asset folders: ${error.message}`);
@@ -383,7 +388,7 @@ function hasAssetFolderChanged(draft: AssetFolder, published: AssetFolder): bool
 /**
  * Publish asset folders - copies draft to published, skipping unchanged folders
  */
-export async function publishAssetFolders(folderIds: string[]): Promise<{ count: number }> {
+export async function publishAssetFolders(folderIds: string[], projectId?: string | null): Promise<{ count: number }> {
   if (folderIds.length === 0) {
     return { count: 0 };
   }
@@ -399,12 +404,14 @@ export async function publishAssetFolders(folderIds: string[]): Promise<{ count:
   // Fetch draft folders in batches
   for (let i = 0; i < folderIds.length; i += SUPABASE_WRITE_BATCH_SIZE) {
     const batchIds = folderIds.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
-    const { data, error: fetchError } = await client
+    let draftFoldersQuery = client
       .from('asset_folders')
       .select('*')
       .in('id', batchIds)
       .eq('is_published', false)
       .is('deleted_at', null);
+    draftFoldersQuery = (await applyProjectScopeToQuery(draftFoldersQuery, client, 'asset_folders', projectId)).query;
+    const { data, error: fetchError } = await draftFoldersQuery;
 
     if (fetchError) {
       throw new Error(`Failed to fetch draft asset folders: ${fetchError.message}`);
@@ -426,11 +433,13 @@ export async function publishAssetFolders(folderIds: string[]): Promise<{ count:
   const publishedById = new Map<string, AssetFolder>();
   for (let i = 0; i < folderIds.length; i += SUPABASE_WRITE_BATCH_SIZE) {
     const batchIds = folderIds.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
-    const { data: existingPublished } = await client
+    let existingPublishedQuery = client
       .from('asset_folders')
       .select('*')
       .in('id', batchIds)
       .eq('is_published', true);
+    existingPublishedQuery = (await applyProjectScopeToQuery(existingPublishedQuery, client, 'asset_folders', projectId)).query;
+    const { data: existingPublished } = await existingPublishedQuery;
 
     existingPublished?.forEach(f => publishedById.set(f.id, f));
   }
@@ -438,6 +447,7 @@ export async function publishAssetFolders(folderIds: string[]): Promise<{ count:
   // Only publish folders that are new or changed
   const recordsToUpsert: any[] = [];
   const now = new Date().toISOString();
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'asset_folders', projectId);
 
   for (const draft of draftFolders) {
     const existing = publishedById.get(draft.id);
@@ -457,6 +467,7 @@ export async function publishAssetFolders(folderIds: string[]): Promise<{ count:
       created_at: draft.created_at,
       updated_at: now,
       deleted_at: null,
+      ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
     });
   }
 
@@ -484,7 +495,7 @@ export async function publishAssetFolders(folderIds: string[]): Promise<{ count:
 /**
  * Hard delete asset folders that were soft-deleted in drafts
  */
-export async function hardDeleteSoftDeletedAssetFolders(): Promise<{ count: number }> {
+export async function hardDeleteSoftDeletedAssetFolders(projectId?: string | null): Promise<{ count: number }> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -492,7 +503,7 @@ export async function hardDeleteSoftDeletedAssetFolders(): Promise<{ count: numb
   }
 
   // Get all soft-deleted draft folders
-  const deletedDrafts = await getDeletedDraftAssetFolders();
+  const deletedDrafts = await getDeletedDraftAssetFolders(projectId);
 
   if (deletedDrafts.length === 0) {
     return { count: 0 };
@@ -506,30 +517,38 @@ export async function hardDeleteSoftDeletedAssetFolders(): Promise<{ count: numb
     const batchIds = ids.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
 
     // Clear asset_folder_id on assets referencing these folders
-    await client
+    let clearPublishedAssetsQuery = client
       .from('assets')
       .update({ asset_folder_id: null })
       .in('asset_folder_id', batchIds)
       .eq('is_published', true);
+    clearPublishedAssetsQuery = (await applyProjectScopeToQuery(clearPublishedAssetsQuery, client, 'assets', projectId)).query;
+    await clearPublishedAssetsQuery;
 
-    await client
+    let clearDraftAssetsQuery = client
       .from('assets')
       .update({ asset_folder_id: null })
       .in('asset_folder_id', batchIds)
       .eq('is_published', false);
+    clearDraftAssetsQuery = (await applyProjectScopeToQuery(clearDraftAssetsQuery, client, 'assets', projectId)).query;
+    await clearDraftAssetsQuery;
 
     // Clear parent references on child asset_folders
-    await client
+    let clearPublishedChildFoldersQuery = client
       .from('asset_folders')
       .update({ asset_folder_id: null })
       .in('asset_folder_id', batchIds)
       .eq('is_published', true);
+    clearPublishedChildFoldersQuery = (await applyProjectScopeToQuery(clearPublishedChildFoldersQuery, client, 'asset_folders', projectId)).query;
+    await clearPublishedChildFoldersQuery;
 
-    await client
+    let clearDraftChildFoldersQuery = client
       .from('asset_folders')
       .update({ asset_folder_id: null })
       .in('asset_folder_id', batchIds)
       .eq('is_published', false);
+    clearDraftChildFoldersQuery = (await applyProjectScopeToQuery(clearDraftChildFoldersQuery, client, 'asset_folders', projectId)).query;
+    await clearDraftChildFoldersQuery;
   }
 
   // Delete published and draft versions in batches
@@ -537,23 +556,27 @@ export async function hardDeleteSoftDeletedAssetFolders(): Promise<{ count: numb
     const batchIds = ids.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
 
     // Delete published versions
-    const { error: deletePublishedError } = await client
+    let deletePublishedQuery = client
       .from('asset_folders')
       .delete()
       .in('id', batchIds)
       .eq('is_published', true);
+    deletePublishedQuery = (await applyProjectScopeToQuery(deletePublishedQuery, client, 'asset_folders', projectId)).query;
+    const { error: deletePublishedError } = await deletePublishedQuery;
 
     if (deletePublishedError) {
       console.error('Failed to delete published asset folders:', deletePublishedError);
     }
 
     // Delete soft-deleted draft versions
-    const { error: deleteDraftError } = await client
+    let deleteDraftQuery = client
       .from('asset_folders')
       .delete()
       .in('id', batchIds)
       .eq('is_published', false)
       .not('deleted_at', 'is', null);
+    deleteDraftQuery = (await applyProjectScopeToQuery(deleteDraftQuery, client, 'asset_folders', projectId)).query;
+    const { error: deleteDraftError } = await deleteDraftQuery;
 
     if (deleteDraftError) {
       throw new Error(`Failed to delete draft asset folders: ${deleteDraftError.message}`);

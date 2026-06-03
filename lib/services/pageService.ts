@@ -11,7 +11,7 @@ import { getKnexClient } from '../knex-client';
 import { getPublishedPagesByIds } from '@/lib/repositories/pageRepository';
 import { batchPublishPageLayers } from '@/lib/repositories/pageLayersRepository';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { isSharedDbProjectScopeRequired } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired, resolveProjectScopeForWrite } from '@/lib/project-scope';
 
 /**
  * Helper: Generate a unique slug from a page name
@@ -211,7 +211,7 @@ export interface PublishPagesResult {
  * @param pageIds - Array of draft page IDs to publish
  * @returns Object with count of published pages and timing stats
  */
-export async function publishPages(pageIds: string[]): Promise<PublishPagesResult> {
+export async function publishPages(pageIds: string[], projectId?: string | null): Promise<PublishPagesResult> {
   if (pageIds.length === 0) {
     return { count: 0, timing: { pagesDurationMs: 0, layersDurationMs: 0, layersCount: 0 } };
   }
@@ -228,12 +228,14 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
   }
 
   // Step 1: Batch fetch all draft pages in a single query
-  const { data: draftPagesData, error: pagesError } = await client
+  let draftPagesQuery = client
     .from('pages')
     .select('*')
     .in('id', pageIds)
     .eq('is_published', false)
     .is('deleted_at', null);
+  draftPagesQuery = (await applyProjectScopeToQuery(draftPagesQuery, client, 'pages', projectId)).query;
+  const { data: draftPagesData, error: pagesError } = await draftPagesQuery;
 
   if (pagesError) {
     throw new Error(`Failed to fetch draft pages: ${pagesError.message}`);
@@ -257,7 +259,7 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
   }
 
   // Step 3: Fetch all draft folders and build lookup map
-  const allDraftFolders = await getAllDraftPageFolders();
+  const allDraftFolders = await getAllDraftPageFolders(false, projectId);
   const draftFoldersById = new Map<string, typeof allDraftFolders[0]>();
   for (const folder of allDraftFolders) {
     draftFoldersById.set(folder.id, folder);
@@ -285,10 +287,10 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
 
   const [publishedFolders, publishedPages] = await Promise.all([
     folderIdsArray.length > 0
-      ? getPublishedPageFoldersByIds(folderIdsArray)
+      ? getPublishedPageFoldersByIds(folderIdsArray, projectId)
       : Promise.resolve([]),
     pageIdsArray.length > 0
-      ? getPublishedPagesByIds(pageIdsArray)
+      ? getPublishedPagesByIds(pageIdsArray, projectId)
       : Promise.resolve([]),
   ]);
 
@@ -313,6 +315,8 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
     .sort((a, b) => a.depth - b.depth);
 
   // Step 7: Publish folders using upsert
+  const foldersHaveProjectScope = await resolveProjectScopeForWrite(client, 'page_folders', projectId);
+  const pagesHaveProjectScope = await resolveProjectScopeForWrite(client, 'pages', projectId);
   const foldersToUpsert: any[] = [];
   
   // Track folders being published in this batch
@@ -344,6 +348,7 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
       settings: draftFolder.settings,
       is_published: true,
       updated_at: new Date().toISOString(),
+      ...(foldersHaveProjectScope && projectId ? { project_id: projectId } : {}),
     });
   }
 
@@ -397,6 +402,7 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
         content_hash: draftPage.content_hash,
         is_published: true,
         updated_at: new Date().toISOString(),
+        ...(pagesHaveProjectScope && projectId ? { project_id: projectId } : {}),
       });
     }
   }
@@ -420,13 +426,15 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
     }
 
     const slugsToCheck = [...new Set(nonDynamicPagesToUpsert.map((p) => p.slug))];
-    const { data: conflictingPublished } = await client
+    let conflictingPublishedQuery = client
       .from('pages')
       .select('id, slug, page_folder_id, error_page')
       .eq('is_published', true)
       .eq('is_dynamic', false)
       .is('deleted_at', null)
       .in('slug', slugsToCheck);
+    conflictingPublishedQuery = (await applyProjectScopeToQuery(conflictingPublishedQuery, client, 'pages', projectId)).query;
+    const { data: conflictingPublished } = await conflictingPublishedQuery;
 
     // Delete if a different page will occupy this slug/folder/error_page slot
     const idsToDelete = (conflictingPublished || [])
@@ -444,22 +452,26 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
       }
 
       // Delete page_layers first (FK constraint)
-      const { error: layersDeleteError } = await client
+      let layersDeleteQuery = client
         .from('page_layers')
         .delete()
         .eq('is_published', true)
         .in('page_id', idsToDelete);
+      layersDeleteQuery = (await applyProjectScopeToQuery(layersDeleteQuery, client, 'page_layers', projectId)).query;
+      const { error: layersDeleteError } = await layersDeleteQuery;
 
       if (layersDeleteError) {
         throw new Error(`Failed to remove conflicting published page layers: ${layersDeleteError.message}`);
       }
 
       // Then delete the pages
-      const { error: deleteError } = await client
+      let deletePagesQuery = client
         .from('pages')
         .delete()
         .eq('is_published', true)
         .in('id', idsToDelete);
+      deletePagesQuery = (await applyProjectScopeToQuery(deletePagesQuery, client, 'pages', projectId)).query;
+      const { error: deleteError } = await deletePagesQuery;
 
       if (deleteError) {
         throw new Error(`Failed to remove conflicting published pages: ${deleteError.message}`);
@@ -509,7 +521,7 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
 
   // Time layers publishing
   const layersStart = performance.now();
-  const layersCount = await batchPublishPageLayers(pageIdsForLayerPublish);
+  const layersCount = await batchPublishPageLayers(pageIdsForLayerPublish, projectId);
   const layersDurationMs = Math.round(performance.now() - layersStart);
 
   return {

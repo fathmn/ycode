@@ -165,7 +165,8 @@ export async function POST(request: NextRequest) {
       const stepStart = performance.now();
       const foldersResult = await publishFolders(
         isPublishingAll ? [] : (folderIds || []),
-        pageIds
+        pageIds,
+        projectId
       );
       result.changes.folders = foldersResult.count;
       stats.tables.page_folders.durationMs = Math.round(performance.now() - stepStart);
@@ -175,17 +176,17 @@ export async function POST(request: NextRequest) {
     // Publish pages
     {
       if (pageIds && pageIds.length > 0) {
-        const pagesResult = await publishPages(pageIds);
+        const pagesResult = await publishPages(pageIds, projectId);
         result.changes.pages = pagesResult.count;
         stats.tables.pages.added = pagesResult.count;
         stats.tables.pages.durationMs = pagesResult.timing.pagesDurationMs;
         stats.tables.page_layers.added = pagesResult.timing.layersCount;
         stats.tables.page_layers.durationMs = pagesResult.timing.layersDurationMs;
       } else if (isPublishingAll) {
-        const unpublishedPages = await getAllDraftPages();
+        const unpublishedPages = await getAllDraftPages(false, projectId);
         if (unpublishedPages.length > 0) {
           const allPageIds = unpublishedPages.map(p => p.id);
-          const pagesResult = await publishPages(allPageIds);
+          const pagesResult = await publishPages(allPageIds, projectId);
           result.changes.pages = pagesResult.count;
           stats.tables.pages.added = pagesResult.count;
           stats.tables.pages.durationMs = pagesResult.timing.pagesDurationMs;
@@ -291,14 +292,14 @@ export async function POST(request: NextRequest) {
     {
       const stepStart = performance.now();
       if (componentIds && componentIds.length > 0) {
-        const componentsResult = await publishComponents(componentIds);
+        const componentsResult = await publishComponents(componentIds, projectId);
         result.changes.components = componentsResult.count;
         stats.tables.components.added = componentsResult.count;
       } else if (isPublishingAll) {
-        const unpublishedComponents = await getUnpublishedComponents();
+        const unpublishedComponents = await getUnpublishedComponents(projectId);
         if (unpublishedComponents.length > 0) {
           const allComponentIds = unpublishedComponents.map((c: any) => c.id);
-          const componentsResult = await publishComponents(allComponentIds);
+          const componentsResult = await publishComponents(allComponentIds, projectId);
           result.changes.components = componentsResult.count;
           stats.tables.components.added = componentsResult.count;
         }
@@ -310,14 +311,14 @@ export async function POST(request: NextRequest) {
     {
       const stepStart = performance.now();
       if (layerStyleIds && layerStyleIds.length > 0) {
-        const stylesResult = await publishLayerStyles(layerStyleIds);
+        const stylesResult = await publishLayerStyles(layerStyleIds, projectId);
         result.changes.layerStyles = stylesResult.count;
         stats.tables.layer_styles.added = stylesResult.count;
       } else if (isPublishingAll) {
-        const unpublishedStyles = await getUnpublishedLayerStyles();
+        const unpublishedStyles = await getUnpublishedLayerStyles(projectId);
         if (unpublishedStyles.length > 0) {
           const allStyleIds = unpublishedStyles.map((s: any) => s.id);
-          const stylesResult = await publishLayerStyles(allStyleIds);
+          const stylesResult = await publishLayerStyles(allStyleIds, projectId);
           result.changes.layerStyles = stylesResult.count;
           stats.tables.layer_styles.added = stylesResult.count;
         }
@@ -330,19 +331,19 @@ export async function POST(request: NextRequest) {
       // Clean up soft-deleted pages, components, layer styles, and collections
       // (propagate draft deletions to published versions)
       try {
-        await hardDeleteSoftDeletedPages();
+        await hardDeleteSoftDeletedPages(projectId);
       } catch {
         // Non-fatal
       }
 
       try {
-        await hardDeleteSoftDeletedComponents();
+        await hardDeleteSoftDeletedComponents(projectId);
       } catch {
         // Non-fatal
       }
 
       try {
-        await hardDeleteSoftDeletedLayerStyles();
+        await hardDeleteSoftDeletedLayerStyles(projectId);
       } catch {
         // Non-fatal
       }
@@ -357,7 +358,7 @@ export async function POST(request: NextRequest) {
       {
         const stepStart = performance.now();
         try {
-          const deleteFoldersResult = await hardDeleteSoftDeletedAssetFolders();
+          const deleteFoldersResult = await hardDeleteSoftDeletedAssetFolders(projectId);
           result.changes.assetFoldersDeleted = deleteFoldersResult.count;
           stats.tables.asset_folders.deleted = deleteFoldersResult.count;
         } catch {
@@ -365,10 +366,10 @@ export async function POST(request: NextRequest) {
         }
 
         try {
-          const unpublishedFolders = await getUnpublishedAssetFolders();
+          const unpublishedFolders = await getUnpublishedAssetFolders(projectId);
           if (unpublishedFolders.length > 0) {
             const allFolderIds = unpublishedFolders.map((f: any) => f.id);
-            const foldersResult = await publishAssetFolders(allFolderIds);
+            const foldersResult = await publishAssetFolders(allFolderIds, projectId);
             result.changes.assetFolders = foldersResult.count;
             stats.tables.asset_folders.added = foldersResult.count;
           }
@@ -382,7 +383,7 @@ export async function POST(request: NextRequest) {
       {
         const stepStart = performance.now();
         try {
-          const deleteResult = await hardDeleteSoftDeletedAssets();
+          const deleteResult = await hardDeleteSoftDeletedAssets(projectId);
           result.changes.assetsDeleted = deleteResult.count;
           stats.tables.assets.deleted = deleteResult.count;
         } catch {
@@ -390,10 +391,10 @@ export async function POST(request: NextRequest) {
         }
 
         try {
-          const unpublishedAssets = await getUnpublishedAssets();
+          const unpublishedAssets = await getUnpublishedAssets(projectId);
           if (unpublishedAssets.length > 0) {
             const allAssetIds = unpublishedAssets.map((a: any) => a.id);
-            const assetsResult = await publishAssets(allAssetIds);
+            const assetsResult = await publishAssets(allAssetIds, projectId);
             result.changes.assets = assetsResult.count;
             stats.tables.assets.added = assetsResult.count;
           }
@@ -406,7 +407,7 @@ export async function POST(request: NextRequest) {
       // Fonts
       {
         try {
-          await publishFonts();
+          await publishFonts(projectId);
         } catch {
           // Non-fatal — fonts are best-effort during publish
         }
@@ -415,7 +416,7 @@ export async function POST(request: NextRequest) {
       // Locales and translations
       if (publishLocales) {
         try {
-          const localisationResult = await publishLocalisation();
+          const localisationResult = await publishLocalisation(projectId);
           result.changes.locales = localisationResult.locales;
           result.changes.translations = localisationResult.translations;
           stats.tables.locales.added = localisationResult.locales;

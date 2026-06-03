@@ -4,6 +4,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import type { Locale, Translation } from '@/types';
 
 export interface PublishLocalisationResult {
@@ -19,7 +20,7 @@ export interface PublishLocalisationResult {
  * Publish all draft locales and translations
  * Creates/updates published versions while keeping drafts unchanged
  */
-export async function publishLocalisation(): Promise<PublishLocalisationResult> {
+export async function publishLocalisation(projectId?: string | null): Promise<PublishLocalisationResult> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -36,10 +37,12 @@ export async function publishLocalisation(): Promise<PublishLocalisationResult> 
   const localesStart = performance.now();
 
   // Step 1: Fetch all draft locales (including soft-deleted)
-  const { data: allDraftLocales, error: localesError } = await client
+  let draftLocalesQuery = client
     .from('locales')
     .select('*')
     .eq('is_published', false);
+  draftLocalesQuery = (await applyProjectScopeToQuery(draftLocalesQuery, client, 'locales', projectId)).query;
+  const { data: allDraftLocales, error: localesError } = await draftLocalesQuery;
 
   if (localesError) {
     throw new Error(`Failed to fetch draft locales: ${localesError.message}`);
@@ -52,12 +55,14 @@ export async function publishLocalisation(): Promise<PublishLocalisationResult> 
     // Step 2: Soft-delete published versions of soft-deleted draft locales (single query)
     if (softDeletedDraftLocales.length > 0) {
       const localeIds = softDeletedDraftLocales.map((locale: Locale) => locale.id);
-      const { error: deleteLocalesError } = await client
+      let deleteLocalesQuery = client
         .from('locales')
         .update({ deleted_at: deletedAt })
         .in('id', localeIds)
         .eq('is_published', true)
         .is('deleted_at', null);
+      deleteLocalesQuery = (await applyProjectScopeToQuery(deleteLocalesQuery, client, 'locales', projectId)).query;
+      const { error: deleteLocalesError } = await deleteLocalesQuery;
 
       if (deleteLocalesError) {
         throw new Error(`Failed to soft-delete locales: ${deleteLocalesError.message}`);
@@ -67,17 +72,20 @@ export async function publishLocalisation(): Promise<PublishLocalisationResult> 
     // Step 3: Insert or update published locales
     if (activeDraftLocales.length > 0) {
       // First, fetch existing published locales to determine insert vs update
-      const { data: existingPublished } = await client
+      let existingPublishedQuery = client
         .from('locales')
         .select('id')
         .eq('is_published', true)
         .in('id', activeDraftLocales.map((l: Locale) => l.id));
+      existingPublishedQuery = (await applyProjectScopeToQuery(existingPublishedQuery, client, 'locales', projectId)).query;
+      const { data: existingPublished } = await existingPublishedQuery;
 
       const existingPublishedIds = new Set(existingPublished?.map(l => l.id) || []);
 
       const localesToInsert: any[] = [];
       const localesToUpdate: any[] = [];
 
+      const localesHaveProjectScope = await resolveProjectScopeForWrite(client, 'locales', projectId);
       for (const locale of activeDraftLocales) {
         const publishedData = {
           id: locale.id,
@@ -88,6 +96,7 @@ export async function publishLocalisation(): Promise<PublishLocalisationResult> 
           created_at: locale.created_at,
           updated_at: locale.updated_at,
           deleted_at: null,
+          ...(localesHaveProjectScope && projectId ? { project_id: projectId } : {}),
         };
 
         if (existingPublishedIds.has(locale.id)) {
@@ -132,10 +141,12 @@ export async function publishLocalisation(): Promise<PublishLocalisationResult> 
   const translationsStart = performance.now();
 
   // Step 4: Fetch all draft translations (including soft-deleted)
-  const { data: allDraftTranslations, error: translationsError } = await client
+  let draftTranslationsQuery = client
     .from('translations')
     .select('*')
     .eq('is_published', false);
+  draftTranslationsQuery = (await applyProjectScopeToQuery(draftTranslationsQuery, client, 'translations', projectId)).query;
+  const { data: allDraftTranslations, error: translationsError } = await draftTranslationsQuery;
 
   if (translationsError) {
     throw new Error(`Failed to fetch draft translations: ${translationsError.message}`);
@@ -148,12 +159,14 @@ export async function publishLocalisation(): Promise<PublishLocalisationResult> 
     // Step 5: Soft-delete published versions of soft-deleted draft translations (single query)
     if (softDeletedDraftTranslations.length > 0) {
       const translationIds = softDeletedDraftTranslations.map((translation: Translation) => translation.id);
-      const { error: deleteTranslationsError } = await client
+      let deleteTranslationsQuery = client
         .from('translations')
         .update({ deleted_at: deletedAt })
         .in('id', translationIds)
         .eq('is_published', true)
         .is('deleted_at', null);
+      deleteTranslationsQuery = (await applyProjectScopeToQuery(deleteTranslationsQuery, client, 'translations', projectId)).query;
+      const { error: deleteTranslationsError } = await deleteTranslationsQuery;
 
       if (deleteTranslationsError) {
         throw new Error(`Failed to soft-delete translations: ${deleteTranslationsError.message}`);
@@ -163,17 +176,20 @@ export async function publishLocalisation(): Promise<PublishLocalisationResult> 
     // Step 6: Insert or update published translations
     if (activeDraftTranslations.length > 0) {
       // First, fetch existing published translations to determine insert vs update
-      const { data: existingPublished } = await client
+      let existingPublishedQuery = client
         .from('translations')
         .select('id')
         .eq('is_published', true)
         .in('id', activeDraftTranslations.map((t: Translation) => t.id));
+      existingPublishedQuery = (await applyProjectScopeToQuery(existingPublishedQuery, client, 'translations', projectId)).query;
+      const { data: existingPublished } = await existingPublishedQuery;
 
       const existingPublishedIds = new Set(existingPublished?.map(t => t.id) || []);
 
       const translationsToInsert: any[] = [];
       const translationsToUpdate: any[] = [];
 
+      const translationsHaveProjectScope = await resolveProjectScopeForWrite(client, 'translations', projectId);
       for (const translation of activeDraftTranslations) {
         const publishedData = {
           id: translation.id,
@@ -188,6 +204,7 @@ export async function publishLocalisation(): Promise<PublishLocalisationResult> 
           created_at: translation.created_at,
           updated_at: translation.updated_at,
           deleted_at: null,
+          ...(translationsHaveProjectScope && projectId ? { project_id: projectId } : {}),
         };
 
         if (existingPublishedIds.has(translation.id)) {

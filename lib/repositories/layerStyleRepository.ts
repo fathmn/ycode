@@ -6,7 +6,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import type { LayerStyle, Layer } from '@/types';
 import { generateLayerStyleContentHash } from '../hash-utils';
 
@@ -278,7 +278,7 @@ export async function publishLayerStyle(draftStyleId: string): Promise<LayerStyl
  * Publish multiple layer styles in batch
  * Uses batch upsert for efficiency
  */
-export async function publishLayerStyles(styleIds: string[]): Promise<{ count: number }> {
+export async function publishLayerStyles(styleIds: string[], projectId?: string | null): Promise<{ count: number }> {
   if (styleIds.length === 0) {
     return { count: 0 };
   }
@@ -289,11 +289,13 @@ export async function publishLayerStyles(styleIds: string[]): Promise<{ count: n
   }
 
   // Batch fetch all draft styles
-  const { data: draftStyles, error: fetchError } = await client
+  let draftStylesQuery = client
     .from('layer_styles')
     .select('*')
     .in('id', styleIds)
     .eq('is_published', false);
+  draftStylesQuery = (await applyProjectScopeToQuery(draftStylesQuery, client, 'layer_styles', projectId)).query;
+  const { data: draftStyles, error: fetchError } = await draftStylesQuery;
 
   if (fetchError) {
     throw new Error(`Failed to fetch draft layer styles: ${fetchError.message}`);
@@ -304,6 +306,7 @@ export async function publishLayerStyles(styleIds: string[]): Promise<{ count: n
   }
 
   // Prepare styles for batch upsert
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'layer_styles', projectId);
   const stylesToUpsert = draftStyles.map(draft => ({
     id: draft.id,
     name: draft.name,
@@ -313,6 +316,7 @@ export async function publishLayerStyles(styleIds: string[]): Promise<{ count: n
     content_hash: draft.content_hash,
     is_published: true,
     updated_at: new Date().toISOString(),
+    ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
   }));
 
   // Batch upsert all styles
@@ -335,18 +339,20 @@ export async function publishLayerStyles(styleIds: string[]): Promise<{ count: n
  * - It has is_published: false (never published), OR
  * - Its draft content_hash differs from published content_hash (needs republishing)
  */
-export async function getUnpublishedLayerStyles(): Promise<LayerStyle[]> {
+export async function getUnpublishedLayerStyles(projectId?: string | null): Promise<LayerStyle[]> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
 
   // Get all draft layer styles
-  const { data: draftStyles, error } = await client
+  let draftStylesQuery = client
     .from('layer_styles')
     .select('*')
     .eq('is_published', false)
     .order('created_at', { ascending: false });
+  draftStylesQuery = (await applyProjectScopeToQuery(draftStylesQuery, client, 'layer_styles', projectId)).query;
+  const { data: draftStyles, error } = await draftStylesQuery;
 
   if (error) {
     throw new Error(`Failed to fetch draft layer styles: ${error.message}`);
@@ -360,11 +366,13 @@ export async function getUnpublishedLayerStyles(): Promise<LayerStyle[]> {
 
   // Batch fetch all published styles for the draft IDs
   const draftIds = draftStyles.map(s => s.id);
-  const { data: publishedStyles, error: publishedError } = await client
+  let publishedStylesQuery = client
     .from('layer_styles')
     .select('*')
     .in('id', draftIds)
     .eq('is_published', true);
+  publishedStylesQuery = (await applyProjectScopeToQuery(publishedStylesQuery, client, 'layer_styles', projectId)).query;
+  const { data: publishedStyles, error: publishedError } = await publishedStylesQuery;
 
   if (publishedError) {
     throw new Error(`Failed to fetch published layer styles: ${publishedError.message}`);
@@ -397,17 +405,19 @@ export async function getUnpublishedLayerStyles(): Promise<LayerStyle[]> {
 /**
  * Hard-delete soft-deleted draft layer styles and their published counterparts.
  */
-export async function hardDeleteSoftDeletedLayerStyles(): Promise<{ count: number }> {
+export async function hardDeleteSoftDeletedLayerStyles(projectId?: string | null): Promise<{ count: number }> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
 
-  const { data: deletedDrafts, error } = await client
+  let deletedDraftsQuery = client
     .from('layer_styles')
     .select('id')
     .eq('is_published', false)
     .not('deleted_at', 'is', null);
+  deletedDraftsQuery = (await applyProjectScopeToQuery(deletedDraftsQuery, client, 'layer_styles', projectId)).query;
+  const { data: deletedDrafts, error } = await deletedDraftsQuery;
 
   if (error) {
     throw new Error(`Failed to fetch deleted draft layer styles: ${error.message}`);
@@ -419,22 +429,26 @@ export async function hardDeleteSoftDeletedLayerStyles(): Promise<{ count: numbe
 
   const ids = deletedDrafts.map(s => s.id);
 
-  const { error: pubError } = await client
+  let pubDeleteQuery = client
     .from('layer_styles')
     .delete()
     .in('id', ids)
     .eq('is_published', true);
+  pubDeleteQuery = (await applyProjectScopeToQuery(pubDeleteQuery, client, 'layer_styles', projectId)).query;
+  const { error: pubError } = await pubDeleteQuery;
 
   if (pubError) {
     console.error('Failed to delete published layer styles:', pubError);
   }
 
-  const { error: draftError } = await client
+  let draftDeleteQuery = client
     .from('layer_styles')
     .delete()
     .in('id', ids)
     .eq('is_published', false)
     .not('deleted_at', 'is', null);
+  draftDeleteQuery = (await applyProjectScopeToQuery(draftDeleteQuery, client, 'layer_styles', projectId)).query;
+  const { error: draftError } = await draftDeleteQuery;
 
   if (draftError) {
     throw new Error(`Failed to delete draft layer styles: ${draftError.message}`);

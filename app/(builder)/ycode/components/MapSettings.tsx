@@ -11,6 +11,7 @@ import { studioFetch } from '@/lib/api';
 
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
@@ -39,6 +40,7 @@ import {
   getProviderConfig,
 } from '@/lib/map-utils';
 import { useDebounce } from '@/hooks/use-debounce';
+import { studioProjectPathSlugFromPathname, studioProjectRoutePathFromSlug } from '@/lib/studio-project-path';
 import type { Layer, MapSettings as MapSettingsType, MapProvider, MapProviderSettings } from '@/types';
 
 type SearchResult = { place_name: string; center: [number, number] };
@@ -55,6 +57,8 @@ interface MapSettingsProps {
 }
 
 export default function MapSettings({ layer, onLayerUpdate }: MapSettingsProps) {
+  const pathname = usePathname();
+  const projectPathSlug = studioProjectPathSlugFromPathname(pathname);
   const [isOpen, setIsOpen] = useState(true);
   const mapSettings = useMemo(
     () => ({
@@ -261,7 +265,7 @@ export default function MapSettings({ layer, onLayerUpdate }: MapSettingsProps) 
                   variant={hasToken ? 'secondary' : 'default'}
                   className="shrink-0"
                 >
-                  <Link href={`/ycode/integrations/apps?type=maps&app=${providerConfig.appId}`}>
+                  <Link href={studioProjectRoutePathFromSlug(projectPathSlug, `/ycode/integrations/apps?type=maps&app=${providerConfig.appId}`)}>
                     <Icon name="settings" />
                   </Link>
                 </Button>

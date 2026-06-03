@@ -1,5 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import { SUPABASE_QUERY_LIMIT, SUPABASE_WRITE_BATCH_SIZE } from '@/lib/supabase-constants';
 import { cleanupOrphanedStorageFiles } from '@/lib/storage-utils';
 import { generateFontContentHash } from '@/lib/hash-utils';
@@ -225,7 +225,7 @@ export async function getUnpublishedFonts(): Promise<Font[]> {
 /**
  * Publish all draft fonts to production
  */
-export async function publishFonts(): Promise<{ added: number; updated: number; deleted: number }> {
+export async function publishFonts(projectId?: string | null): Promise<{ added: number; updated: number; deleted: number }> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -235,20 +235,24 @@ export async function publishFonts(): Promise<{ added: number; updated: number; 
   const stats = { added: 0, updated: 0, deleted: 0 };
 
   // Get all draft fonts
-  const { data: draftFonts, error: draftError } = await client
+  let draftFontsQuery = client
     .from('fonts')
     .select('*')
     .eq('is_published', false)
     .limit(SUPABASE_QUERY_LIMIT);
+  draftFontsQuery = (await applyProjectScopeToQuery(draftFontsQuery, client, 'fonts', projectId)).query;
+  const { data: draftFonts, error: draftError } = await draftFontsQuery;
 
   if (draftError) throw new Error(`Failed to fetch draft fonts: ${draftError.message}`);
 
   // Get all published fonts
-  const { data: publishedFonts, error: publishedError } = await client
+  let publishedFontsQuery = client
     .from('fonts')
     .select('*')
     .eq('is_published', true)
     .limit(SUPABASE_QUERY_LIMIT);
+  publishedFontsQuery = (await applyProjectScopeToQuery(publishedFontsQuery, client, 'fonts', projectId)).query;
+  const { data: publishedFonts, error: publishedError } = await publishedFontsQuery;
 
   if (publishedError) throw new Error(`Failed to fetch published fonts: ${publishedError.message}`);
 
@@ -256,6 +260,7 @@ export async function publishFonts(): Promise<{ added: number; updated: number; 
 
   // Fonts to upsert (new or changed)
   const toUpsert: Record<string, unknown>[] = [];
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'fonts', projectId);
 
   for (const draft of draftFonts || []) {
     if (draft.deleted_at) {
@@ -294,6 +299,7 @@ export async function publishFonts(): Promise<{ added: number; updated: number; 
       created_at: draft.created_at,
       updated_at: new Date().toISOString(),
       deleted_at: null,
+      ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
     });
   }
 
@@ -313,22 +319,26 @@ export async function publishFonts(): Promise<{ added: number; updated: number; 
 
   if (deletedDraftIds.length > 0) {
     // Delete from published
-    const { error: deletePublishedError } = await client
+    let deletePublishedQuery = client
       .from('fonts')
       .delete()
       .in('id', deletedDraftIds)
       .eq('is_published', true);
+    deletePublishedQuery = (await applyProjectScopeToQuery(deletePublishedQuery, client, 'fonts', projectId)).query;
+    const { error: deletePublishedError } = await deletePublishedQuery;
 
     if (deletePublishedError) {
       throw new Error(`Failed to delete published fonts: ${deletePublishedError.message}`);
     }
 
     // Hard-delete from draft
-    const { error: deleteDraftError } = await client
+    let deleteDraftQuery = client
       .from('fonts')
       .delete()
       .in('id', deletedDraftIds)
       .eq('is_published', false);
+    deleteDraftQuery = (await applyProjectScopeToQuery(deleteDraftQuery, client, 'fonts', projectId)).query;
+    const { error: deleteDraftError } = await deleteDraftQuery;
 
     if (deleteDraftError) {
       throw new Error(`Failed to hard-delete draft fonts: ${deleteDraftError.message}`);
@@ -344,11 +354,13 @@ export async function publishFonts(): Promise<{ added: number; updated: number; 
 
   if (orphanedPublished.length > 0) {
     const orphanIds = orphanedPublished.map(f => f.id);
-    const { error } = await client
+    let orphanDeleteQuery = client
       .from('fonts')
       .delete()
       .in('id', orphanIds)
       .eq('is_published', true);
+    orphanDeleteQuery = (await applyProjectScopeToQuery(orphanDeleteQuery, client, 'fonts', projectId)).query;
+    const { error } = await orphanDeleteQuery;
 
     if (error) throw new Error(`Failed to delete orphaned published fonts: ${error.message}`);
     stats.deleted += orphanedPublished.length;

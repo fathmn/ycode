@@ -263,7 +263,7 @@ export async function getAllDraftLayers(projectId?: string | null): Promise<Page
  * Get all draft layers for multiple pages
  * Used for batch publishing optimization
  */
-export async function getDraftLayersForPages(pageIds: string[]): Promise<PageLayers[]> {
+export async function getDraftLayersForPages(pageIds: string[], projectId?: string | null): Promise<PageLayers[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -274,13 +274,14 @@ export async function getDraftLayersForPages(pageIds: string[]): Promise<PageLay
     return [];
   }
 
-  const { data, error } = await client
+  let query = client
     .from('page_layers')
     .select('*')
     .in('page_id', pageIds)
     .eq('is_published', false)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: false });
+    .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'page_layers', projectId)).query;
+  const { data, error } = await query.order('created_at', { ascending: false });
 
   if (error) {
     throw new Error(`Failed to fetch draft layers: ${error.message}`);
@@ -293,7 +294,7 @@ export async function getDraftLayersForPages(pageIds: string[]): Promise<PageLay
  * Get published layers by IDs
  * Used for batch publishing optimization
  */
-export async function getPublishedLayersByIds(ids: string[]): Promise<PageLayers[]> {
+export async function getPublishedLayersByIds(ids: string[], projectId?: string | null): Promise<PageLayers[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -304,12 +305,14 @@ export async function getPublishedLayersByIds(ids: string[]): Promise<PageLayers
     return [];
   }
 
-  const { data, error } = await client
+  let query = client
     .from('page_layers')
     .select('*')
     .in('id', ids)
     .eq('is_published', true)
     .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'page_layers', projectId)).query;
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch published layers: ${error.message}`);
@@ -431,7 +434,7 @@ export async function publishPageLayers(draftPageId: string, publishedPageId: st
  * @param pageIds - Array of page IDs to publish layers for
  * @returns Number of layers published
  */
-export async function batchPublishPageLayers(pageIds: string[]): Promise<number> {
+export async function batchPublishPageLayers(pageIds: string[], projectId?: string | null): Promise<number> {
   if (pageIds.length === 0) {
     return 0;
   }
@@ -443,7 +446,7 @@ export async function batchPublishPageLayers(pageIds: string[]): Promise<number>
   }
 
   // Step 1: Batch fetch all draft layers
-  const draftLayers = await getDraftLayersForPages(pageIds);
+  const draftLayers = await getDraftLayersForPages(pageIds, projectId);
 
   if (draftLayers.length === 0) {
     return 0;
@@ -457,7 +460,7 @@ export async function batchPublishPageLayers(pageIds: string[]): Promise<number>
 
   // Step 2: Batch fetch existing published layers
   const draftIds = draftLayers.map(d => d.id);
-  const existingPublished = await getPublishedLayersByIds(draftIds);
+  const existingPublished = await getPublishedLayersByIds(draftIds, projectId);
 
   const publishedById = new Map<string, PageLayers>();
   for (const pub of existingPublished) {
@@ -467,6 +470,7 @@ export async function batchPublishPageLayers(pageIds: string[]): Promise<number>
   // Step 3: Prepare upsert data
   const layersToUpsert: any[] = [];
   const now = new Date().toISOString();
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'page_layers', projectId);
 
   for (const draft of draftLayers) {
     const existing = publishedById.get(draft.id);
@@ -480,6 +484,7 @@ export async function batchPublishPageLayers(pageIds: string[]): Promise<number>
         content_hash: draft.content_hash,
         is_published: true,
         updated_at: now,
+        ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
       });
     }
   }

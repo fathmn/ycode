@@ -7,7 +7,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import type { Component, Layer } from '@/types';
 import { generateComponentContentHash } from '../hash-utils';
 import { deleteTranslationsInBulk, markTranslationsIncomplete } from '@/lib/repositories/translationRepository';
@@ -299,7 +299,7 @@ export async function publishComponent(draftComponentId: string): Promise<Compon
  * Publish multiple components in batch
  * Uses batch upsert for efficiency
  */
-export async function publishComponents(componentIds: string[]): Promise<{ count: number }> {
+export async function publishComponents(componentIds: string[], projectId?: string | null): Promise<{ count: number }> {
   if (componentIds.length === 0) {
     return { count: 0 };
   }
@@ -310,12 +310,14 @@ export async function publishComponents(componentIds: string[]): Promise<{ count
   }
 
   // Batch fetch all draft components (excluding soft deleted)
-  const { data: draftComponents, error: fetchError } = await client
+  let draftComponentsQuery = client
     .from('components')
     .select('*')
     .in('id', componentIds)
     .eq('is_published', false)
     .is('deleted_at', null);
+  draftComponentsQuery = (await applyProjectScopeToQuery(draftComponentsQuery, client, 'components', projectId)).query;
+  const { data: draftComponents, error: fetchError } = await draftComponentsQuery;
 
   if (fetchError) {
     throw new Error(`Failed to fetch draft components: ${fetchError.message}`);
@@ -326,6 +328,7 @@ export async function publishComponents(componentIds: string[]): Promise<{ count
   }
 
   // Prepare components for batch upsert
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'components', projectId);
   const componentsToUpsert = draftComponents.map(draft => ({
     id: draft.id,
     name: draft.name,
@@ -334,6 +337,7 @@ export async function publishComponents(componentIds: string[]): Promise<{ count
     content_hash: draft.content_hash,
     is_published: true,
     updated_at: new Date().toISOString(),
+    ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
   }));
 
   // Batch upsert all components
@@ -356,19 +360,21 @@ export async function publishComponents(componentIds: string[]): Promise<{ count
  * - It has is_published: false (never published), OR
  * - Its draft content_hash differs from published content_hash (needs republishing)
  */
-export async function getUnpublishedComponents(): Promise<Component[]> {
+export async function getUnpublishedComponents(projectId?: string | null): Promise<Component[]> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
 
   // Get all draft components (excluding soft deleted)
-  const { data: draftComponents, error } = await client
+  let draftComponentsQuery = client
     .from('components')
     .select('*')
     .eq('is_published', false)
     .is('deleted_at', null)
     .order('created_at', { ascending: false });
+  draftComponentsQuery = (await applyProjectScopeToQuery(draftComponentsQuery, client, 'components', projectId)).query;
+  const { data: draftComponents, error } = await draftComponentsQuery;
 
   if (error) {
     throw new Error(`Failed to fetch draft components: ${error.message}`);
@@ -382,11 +388,13 @@ export async function getUnpublishedComponents(): Promise<Component[]> {
 
   // Batch fetch all published components for the draft IDs
   const draftIds = draftComponents.map(c => c.id);
-  const { data: publishedComponents, error: publishedError } = await client
+  let publishedComponentsQuery = client
     .from('components')
     .select('*')
     .in('id', draftIds)
     .eq('is_published', true);
+  publishedComponentsQuery = (await applyProjectScopeToQuery(publishedComponentsQuery, client, 'components', projectId)).query;
+  const { data: publishedComponents, error: publishedError } = await publishedComponentsQuery;
 
   if (publishedError) {
     throw new Error(`Failed to fetch published components: ${publishedError.message}`);
@@ -419,17 +427,19 @@ export async function getUnpublishedComponents(): Promise<Component[]> {
 /**
  * Hard-delete soft-deleted draft components and their published counterparts.
  */
-export async function hardDeleteSoftDeletedComponents(): Promise<{ count: number }> {
+export async function hardDeleteSoftDeletedComponents(projectId?: string | null): Promise<{ count: number }> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
 
-  const { data: deletedDrafts, error } = await client
+  let deletedDraftsQuery = client
     .from('components')
     .select('id')
     .eq('is_published', false)
     .not('deleted_at', 'is', null);
+  deletedDraftsQuery = (await applyProjectScopeToQuery(deletedDraftsQuery, client, 'components', projectId)).query;
+  const { data: deletedDrafts, error } = await deletedDraftsQuery;
 
   if (error) {
     throw new Error(`Failed to fetch deleted draft components: ${error.message}`);
@@ -441,22 +451,26 @@ export async function hardDeleteSoftDeletedComponents(): Promise<{ count: number
 
   const ids = deletedDrafts.map(c => c.id);
 
-  const { error: pubError } = await client
+  let pubDeleteQuery = client
     .from('components')
     .delete()
     .in('id', ids)
     .eq('is_published', true);
+  pubDeleteQuery = (await applyProjectScopeToQuery(pubDeleteQuery, client, 'components', projectId)).query;
+  const { error: pubError } = await pubDeleteQuery;
 
   if (pubError) {
     console.error('Failed to delete published components:', pubError);
   }
 
-  const { error: draftError } = await client
+  let draftDeleteQuery = client
     .from('components')
     .delete()
     .in('id', ids)
     .eq('is_published', false)
     .not('deleted_at', 'is', null);
+  draftDeleteQuery = (await applyProjectScopeToQuery(draftDeleteQuery, client, 'components', projectId)).query;
+  const { error: draftError } = await draftDeleteQuery;
 
   if (draftError) {
     throw new Error(`Failed to delete draft components: ${draftError.message}`);

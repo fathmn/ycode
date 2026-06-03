@@ -8,12 +8,14 @@ import { studioFetch } from '@/lib/api';
  */
 
 import React, { useState, useCallback, useEffect } from 'react';
+import { usePathname } from 'next/navigation';
 
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import SettingsPanel from './SettingsPanel';
 import LinkSettings from './LinkSettings';
+import { studioProjectPathSlugFromPathname, studioProjectRoutePathFromSlug } from '@/lib/studio-project-path';
 import type { Layer, FormSettings as FormSettingsType, LinkSettingsValue } from '@/types';
 
 interface FormSettingsProps {
@@ -27,6 +29,8 @@ const isValidEmail = (email: string): boolean => {
 };
 
 export default function FormSettings({ layer, onLayerUpdate }: FormSettingsProps) {
+  const pathname = usePathname();
+  const projectPathSlug = studioProjectPathSlugFromPathname(pathname);
   const [isOpen, setIsOpen] = useState(true);
   const [emailOpen, setEmailOpen] = useState(false);
   const [isSmtpEnabled, setIsSmtpEnabled] = useState<boolean | null>(null);
@@ -204,7 +208,7 @@ export default function FormSettings({ layer, onLayerUpdate }: FormSettingsProps
     >
       {!isSmtpEnabled && isSmtpEnabled !== null && (
         <div className="text-xs text-muted-foreground text-center py-4">
-          Configure <a href="/ycode/settings/email" className="underline hover:text-foreground">Email in Settings</a> to use email notifications.
+          Configure <a href={studioProjectRoutePathFromSlug(projectPathSlug, '/ycode/settings/email')} className="underline hover:text-foreground">Email in Settings</a> to use email notifications.
         </div>
       )}
 

@@ -64,7 +64,7 @@ export async function getAllCollections(filters?: QueryFilters, projectId?: stri
 
   // When fetching draft collections, batch-check which ones have a published version
   const publishedIds = !isPublished && draftIds.length > 0
-    ? await getPublishedCollectionIds(draftIds)
+    ? await getPublishedCollectionIds(draftIds, projectId)
     : new Set<string>();
 
   // Process the data to add draft_items_count and has_published_version
@@ -89,7 +89,10 @@ export async function getAllCollections(filters?: QueryFilters, projectId?: stri
  * Batch-check which collection IDs have a published version.
  * Returns a Set of IDs that have is_published=true rows.
  */
-export async function getPublishedCollectionIds(collectionIds: string[]): Promise<Set<string>> {
+export async function getPublishedCollectionIds(
+  collectionIds: string[],
+  projectId?: string | null
+): Promise<Set<string>> {
   if (collectionIds.length === 0) return new Set();
 
   const client = await getSupabaseAdmin();
@@ -98,12 +101,14 @@ export async function getPublishedCollectionIds(collectionIds: string[]): Promis
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('collections')
     .select('id')
     .in('id', collectionIds)
     .eq('is_published', true)
     .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'collections', projectId)).query;
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to check published collections: ${error.message}`);
@@ -423,7 +428,7 @@ function hasCollectionChanged(draft: Collection, published: Collection): boolean
  * A collection needs publishing if no published version exists or draft data differs.
  * Uses batch query instead of N+1.
  */
-export async function getUnpublishedCollections(): Promise<Collection[]> {
+export async function getUnpublishedCollections(projectId?: string | null): Promise<Collection[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -431,7 +436,7 @@ export async function getUnpublishedCollections(): Promise<Collection[]> {
   }
 
   // Get all draft collections
-  const draftCollections = await getAllCollections({ is_published: false });
+  const draftCollections = await getAllCollections({ is_published: false }, projectId);
 
   if (draftCollections.length === 0) {
     return [];
@@ -439,11 +444,13 @@ export async function getUnpublishedCollections(): Promise<Collection[]> {
 
   // Batch fetch all published collections for comparison
   const draftIds = draftCollections.map(c => c.id);
-  const { data: publishedCollections, error: publishedError } = await client
+  let publishedCollectionsQuery = client
     .from('collections')
     .select('*')
     .in('id', draftIds)
     .eq('is_published', true);
+  publishedCollectionsQuery = (await applyProjectScopeToQuery(publishedCollectionsQuery, client, 'collections', projectId)).query;
+  const { data: publishedCollections, error: publishedError } = await publishedCollectionsQuery;
 
   if (publishedError) {
     throw new Error(`Failed to fetch published collections: ${publishedError.message}`);

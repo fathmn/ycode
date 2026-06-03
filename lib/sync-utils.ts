@@ -7,6 +7,7 @@
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT, SUPABASE_WRITE_BATCH_SIZE } from '@/lib/supabase-constants';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 
 /** Direction of the sync operation */
 export type SyncDirection = 'publish' | 'revert';
@@ -326,16 +327,18 @@ export async function cleanupOrphanedChildRows(
  * Count soft-deleted draft rows that still have a published counterpart.
  * Works for any table with (id, is_published, deleted_at) columns.
  */
-export async function getDeletedDraftCount(tableName: string): Promise<number> {
+export async function getDeletedDraftCount(tableName: string, projectId?: string | null): Promise<number> {
   const client = await getSupabaseAdmin();
   if (!client) throw new Error('Supabase not configured');
 
-  const { data: deletedDrafts, error: draftError } = await client
+  let deletedDraftsQuery = client
     .from(tableName)
     .select('id')
     .eq('is_published', false)
     .not('deleted_at', 'is', null)
     .limit(SUPABASE_QUERY_LIMIT);
+  deletedDraftsQuery = (await applyProjectScopeToQuery(deletedDraftsQuery, client, tableName, projectId)).query;
+  const { data: deletedDrafts, error: draftError } = await deletedDraftsQuery;
 
   if (draftError) {
     throw new Error(`Failed to fetch deleted drafts from ${tableName}: ${draftError.message}`);
@@ -343,11 +346,13 @@ export async function getDeletedDraftCount(tableName: string): Promise<number> {
 
   if (!deletedDrafts || deletedDrafts.length === 0) return 0;
 
-  const { count, error: pubError } = await client
+  let publishedCountQuery = client
     .from(tableName)
     .select('id', { count: 'exact', head: true })
     .in('id', deletedDrafts.map(d => d.id))
     .eq('is_published', true);
+  publishedCountQuery = (await applyProjectScopeToQuery(publishedCountQuery, client, tableName, projectId)).query;
+  const { count, error: pubError } = await publishedCountQuery;
 
   if (pubError) {
     throw new Error(`Failed to count published rows pending deletion in ${tableName}: ${pubError.message}`);

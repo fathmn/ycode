@@ -1237,18 +1237,20 @@ export async function publishItem(id: string): Promise<CollectionItem> {
  * Get total count of collection items needing publishing across all collections.
  * Checks both metadata (manual_order) and value changes.
  */
-export async function getTotalPublishableItemsCount(): Promise<number> {
+export async function getTotalPublishableItemsCount(projectId?: string | null): Promise<number> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { data: collections, error: collectionsError } = await client
+  let collectionsQuery = client
     .from('collections')
     .select('id')
     .eq('is_published', false)
     .is('deleted_at', null);
+  collectionsQuery = (await applyProjectScopeToQuery(collectionsQuery, client, 'collections', projectId)).query;
+  const { data: collections, error: collectionsError } = await collectionsQuery;
 
   if (collectionsError) {
     throw new Error(`Failed to fetch collections: ${collectionsError.message}`);
@@ -1260,19 +1262,25 @@ export async function getTotalPublishableItemsCount(): Promise<number> {
 
   const collectionIds = collections.map(c => c.id);
 
+  let draftItemsQuery = client
+    .from('collection_items')
+    .select('id, manual_order')
+    .in('collection_id', collectionIds)
+    .eq('is_published', false)
+    .eq('is_publishable', true)
+    .is('deleted_at', null);
+  draftItemsQuery = (await applyProjectScopeToQuery(draftItemsQuery, client, 'collection_items', projectId)).query;
+
+  let publishedItemsQuery = client
+    .from('collection_items')
+    .select('id, manual_order')
+    .in('collection_id', collectionIds)
+    .eq('is_published', true);
+  publishedItemsQuery = (await applyProjectScopeToQuery(publishedItemsQuery, client, 'collection_items', projectId)).query;
+
   const [draftResult, publishedResult] = await Promise.all([
-    client
-      .from('collection_items')
-      .select('id, manual_order')
-      .in('collection_id', collectionIds)
-      .eq('is_published', false)
-      .eq('is_publishable', true)
-      .is('deleted_at', null),
-    client
-      .from('collection_items')
-      .select('id, manual_order')
-      .in('collection_id', collectionIds)
-      .eq('is_published', true),
+    draftItemsQuery,
+    publishedItemsQuery,
   ]);
 
   if (draftResult.error) {
@@ -1299,7 +1307,7 @@ export async function getTotalPublishableItemsCount(): Promise<number> {
 
   // For items with matching metadata, check value changes in batches
   if (matchingOrderItemIds.length > 0) {
-    count += await countItemsWithValueChanges(client, matchingOrderItemIds);
+    count += await countItemsWithValueChanges(client, matchingOrderItemIds, projectId);
   }
 
   return count;
@@ -1311,7 +1319,8 @@ export async function getTotalPublishableItemsCount(): Promise<number> {
  */
 async function countItemsWithValueChanges(
   client: Exclude<Awaited<ReturnType<typeof getSupabaseAdmin>>, null>,
-  itemIds: string[]
+  itemIds: string[],
+  projectId?: string | null
 ): Promise<number> {
   const BATCH_SIZE = 50;
   let changedCount = 0;
@@ -1319,21 +1328,27 @@ async function countItemsWithValueChanges(
   for (let i = 0; i < itemIds.length; i += BATCH_SIZE) {
     const batchIds = itemIds.slice(i, i + BATCH_SIZE);
 
+    let draftValuesQuery = client
+      .from('collection_item_values')
+      .select('item_id, field_id, value')
+      .in('item_id', batchIds)
+      .eq('is_published', false)
+      .is('deleted_at', null)
+      .limit(SUPABASE_QUERY_LIMIT);
+    draftValuesQuery = (await applyProjectScopeToQuery(draftValuesQuery, client, 'collection_item_values', projectId)).query;
+
+    let publishedValuesQuery = client
+      .from('collection_item_values')
+      .select('item_id, field_id, value')
+      .in('item_id', batchIds)
+      .eq('is_published', true)
+      .is('deleted_at', null)
+      .limit(SUPABASE_QUERY_LIMIT);
+    publishedValuesQuery = (await applyProjectScopeToQuery(publishedValuesQuery, client, 'collection_item_values', projectId)).query;
+
     const [draftValsResult, pubValsResult] = await Promise.all([
-      client
-        .from('collection_item_values')
-        .select('item_id, field_id, value')
-        .in('item_id', batchIds)
-        .eq('is_published', false)
-        .is('deleted_at', null)
-        .limit(SUPABASE_QUERY_LIMIT),
-      client
-        .from('collection_item_values')
-        .select('item_id, field_id, value')
-        .in('item_id', batchIds)
-        .eq('is_published', true)
-        .is('deleted_at', null)
-        .limit(SUPABASE_QUERY_LIMIT),
+      draftValuesQuery,
+      publishedValuesQuery,
     ]);
 
     if (draftValsResult.error || pubValsResult.error) {

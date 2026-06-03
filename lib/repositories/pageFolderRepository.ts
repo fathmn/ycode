@@ -671,7 +671,7 @@ export async function getPublishedPageFolderById(id: string): Promise<PageFolder
  * Get all draft page folders (is_published = false)
  * @param includeSoftDeleted - Include soft-deleted folders
  */
-export async function getAllDraftPageFolders(includeSoftDeleted = false): Promise<PageFolder[]> {
+export async function getAllDraftPageFolders(includeSoftDeleted = false, projectId?: string | null): Promise<PageFolder[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -686,6 +686,7 @@ export async function getAllDraftPageFolders(includeSoftDeleted = false): Promis
   if (!includeSoftDeleted) {
     query = query.is('deleted_at', null);
   }
+  query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
 
   const { data, error } = await query.order('order', { ascending: true });
 
@@ -731,7 +732,7 @@ export async function getAllPublishedPageFolders(includeSoftDeleted = false): Pr
  * Get published page folders by IDs
  * Fetches multiple published folders in a single query
  */
-export async function getPublishedPageFoldersByIds(ids: string[]): Promise<PageFolder[]> {
+export async function getPublishedPageFoldersByIds(ids: string[], projectId?: string | null): Promise<PageFolder[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -742,11 +743,13 @@ export async function getPublishedPageFoldersByIds(ids: string[]): Promise<PageF
     return [];
   }
 
-  const { data, error } = await client
+  let query = client
     .from('page_folders')
     .select('*')
     .in('id', ids)
     .eq('is_published', true);
+  query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch published folders: ${error.message}`);

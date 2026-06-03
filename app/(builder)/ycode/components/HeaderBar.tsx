@@ -412,7 +412,7 @@ export default function HeaderBar({
             {isStudioOperator && (
               <>
                 <DropdownMenuItem
-                  onClick={() => router.push('/ycode/integrations/apps')}
+                  onClick={() => router.push(studioRoute('/integrations/apps'))}
                 >
                   Integrationen
                 </DropdownMenuItem>
@@ -455,7 +455,7 @@ export default function HeaderBar({
             <DropdownMenuSeparator />
 
             <DropdownMenuItem
-              onClick={() => router.push('/ycode/profile')}
+              onClick={() => router.push(studioRoute('/profile'))}
             >
               Mein Profil
             </DropdownMenuItem>
@@ -564,7 +564,7 @@ export default function HeaderBar({
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={() => router.push('/ycode/localization')}
+                  onClick={() => router.push(studioRoute('/localization'))}
                 >
                   Sprachen verwalten
                 </DropdownMenuItem>
@@ -670,7 +670,7 @@ export default function HeaderBar({
               setActiveSidebarTab('layers');
               const params = new URLSearchParams(window.location.search);
               params.set('preview', 'true');
-              router.push(`/ycode/layers/${currentPageId}?${params.toString()}`);
+              router.push(`${studioRoute(`/layers/${currentPageId}`)}?${params.toString()}`);
               return;
             }
 

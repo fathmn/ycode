@@ -3,7 +3,7 @@
 import { studioFetch } from '@/lib/api';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { Label } from '@/components/ui/label';
 import {
@@ -23,6 +23,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Spinner } from '@/components/ui/spinner';
 import { getUserInitials, generateUserColor } from '@/lib/collaboration-utils';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { studioProjectPathSlugFromPathname, studioProjectRoutePathFromSlug } from '@/lib/studio-project-path';
 
 interface ActiveUser {
   id: string;
@@ -41,6 +42,8 @@ interface PendingInvite {
 
 export default function UsersSettingsPage() {
   const router = useRouter();
+  const pathname = usePathname();
+  const projectPathSlug = studioProjectPathSlugFromPathname(pathname);
   const currentUser = useAuthStore((state) => state.user);
 
   const [activeUsers, setActiveUsers] = useState<ActiveUser[]>([]);
@@ -315,7 +318,7 @@ export default function UsersSettingsPage() {
                     <DropdownMenuContent align="end">
                       {currentUser?.id === user.id ? (
                         <DropdownMenuItem
-                          onClick={() => router.push('/ycode/profile')}
+                          onClick={() => router.push(studioProjectRoutePathFromSlug(projectPathSlug, '/ycode/profile'))}
                         >
                           My profile
                         </DropdownMenuItem>

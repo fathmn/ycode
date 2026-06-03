@@ -2,7 +2,7 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT, SUPABASE_WRITE_BATCH_SIZE } from '@/lib/supabase-constants';
 import { STORAGE_BUCKET, STORAGE_FOLDERS } from '@/lib/asset-constants';
 import { cleanupOrphanedStorageFiles } from '@/lib/storage-utils';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import { generateAssetContentHash } from '../hash-utils';
 import type { Asset } from '../../types';
 
@@ -694,7 +694,7 @@ export async function uploadFile(file: File): Promise<{ path: string; url: strin
  * An asset needs publishing if no published version exists or content_hash differs.
  * Uses pagination to handle more than 1000 assets (Supabase default limit).
  */
-export async function getUnpublishedAssets(): Promise<Asset[]> {
+export async function getUnpublishedAssets(projectId?: string | null): Promise<Asset[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -707,13 +707,14 @@ export async function getUnpublishedAssets(): Promise<Asset[]> {
   let hasMore = true;
 
   while (hasMore) {
-    const { data, error } = await client
+    let query = client
       .from('assets')
       .select('*')
       .eq('is_published', false)
       .is('deleted_at', null)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+      .order('created_at', { ascending: false });
+    query = (await applyProjectScopeToQuery(query, client, 'assets', projectId)).query;
+    const { data, error } = await query.range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
 
     if (error) {
       throw new Error(`Failed to fetch draft assets: ${error.message}`);
@@ -740,11 +741,13 @@ export async function getUnpublishedAssets(): Promise<Asset[]> {
 
   for (let i = 0; i < draftIds.length; i += PUBLISHED_ASSET_HASH_BATCH_SIZE) {
     const batchIds = draftIds.slice(i, i + PUBLISHED_ASSET_HASH_BATCH_SIZE);
-    const { data: publishedAssets, error: publishedError } = await client
+    let publishedQuery = client
       .from('assets')
       .select('id, content_hash')
       .in('id', batchIds)
       .eq('is_published', true);
+    publishedQuery = (await applyProjectScopeToQuery(publishedQuery, client, 'assets', projectId)).query;
+    const { data: publishedAssets, error: publishedError } = await publishedQuery;
 
     if (publishedError) {
       throw new Error(`Failed to fetch published assets: ${publishedError.message}`);
@@ -765,7 +768,7 @@ export async function getUnpublishedAssets(): Promise<Asset[]> {
 /**
  * Get soft-deleted draft assets that need their published versions and files removed
  */
-export async function getDeletedDraftAssets(): Promise<Asset[]> {
+export async function getDeletedDraftAssets(projectId?: string | null): Promise<Asset[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -776,12 +779,13 @@ export async function getDeletedDraftAssets(): Promise<Asset[]> {
   let offset = 0;
 
   while (true) {
-    const { data, error } = await client
+    let query = client
       .from('assets')
       .select('*')
       .eq('is_published', false)
-      .not('deleted_at', 'is', null)
-      .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+      .not('deleted_at', 'is', null);
+    query = (await applyProjectScopeToQuery(query, client, 'assets', projectId)).query;
+    const { data, error } = await query.range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
 
     if (error) {
       throw new Error(`Failed to fetch deleted draft assets: ${error.message}`);
@@ -801,7 +805,7 @@ export async function getDeletedDraftAssets(): Promise<Asset[]> {
 /**
  * Publish assets - copies draft to published, using content_hash for change detection
  */
-export async function publishAssets(assetIds: string[]): Promise<{ count: number }> {
+export async function publishAssets(assetIds: string[], projectId?: string | null): Promise<{ count: number }> {
   if (assetIds.length === 0) {
     return { count: 0 };
   }
@@ -816,12 +820,14 @@ export async function publishAssets(assetIds: string[]): Promise<{ count: number
   const draftAssets: Asset[] = [];
   for (let i = 0; i < assetIds.length; i += SUPABASE_WRITE_BATCH_SIZE) {
     const batchIds = assetIds.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
-    const { data, error: fetchError } = await client
+    let draftQuery = client
       .from('assets')
       .select('*')
       .in('id', batchIds)
       .eq('is_published', false)
       .is('deleted_at', null);
+    draftQuery = (await applyProjectScopeToQuery(draftQuery, client, 'assets', projectId)).query;
+    const { data, error: fetchError } = await draftQuery;
 
     if (fetchError) {
       throw new Error(`Failed to fetch draft assets: ${fetchError.message}`);
@@ -840,11 +846,13 @@ export async function publishAssets(assetIds: string[]): Promise<{ count: number
   const publishedHashById = new Map<string, string | null>();
   for (let i = 0; i < assetIds.length; i += SUPABASE_WRITE_BATCH_SIZE) {
     const batchIds = assetIds.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
-    const { data: existingPublished } = await client
+    let existingPublishedQuery = client
       .from('assets')
       .select('id, content_hash')
       .in('id', batchIds)
       .eq('is_published', true);
+    existingPublishedQuery = (await applyProjectScopeToQuery(existingPublishedQuery, client, 'assets', projectId)).query;
+    const { data: existingPublished } = await existingPublishedQuery;
 
     existingPublished?.forEach(a => publishedHashById.set(a.id, a.content_hash));
   }
@@ -852,6 +860,7 @@ export async function publishAssets(assetIds: string[]): Promise<{ count: number
   // Only publish assets that are new or changed (compare draft hash vs published hash)
   const recordsToUpsert: any[] = [];
   const now = new Date().toISOString();
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'assets', projectId);
 
   for (const draft of draftAssets) {
     // Skip if published version exists with identical hash (including both null)
@@ -876,6 +885,7 @@ export async function publishAssets(assetIds: string[]): Promise<{ count: number
       created_at: draft.created_at,
       updated_at: now,
       deleted_at: null,
+      ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
     });
   }
 
@@ -904,7 +914,7 @@ export async function publishAssets(assetIds: string[]): Promise<{ count: number
  * 2. The physical file from storage
  * 3. The soft-deleted draft record
  */
-export async function hardDeleteSoftDeletedAssets(): Promise<{ count: number }> {
+export async function hardDeleteSoftDeletedAssets(projectId?: string | null): Promise<{ count: number }> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -912,7 +922,7 @@ export async function hardDeleteSoftDeletedAssets(): Promise<{ count: number }> 
   }
 
   // Get all soft-deleted draft assets
-  const deletedDrafts = await getDeletedDraftAssets();
+  const deletedDrafts = await getDeletedDraftAssets(projectId);
 
   if (deletedDrafts.length === 0) {
     return { count: 0 };
@@ -925,23 +935,27 @@ export async function hardDeleteSoftDeletedAssets(): Promise<{ count: number }> 
     const batchIds = ids.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
 
     // Delete published versions
-    const { error: deletePublishedError } = await client
+    let deletePublishedQuery = client
       .from('assets')
       .delete()
       .in('id', batchIds)
       .eq('is_published', true);
+    deletePublishedQuery = (await applyProjectScopeToQuery(deletePublishedQuery, client, 'assets', projectId)).query;
+    const { error: deletePublishedError } = await deletePublishedQuery;
 
     if (deletePublishedError) {
       console.error('Failed to delete published assets:', deletePublishedError);
     }
 
     // Delete soft-deleted draft versions
-    const { error: deleteDraftError } = await client
+    let deleteDraftQuery = client
       .from('assets')
       .delete()
       .in('id', batchIds)
       .eq('is_published', false)
       .not('deleted_at', 'is', null);
+    deleteDraftQuery = (await applyProjectScopeToQuery(deleteDraftQuery, client, 'assets', projectId)).query;
+    const { error: deleteDraftError } = await deleteDraftQuery;
 
     if (deleteDraftError) {
       throw new Error(`Failed to delete draft assets: ${deleteDraftError.message}`);
