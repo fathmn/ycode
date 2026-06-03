@@ -4,6 +4,14 @@ import {
   deleteColorVariable,
 } from '@/lib/repositories/colorVariableRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const COLOR_VARIABLE_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -16,10 +24,13 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, COLOR_VARIABLE_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { id } = await params;
     const body = await request.json();
 
-    const updated = await updateColorVariable(id, body);
+    const updated = await updateColorVariable(id, body, roleCheck.context.project.id);
 
     return noCache({ data: updated });
   } catch (error) {
@@ -40,9 +51,12 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, COLOR_VARIABLE_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { id } = await params;
 
-    await deleteColorVariable(id);
+    await deleteColorVariable(id, roleCheck.context.project.id);
 
     return noCache({ data: { success: true } });
   } catch (error) {

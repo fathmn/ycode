@@ -23,6 +23,17 @@ interface FontPickerProps {
   onChange: (value: string) => void;
 }
 
+function formatCssVariableFontLabel(value: string): string | null {
+  const match = value.match(/^var\(\s*--font-([a-z0-9_-]+)(?:\s*,\s*(.+))?\)$/i);
+  if (!match) return null;
+
+  const tokenName = match[1]
+    .replace(/[-_]/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+
+  return `${tokenName} Font`;
+}
+
 export default function FontPicker({ value, onChange }: FontPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'installed' | 'google'>('installed');
@@ -113,6 +124,9 @@ export default function FontPicker({ value, onChange }: FontPickerProps) {
   // Get display label for current value
   const getDisplayLabel = useCallback(() => {
     if (!value || value === 'inherit') return 'Inherit';
+
+    const cssVariableLabel = formatCssVariableFontLabel(value);
+    if (cssVariableLabel) return cssVariableLabel;
 
     // Check built-in fonts
     const builtIn = BUILT_IN_FONTS.find(f => f.name === value);

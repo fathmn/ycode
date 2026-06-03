@@ -6,12 +6,13 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import type { ColorVariable } from '@/types';
 
 export interface CreateColorVariableData {
   name: string;
   value: string;
+  projectId?: string | null;
 }
 
 export interface UpdateColorVariableData {
@@ -98,17 +99,19 @@ export async function getAllColorVariables(projectId?: string | null): Promise<C
   return data || [];
 }
 
-export async function getColorVariableById(id: string): Promise<ColorVariable | null> {
+export async function getColorVariableById(id: string, projectId?: string | null): Promise<ColorVariable | null> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('color_variables')
     .select('*')
-    .eq('id', id)
+    .eq('id', id);
+  query = (await applyProjectScopeToQuery(query, client, 'color_variables', projectId)).query;
+  const { data, error } = await query
     .single();
 
   if (error) {
@@ -131,17 +134,25 @@ export async function createColorVariable(
   }
 
   // Get max sort_order to append at end
-  const { data: maxRow } = await client
+  let maxQuery = client
     .from('color_variables')
     .select('sort_order')
     .order('sort_order', { ascending: false })
-    .limit(1)
+    .limit(1);
+  maxQuery = (await applyProjectScopeToQuery(maxQuery, client, 'color_variables', variableData.projectId)).query;
+  const { data: maxRow } = await maxQuery
     .single();
   const nextOrder = (maxRow?.sort_order ?? -1) + 1;
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'color_variables', variableData.projectId);
 
   const { data, error } = await client
     .from('color_variables')
-    .insert({ ...variableData, sort_order: nextOrder })
+    .insert({
+      name: variableData.name,
+      value: variableData.value,
+      sort_order: nextOrder,
+      ...(hasProjectScope && variableData.projectId ? { project_id: variableData.projectId } : {}),
+    })
     .select()
     .single();
 
@@ -154,7 +165,8 @@ export async function createColorVariable(
 
 export async function updateColorVariable(
   id: string,
-  updates: UpdateColorVariableData
+  updates: UpdateColorVariableData,
+  projectId?: string | null
 ): Promise<ColorVariable> {
   const client = await getSupabaseAdmin();
 
@@ -162,11 +174,13 @@ export async function updateColorVariable(
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('color_variables')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', id)
-    .select()
+    .select();
+  query = (await applyProjectScopeToQuery(query, client, 'color_variables', projectId)).query;
+  const { data, error } = await query
     .single();
 
   if (error) {
@@ -176,17 +190,19 @@ export async function updateColorVariable(
   return data;
 }
 
-export async function deleteColorVariable(id: string): Promise<void> {
+export async function deleteColorVariable(id: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { error } = await client
+  let query = client
     .from('color_variables')
     .delete()
     .eq('id', id);
+  query = (await applyProjectScopeToQuery(query, client, 'color_variables', projectId)).query;
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to delete color variable: ${error.message}`);
@@ -194,7 +210,8 @@ export async function deleteColorVariable(id: string): Promise<void> {
 }
 
 export async function reorderColorVariables(
-  orderedIds: string[]
+  orderedIds: string[],
+  projectId?: string | null
 ): Promise<void> {
   const client = await getSupabaseAdmin();
 
@@ -203,10 +220,12 @@ export async function reorderColorVariables(
   }
 
   // Fetch full rows so upsert includes all NOT NULL columns
-  const { data: existing, error: fetchError } = await client
+  let fetchQuery = client
     .from('color_variables')
     .select('*')
     .in('id', orderedIds);
+  fetchQuery = (await applyProjectScopeToQuery(fetchQuery, client, 'color_variables', projectId)).query;
+  const { data: existing, error: fetchError } = await fetchQuery;
 
   if (fetchError) {
     throw new Error(`Failed to fetch color variables for reorder: ${fetchError.message}`);

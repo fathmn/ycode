@@ -100,10 +100,11 @@ export function registerSiteResources(server: McpServer, projectContext: McpProj
       mimeType: 'application/json',
     },
     async () => {
+      const projectId = await resolveMcpResourceProjectId(projectContext);
       const [colorVariables, fonts, locales] = await Promise.all([
-        getAllColorVariables().catch(() => []),
-        getAllFonts().catch(() => []),
-        getAllLocales(false).catch(() => []),
+        getAllColorVariables(projectId).catch(() => []),
+        getAllFonts(projectId).catch(() => []),
+        getAllLocales(false, projectId).catch(() => []),
       ]);
 
       return {

@@ -7,14 +7,15 @@ import {
   deleteColorVariable,
   reorderColorVariables,
 } from '@/lib/repositories/colorVariableRepository';
+import type { McpProjectContext } from '@/lib/mcp/project-context';
 
-export function registerColorVariableTools(server: McpServer) {
+export function registerColorVariableTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
     'list_color_variables',
     'List all color variables (design tokens). These are CSS custom properties available site-wide for consistent colors.',
     {},
     async () => {
-      const variables = await getAllColorVariables();
+      const variables = await getAllColorVariables(projectContext.projectId);
       return {
         content: [{
           type: 'text' as const,
@@ -37,7 +38,7 @@ export function registerColorVariableTools(server: McpServer) {
       value: z.string().describe('Color value in "#hex" or "#hex/opacity" format (e.g. "#3b82f6", "#000000/50")'),
     },
     async ({ name, value }) => {
-      const variable = await createColorVariable({ name, value });
+      const variable = await createColorVariable({ name, value, projectId: projectContext.projectId });
       return {
         content: [{
           type: 'text' as const,
@@ -64,7 +65,7 @@ export function registerColorVariableTools(server: McpServer) {
       if (name !== undefined) updates.name = name;
       if (value !== undefined) updates.value = value;
 
-      const variable = await updateColorVariable(variable_id, updates);
+      const variable = await updateColorVariable(variable_id, updates, projectContext.projectId);
       return {
         content: [{
           type: 'text' as const,
@@ -81,7 +82,7 @@ export function registerColorVariableTools(server: McpServer) {
       variable_id: z.string().describe('The color variable ID to delete'),
     },
     async ({ variable_id }) => {
-      await deleteColorVariable(variable_id);
+      await deleteColorVariable(variable_id, projectContext.projectId);
       return {
         content: [{ type: 'text' as const, text: `Color variable ${variable_id} deleted successfully.` }],
       };
@@ -95,7 +96,7 @@ export function registerColorVariableTools(server: McpServer) {
       ordered_ids: z.array(z.string()).describe('Array of all color variable IDs in desired order'),
     },
     async ({ ordered_ids }) => {
-      await reorderColorVariables(ordered_ids);
+      await reorderColorVariables(ordered_ids, projectContext.projectId);
       return {
         content: [{ type: 'text' as const, text: `Reordered ${ordered_ids.length} color variables.` }],
       };

@@ -4,6 +4,22 @@ import {
   createColorVariable,
 } from '@/lib/repositories/colorVariableRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const COLOR_VARIABLE_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+
+const COLOR_VARIABLE_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -11,9 +27,12 @@ export const revalidate = 0;
 /**
  * GET /ycode/api/color-variables
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const variables = await getAllColorVariables();
+    const roleCheck = await requireStudioProjectRole(request, COLOR_VARIABLE_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const variables = await getAllColorVariables(roleCheck.context.project.id);
 
     return noCache({ data: variables });
   } catch (error) {
@@ -31,6 +50,9 @@ export async function GET() {
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, COLOR_VARIABLE_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const body = await request.json();
     const { name, value } = body;
 
@@ -41,7 +63,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const variable = await createColorVariable({ name, value });
+    const variable = await createColorVariable({ name, value, projectId: roleCheck.context.project.id });
 
     return noCache({ data: variable });
   } catch (error) {
