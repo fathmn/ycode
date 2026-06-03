@@ -90,6 +90,67 @@ interface InteractionsPanelProps {
   onSelectLayer?: (layerId: string) => void; // Callback to select a layer in the editor
 }
 
+interface LayerAnimationReference {
+  layer: Layer;
+  triggerType: TriggerType;
+  targetLayer: Layer | null;
+}
+
+interface ImportedRuntimeInteraction {
+  id: string;
+  label: string;
+  description: string;
+  icon: IconProps['name'];
+}
+
+function getLayerPath(layers: Layer[], targetLayerId: string, ancestors: Layer[] = []): Layer[] | null {
+  for (const layer of layers) {
+    const path = [...ancestors, layer];
+    if (layer.id === targetLayerId) return path;
+
+    if (layer.children) {
+      const childPath = getLayerPath(layer.children, targetLayerId, path);
+      if (childPath) return childPath;
+    }
+  }
+
+  return null;
+}
+
+function hasLayerAttribute(layer: Layer, attributeName: string): boolean {
+  const attributes = layer.attributes || {};
+  const customAttributes = layer.settings?.customAttributes || {};
+  return Object.prototype.hasOwnProperty.call(attributes, attributeName)
+    || Object.prototype.hasOwnProperty.call(customAttributes, attributeName);
+}
+
+function getImportedRuntimeInteractions(layer: Layer): ImportedRuntimeInteraction[] {
+  const runtimeInteractions: ImportedRuntimeInteraction[] = [];
+
+  if (hasLayerAttribute(layer, 'data-studio-page-transition')) {
+    runtimeInteractions.push({
+      id: 'page-transition',
+      label: 'Page transition',
+      description: 'Imported runtime fade and slide animation for page load.',
+      icon: 'page',
+    });
+  }
+
+  if (
+    hasLayerAttribute(layer, 'data-studio-counter-value')
+    || hasLayerAttribute(layer, 'data-studio-counter-start')
+  ) {
+    runtimeInteractions.push({
+      id: 'counter-on-scroll',
+      label: 'Counter on scroll',
+      description: 'Imported runtime number animation controlled by the published-site script.',
+      icon: 'hash',
+    });
+  }
+
+  return runtimeInteractions;
+}
+
 // Sortable animation item component
 interface SortableAnimationItemProps {
   tween: InteractionTween;
@@ -758,7 +819,7 @@ export default function InteractionsPanel({
 
   // Find layers that animate the current trigger layer (where this layer is a target in tweens)
   const animatedByLayers = useMemo(() => {
-    const result: Array<{ layer: Layer; triggerType: TriggerType }> = [];
+    const result: LayerAnimationReference[] = [];
 
     const findAnimators = (layers: Layer[]) => {
       layers.forEach((layer) => {
@@ -775,7 +836,7 @@ export default function InteractionsPanel({
         );
 
         if (matchingInteraction) {
-          result.push({ layer, triggerType: matchingInteraction.trigger });
+          result.push({ layer, triggerType: matchingInteraction.trigger, targetLayer: triggerLayer });
         }
 
         if (layer.children) {
@@ -787,6 +848,59 @@ export default function InteractionsPanel({
     findAnimators(allLayers);
     return result;
   }, [allLayers, triggerLayer.id]);
+
+  // Find interactions that target one of the selected layer's ancestors.
+  // This covers imported scroll-reveals where the section animates cards/blocks,
+  // while the user has selected a nested text or image inside that animated block.
+  const animatedThroughParentLayers = useMemo(() => {
+    const selectedPath = getLayerPath(allLayers, triggerLayer.id);
+    if (!selectedPath || selectedPath.length <= 1) return [];
+
+    const ancestorLayers = selectedPath.slice(0, -1);
+    const ancestorById = new Map(ancestorLayers.map((layer) => [layer.id, layer]));
+    const result: LayerAnimationReference[] = [];
+    const seen = new Set<string>();
+
+    const findParentAnimators = (layers: Layer[]) => {
+      layers.forEach((layer) => {
+        if (layer.id === triggerLayer.id) {
+          if (layer.children) findParentAnimators(layer.children);
+          return;
+        }
+
+        const layerInteractions = layer.interactions || [];
+        const matchingInteraction = layerInteractions.find((interaction) =>
+          (interaction.tweens || []).some((tween) => ancestorById.has(tween.layer_id))
+        );
+
+        if (matchingInteraction) {
+          const targetLayerId = (matchingInteraction.tweens || []).find((tween) =>
+            ancestorById.has(tween.layer_id)
+          )?.layer_id;
+          const targetLayer = targetLayerId ? ancestorById.get(targetLayerId) || null : null;
+          const referenceKey = `${layer.id}:${targetLayer?.id || 'ancestor'}`;
+
+          if (!seen.has(referenceKey)) {
+            seen.add(referenceKey);
+            result.push({ layer, triggerType: matchingInteraction.trigger, targetLayer });
+          }
+        }
+
+        if (layer.children) {
+          findParentAnimators(layer.children);
+        }
+      });
+    };
+
+    findParentAnimators(allLayers);
+
+    return result;
+  }, [allLayers, triggerLayer.id]);
+
+  const importedRuntimeInteractions = useMemo(
+    () => getImportedRuntimeInteractions(triggerLayer),
+    [triggerLayer]
+  );
 
   // Auto-select first tween's target layer when a trigger event is selected (only on ID change)
   useEffect(() => {
@@ -1056,6 +1170,9 @@ export default function InteractionsPanel({
 
   // Check if there's an active trigger (different layer selected or target selected)
   const hasActiveTrigger = selectedInteractionId !== null;
+  const hasAnimationContext = animatedByLayers.length > 0
+    || animatedThroughParentLayers.length > 0
+    || importedRuntimeInteractions.length > 0;
 
   return (
     <div className="flex flex-col">
@@ -1113,13 +1230,13 @@ export default function InteractionsPanel({
       </header>
 
       {/* Interaction List */}
-      {interactions.length === 0 ? (
+      {interactions.length === 0 && !hasAnimationContext ? (
         <Empty>
           <EmptyDescription>
             Add a trigger event to start an interaction.
           </EmptyDescription>
         </Empty>
-      ) : (
+      ) : interactions.length > 0 ? (
         <div className="flex flex-col gap-2">
           {interactions.map((interaction) => (
             <div
@@ -1166,6 +1283,37 @@ export default function InteractionsPanel({
             </div>
           ))}
         </div>
+      ) : null}
+
+      {/* Imported Runtime Animations - Show non-native imported scripts that still affect this layer */}
+      {!hasActiveTrigger && importedRuntimeInteractions.length > 0 && (
+        <div className="mt-4 border-t">
+          <header className="py-5">
+            <span className="font-medium">Imported runtime animations</span>
+          </header>
+
+          <div className="flex flex-col gap-2">
+            {importedRuntimeInteractions.map((runtimeInteraction) => (
+              <div
+                key={runtimeInteraction.id}
+                className="flex items-start gap-2 px-2 py-1.5 rounded-lg bg-secondary/50"
+              >
+                <div className="size-5 flex items-center justify-center rounded-[6px] bg-secondary">
+                  <Icon name={runtimeInteraction.icon} className="size-2.5" />
+                </div>
+
+                <div className="min-w-0">
+                  <Label variant="muted">
+                    {runtimeInteraction.label}
+                  </Label>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {runtimeInteraction.description}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Animated By Section - Show when no trigger is selected and this layer is animated by others */}
@@ -1189,6 +1337,44 @@ export default function InteractionsPanel({
                 <Label variant="muted" className="cursor-pointer">
                   {getLayerName(layer)}
                 </Label>
+
+                <Badge variant="secondary" className="ml-auto">
+                  {TRIGGER_LABELS[triggerType]}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Parent Animation Section - Show when a parent block is animated by another trigger */}
+      {!hasActiveTrigger && animatedThroughParentLayers.length > 0 && (
+        <div className="mt-4 border-t">
+          <header className="py-5">
+            <span className="font-medium">Parent animation controls</span>
+          </header>
+
+          <div className="flex flex-col gap-2">
+            {animatedThroughParentLayers.map(({ layer, triggerType, targetLayer }) => (
+              <div
+                key={`${layer.id}:${targetLayer?.id || triggerType}`}
+                onClick={() => onSelectLayer?.(layer.id)}
+                className="flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors cursor-pointer bg-secondary/50 hover:bg-secondary"
+              >
+                <div className="size-5 flex items-center justify-center rounded-[6px] bg-secondary">
+                  <Icon name={getLayerIcon(layer)} className="size-2.5" />
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <Label variant="muted" className="cursor-pointer">
+                    {getLayerName(layer)}
+                  </Label>
+                  {targetLayer && (
+                    <p className="text-xs text-muted-foreground truncate">
+                      Targets {getLayerName(targetLayer)}
+                    </p>
+                  )}
+                </div>
 
                 <Badge variant="secondary" className="ml-auto">
                   {TRIGGER_LABELS[triggerType]}
