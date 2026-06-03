@@ -5,6 +5,7 @@ import { Suspense, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import BuilderLoading from '@/components/BuilderLoading';
+import { ycodePathnameFromStudioProjectPath } from '@/lib/studio-project-path';
 import StudioAuthGate from './components/StudioAuthGate';
 
 const YCodeBuilder = dynamic(() => import('./components/YCodeBuilderMain'), {
@@ -38,23 +39,27 @@ const YCodeBuilder = dynamic(() => import('./components/YCodeBuilderMain'), {
 
 function YCodeLayoutInner({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const editorPathname = useMemo(() => ycodePathnameFromStudioProjectPath(pathname, {
+    rootIsYcode: true,
+    projectRootIsYcode: true,
+  }), [pathname]);
 
   // Exclude standalone routes from YCodeBuilder
   // These routes should render independently without the editor UI
   const prefixRoutes = ['/ycode/preview', '/ycode/devtools/'];
   const exactRoutes = ['/ycode/welcome', '/ycode/accept-invite'];
   const isStandaloneRoute = Boolean(
-    prefixRoutes.some(route => pathname?.startsWith(route))
-    || exactRoutes.includes(pathname || '')
+    prefixRoutes.some(route => editorPathname.startsWith(route))
+    || exactRoutes.includes(editorPathname)
   );
 
   const routeRendersChildren = useMemo(() => Boolean(
-    pathname?.startsWith('/ycode/settings')
-    || pathname?.startsWith('/ycode/localization')
-    || pathname?.startsWith('/ycode/profile')
-    || pathname?.startsWith('/ycode/forms')
-    || pathname?.startsWith('/ycode/integrations')
-  ), [pathname]);
+    editorPathname.startsWith('/ycode/settings')
+    || editorPathname.startsWith('/ycode/localization')
+    || editorPathname.startsWith('/ycode/profile')
+    || editorPathname.startsWith('/ycode/forms')
+    || editorPathname.startsWith('/ycode/integrations')
+  ), [editorPathname]);
 
   if (isStandaloneRoute) {
     return <>{children}</>;
