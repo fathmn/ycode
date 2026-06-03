@@ -713,46 +713,50 @@ function initializeStudioCounters(): Array<() => void> {
   return cleanups;
 }
 
+export function initializeStudioRuntime(): (() => void) | undefined {
+  const runtimeProfile = document
+    .querySelector<HTMLElement>('[data-studio-runtime-profile]')
+    ?.getAttribute('data-studio-runtime-profile');
+  const runtimeAdapters = document
+    .querySelector<HTMLElement>('[data-studio-runtime-adapters]')
+    ?.getAttribute('data-studio-runtime-adapters')
+    ?.split(/\s+/)
+    .filter(Boolean) || [];
+  const isHrRuntimeProfile = runtimeProfile === 'hr-interim-solutions';
+  const hasRuntimeAdapter = (adapter: string): boolean => (
+    isHrRuntimeProfile && runtimeAdapters.includes(`hr.${adapter}`)
+  );
+  if (!isHrRuntimeProfile) return undefined;
+
+  const cleanups: Array<() => void> = [];
+  if (hasRuntimeAdapter('counters')) {
+    cleanups.push(...initializeStudioCounters());
+  }
+  if (hasRuntimeAdapter('mobile-drawer')) {
+    cleanups.push(...initializeStudioMobileDrawer());
+  }
+  if (hasRuntimeAdapter('page-transition')) {
+    cleanups.push(...initializeStudioPageTransition());
+  }
+  if (hasRuntimeAdapter('site-header')) {
+    cleanups.push(...initializeStudioActiveNav());
+    cleanups.push(...initializeStudioHeaderScroll());
+  }
+  if (hasRuntimeAdapter('feature-tabs')) {
+    cleanups.push(...initializeStudioFeatureTabs());
+  }
+  if (hasRuntimeAdapter('forms') || document.querySelector('form[data-studio-import-submit-mode], form[data-studio-import-submit-endpoint]')) {
+    cleanups.push(...initializeStudioForms());
+  }
+
+  return () => {
+    cleanups.forEach((cleanup) => cleanup());
+  };
+}
+
 export default function StudioRuntimeInitializer() {
   useEffect(() => {
-    const runtimeProfile = document
-      .querySelector<HTMLElement>('[data-studio-runtime-profile]')
-      ?.getAttribute('data-studio-runtime-profile');
-    const runtimeAdapters = document
-      .querySelector<HTMLElement>('[data-studio-runtime-adapters]')
-      ?.getAttribute('data-studio-runtime-adapters')
-      ?.split(/\s+/)
-      .filter(Boolean) || [];
-    const isHrRuntimeProfile = runtimeProfile === 'hr-interim-solutions';
-    const hasRuntimeAdapter = (adapter: string): boolean => (
-      isHrRuntimeProfile && runtimeAdapters.includes(`hr.${adapter}`)
-    );
-    if (!isHrRuntimeProfile) return undefined;
-
-    const cleanups: Array<() => void> = [];
-    if (hasRuntimeAdapter('counters')) {
-      cleanups.push(...initializeStudioCounters());
-    }
-    if (hasRuntimeAdapter('mobile-drawer')) {
-      cleanups.push(...initializeStudioMobileDrawer());
-    }
-    if (hasRuntimeAdapter('page-transition')) {
-      cleanups.push(...initializeStudioPageTransition());
-    }
-    if (hasRuntimeAdapter('site-header')) {
-      cleanups.push(...initializeStudioActiveNav());
-      cleanups.push(...initializeStudioHeaderScroll());
-    }
-    if (hasRuntimeAdapter('feature-tabs')) {
-      cleanups.push(...initializeStudioFeatureTabs());
-    }
-    if (hasRuntimeAdapter('forms') || document.querySelector('form[data-studio-import-submit-mode], form[data-studio-import-submit-endpoint]')) {
-      cleanups.push(...initializeStudioForms());
-    }
-
-    return () => {
-      cleanups.forEach((cleanup) => cleanup());
-    };
+    return initializeStudioRuntime();
   }, []);
 
   return null;

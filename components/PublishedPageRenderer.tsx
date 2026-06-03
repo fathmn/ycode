@@ -5,7 +5,7 @@ import LightboxInitializer from '@/components/LightboxInitializer';
 import PasswordForm from '@/components/PasswordForm';
 import SliderInitializer from '@/components/SliderInitializer';
 import StudioRevealInitializer, { type StudioRevealTarget } from '@/components/StudioRevealInitializer';
-import StudioRuntimeInitializer from '@/components/StudioRuntimeInitializer';
+import DeferredStudioRuntimeInitializer from '@/components/DeferredStudioRuntimeInitializer';
 import { collectLayerAssetIds, getAssetProxyUrl } from '@/lib/asset-utils';
 import { generateInitialAnimationCSS } from '@/lib/animation-utils';
 import { parseSafeBodyStyle } from '@/lib/body-style';
@@ -734,7 +734,7 @@ export default async function PublishedPageRenderer({
       )}
 
       {animationRuntime.revealTargets.length > 0 && <StudioRevealInitializer targets={animationRuntime.revealTargets} />}
-      {needsStudioRuntime && <StudioRuntimeInitializer />}
+      {needsStudioRuntime && <DeferredStudioRuntimeInitializer />}
       {hasNamedLayer(resolvedLayers, 'slider') && <SliderInitializer />}
       {hasNamedLayer(resolvedLayers, 'lightbox') && <LightboxInitializer />}
 
