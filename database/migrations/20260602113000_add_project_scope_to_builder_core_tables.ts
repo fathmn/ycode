@@ -107,13 +107,14 @@ export async function up(knex: Knex): Promise<void> {
 	    where deleted_at is null and is_dynamic = false
 	  `);
 
+  await knex.schema.raw('alter table public.pages drop constraint if exists pages_project_folder_fkey');
+  await knex.schema.raw('alter table public.page_folders drop constraint if exists page_folders_project_parent_fkey');
   await knex.schema.raw('alter table public.page_folders drop constraint if exists page_folders_project_id_id_is_published_unique');
   await knex.schema.raw(`
     alter table public.page_folders
     add constraint page_folders_project_id_id_is_published_unique
     unique (project_id, id, is_published)
   `);
-  await knex.schema.raw('alter table public.pages drop constraint if exists pages_project_folder_fkey');
   await knex.schema.raw(`
     alter table public.pages
     add constraint pages_project_folder_fkey
@@ -121,7 +122,6 @@ export async function up(knex: Knex): Promise<void> {
     references public.page_folders(project_id, id, is_published)
     on update cascade
   `);
-  await knex.schema.raw('alter table public.page_folders drop constraint if exists page_folders_project_parent_fkey');
   await knex.schema.raw(`
     alter table public.page_folders
     add constraint page_folders_project_parent_fkey

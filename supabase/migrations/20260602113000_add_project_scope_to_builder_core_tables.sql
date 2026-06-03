@@ -137,19 +137,20 @@ on public.pages(
 )
 where deleted_at is null and is_dynamic = false;
 
+alter table public.pages drop constraint if exists pages_project_folder_fkey;
+alter table public.page_folders drop constraint if exists page_folders_project_parent_fkey;
 alter table public.page_folders drop constraint if exists page_folders_project_id_id_is_published_unique;
+
 alter table public.page_folders
 add constraint page_folders_project_id_id_is_published_unique
 unique (project_id, id, is_published);
 
-alter table public.pages drop constraint if exists pages_project_folder_fkey;
 alter table public.pages
 add constraint pages_project_folder_fkey
 foreign key (project_id, page_folder_id, is_published)
 references public.page_folders(project_id, id, is_published)
 on update cascade;
 
-alter table public.page_folders drop constraint if exists page_folders_project_parent_fkey;
 alter table public.page_folders
 add constraint page_folders_project_parent_fkey
 foreign key (project_id, page_folder_id, is_published)

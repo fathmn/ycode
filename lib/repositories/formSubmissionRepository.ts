@@ -165,6 +165,18 @@ async function getDefinedFormIds(
   return formIds;
 }
 
+async function getDefinedFormIdsAcrossStates(
+  client: any,
+  projectId?: string | null
+): Promise<Set<string>> {
+  const [draftFormIds, publishedFormIds] = await Promise.all([
+    getDefinedFormIds(client, projectId, false),
+    getDefinedFormIds(client, projectId, true),
+  ]);
+
+  return new Set([...draftFormIds, ...publishedFormIds]);
+}
+
 export async function hasDefinedFormId(
   formId: string,
   projectId?: string | null,
@@ -231,8 +243,9 @@ export async function getDefinedFormEmailNotification(
 /**
  * Get all forms with submission counts.
  *
- * Forms are defined by draft form layers. Submissions are merged onto those
- * definitions so newly migrated forms appear before the first visitor submits.
+ * Forms are defined by draft and published form layers. Submissions are merged
+ * onto those definitions so newly migrated or already-live forms appear before
+ * the first visitor submits.
  */
 export async function getFormSummaries(projectId?: string | null): Promise<FormSummary[]> {
   const client = await getSupabaseAdmin();
@@ -241,7 +254,7 @@ export async function getFormSummaries(projectId?: string | null): Promise<FormS
     throw new Error('Supabase client not configured');
   }
 
-  const definedFormIds = await getDefinedFormIds(client, projectId, false);
+  const definedFormIds = await getDefinedFormIdsAcrossStates(client, projectId);
 
   const submissionsQuery = client
     .from('form_submissions')
