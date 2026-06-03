@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { getSelectedStudioProjectSlug, studioProjectsApi } from '@/lib/api';
-import { studioProjectRoutePathFromSlug } from '@/lib/studio-project-path';
+import { studioProjectRoutePathFromSlug, studioProjectPathSlugFromPathname } from '@/lib/studio-project-path';
 import { SETTINGS_NAV_ITEMS, visibleSettingsNavItems } from '@/lib/settings-nav-items';
 
 interface SettingsContentProps {
@@ -28,11 +28,15 @@ export default function SettingsContent({ children }: SettingsContentProps) {
         setRolesLoaded(true);
         return;
       }
+      const pathSlug = studioProjectPathSlugFromPathname(window.location.pathname);
+      const pathProject = pathSlug
+        ? response.data.find((project) => project.studio_path_slug === pathSlug)
+        : null;
       const selectedSlug = getSelectedStudioProjectSlug();
-      const selectedProject = selectedSlug
-        ? response.data.find((project) => project.slug === selectedSlug) || response.data[0]
-        : response.data[0];
-      setRoles(response.data.map((project) => project.role));
+      const selectedProject = pathProject
+        || (selectedSlug ? response.data.find((project) => project.slug === selectedSlug) : null)
+        || response.data[0];
+      setRoles(selectedProject?.role ? [selectedProject.role] : []);
       setProjectPathSlug(selectedProject?.studio_path_slug || null);
       setRolesLoaded(true);
     });
@@ -46,9 +50,12 @@ export default function SettingsContent({ children }: SettingsContentProps) {
     rolesLoaded ? visibleSettingsNavItems(roles) : SETTINGS_NAV_ITEMS
   ), [roles, rolesLoaded]);
 
+  const currentItem = useMemo(() => (
+    navItems.find((item) => pathname === item.path || pathname === studioProjectRoutePathFromSlug(projectPathSlug, item.path)) || null
+  ), [navItems, pathname, projectPathSlug]);
+
   useEffect(() => {
     if (!rolesLoaded || navItems.length === 0) return;
-    const currentItem = navItems.find((item) => pathname === item.path || pathname === studioProjectRoutePathFromSlug(projectPathSlug, item.path));
     if (!currentItem && pathname?.includes('/settings/')) {
       router.replace(studioProjectRoutePathFromSlug(projectPathSlug, navItems[0].path));
     }
@@ -89,7 +96,7 @@ export default function SettingsContent({ children }: SettingsContentProps) {
 
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto">
-        {children}
+        {rolesLoaded && currentItem ? children : null}
       </div>
     </div>
   );

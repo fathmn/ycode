@@ -28,6 +28,7 @@ const allowedPublicEndpoints = [
 
 const allowedFiles = new Set([
   'components/LayerRenderer.tsx',
+  'components/StudioRuntimeInitializer.tsx',
   'components/FilterableCollection.tsx',
   'components/LoadMoreCollection.tsx',
 ]);

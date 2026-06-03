@@ -164,7 +164,7 @@ create index if not exists studio_preview_runs_project_created_idx
   on public.studio_preview_runs(project_id, created_at desc);
 create unique index if not exists studio_preview_runs_raw_nonce_hash_unique
   on public.studio_preview_runs ((metadata->>'rawNonceHash'))
-  where metadata ? 'rawNonceHash';
+  where metadata->>'rawNonceHash' is not null;
 create index if not exists studio_custom_code_events_project_created_idx
   on public.studio_custom_code_events(project_id, created_at desc);
 create index if not exists studio_backups_project_created_idx

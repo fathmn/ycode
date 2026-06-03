@@ -1,6 +1,7 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { getAuthUser } from '@/lib/supabase-auth';
 import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
+import { findStudioProjectHostMatches } from '@/lib/studio-project-hostnames';
 import { getConfiguredSiteAdminRoleForUser } from '@/lib/studio-site-admin';
 export { projectLookupFromHost } from '@/lib/project-host';
 
@@ -91,10 +92,11 @@ export async function resolveStudioProjectId(value: string | null | undefined): 
 
   const activeProjects = await client
     .from('studio_projects')
-    .select('id, slug, metadata')
+    .select('id, slug, primary_domain, metadata')
     .eq('status', 'active');
   if (activeProjects.error || !Array.isArray(activeProjects.data)) return null;
   const aliasMatches = findStudioProjectPathMatches(activeProjects.data, value);
+  const hostMatches = findStudioProjectHostMatches(activeProjects.data, value);
 
   const baseSelect = 'id';
   const bySlug = await client
@@ -115,6 +117,9 @@ export async function resolveStudioProjectId(value: string | null | undefined): 
     .eq('status', 'active')
     .maybeSingle();
   if (!byDomain.error && byDomain.data?.id) return byDomain.data.id;
+
+  const hostMatch = hostMatches.length === 1 ? hostMatches[0] : null;
+  if (hostMatch?.id) return hostMatch.id;
 
   const match = aliasMatches.length === 1 ? aliasMatches[0] : null;
   if (match?.id) return match.id;

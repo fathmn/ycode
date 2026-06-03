@@ -14,7 +14,7 @@ export interface SettingsNavItem {
 
 export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
   { id: 'general', label: 'Allgemein', path: '/ycode/settings/general' },
-  { id: 'users', label: 'Benutzer', path: '/ycode/settings/users' },
+  { id: 'users', label: 'Benutzer', path: '/ycode/settings/users', operatorOnly: true },
   { id: 'redirects', label: 'Weiterleitungen', path: '/ycode/settings/redirects' },
   { id: 'email', label: 'E-Mail', path: '/ycode/settings/email', operatorOnly: true },
   { id: 'templates', label: 'Templates', path: '/ycode/settings/templates', operatorOnly: true },

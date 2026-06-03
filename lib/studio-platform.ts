@@ -6,6 +6,7 @@ import { extractSupabaseAccessToken } from '@/lib/supabase-cookie-token';
 import { STUDIO_PREVIEW_NONCE_COOKIE } from '@/lib/studio-preview-nonce';
 import { getAuthUser } from '@/lib/supabase-auth';
 import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
+import { findStudioProjectHostMatches } from '@/lib/studio-project-hostnames';
 import { getConfiguredSiteAdminRoleForUser } from '@/lib/studio-site-admin';
 import { STUDIO_READ_ROLES, type StudioRole, normalizeStudioRole } from '@/lib/studio-roles';
 
@@ -880,11 +881,12 @@ async function getProjectByDomainOrSlug(client: any, value: string): Promise<Stu
 
   const activeProjects = await client
     .from('studio_projects')
-    .select('id, slug, metadata')
+    .select('id, slug, primary_domain, metadata')
     .eq('status', 'active');
 
   if (activeProjects.error || !Array.isArray(activeProjects.data)) return null;
   const aliasMatches = findStudioProjectPathMatches(activeProjects.data, value);
+  const hostMatches = findStudioProjectHostMatches(activeProjects.data, value);
 
   const bySlug = await client
     .from('studio_projects')
@@ -907,6 +909,9 @@ async function getProjectByDomainOrSlug(client: any, value: string): Promise<Stu
 
   if (byDomain.error) return null;
   if (byDomain.data) return byDomain.data;
+
+  const hostMatch = hostMatches.length === 1 ? hostMatches[0] : null;
+  if (hostMatch?.id && hostMatch?.slug) return { id: hostMatch.id, slug: hostMatch.slug };
 
   const match = aliasMatches.length === 1 ? aliasMatches[0] : null;
   return match?.id && match?.slug ? { id: match.id, slug: match.slug } : null;

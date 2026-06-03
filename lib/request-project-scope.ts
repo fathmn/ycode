@@ -81,6 +81,7 @@ export async function resolvePublicFormSubmissionProjectScope(
     if (hostProjectId) {
       return { projectId: hostProjectId, definitionState: 'published' };
     }
+    return { projectId: null, definitionState: 'published' };
   }
 
   const projectLookup = explicitProjectLookup(request);

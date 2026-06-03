@@ -5,6 +5,147 @@ import { useEffect } from 'react';
 const mobileDrawerBodyLocks = new Set<HTMLElement>();
 let mobileDrawerPreviousBodyOverflow: string | null = null;
 
+function setStudioImportSystemValues(form: HTMLFormElement): void {
+  form.querySelectorAll<HTMLElement>('[data-studio-import-system-value][name]').forEach((element) => {
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return;
+    const systemValue = element.getAttribute('data-studio-import-system-value');
+    if (systemValue === 'submission-timestamp-ms') {
+      element.value = String(Date.now());
+    } else if (systemValue === 'honeypot-empty' && !element.value) {
+      element.value = '';
+    }
+  });
+}
+
+function buildStudioFormPayload(form: HTMLFormElement): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  const formData = new FormData(form);
+
+  formData.forEach((value, key) => {
+    const existing = payload[key];
+    if (existing === undefined) {
+      payload[key] = value;
+    } else if (Array.isArray(existing)) {
+      existing.push(value);
+    } else {
+      payload[key] = [existing, value];
+    }
+  });
+
+  form.querySelectorAll<HTMLSelectElement>('select[name]').forEach((select) => {
+    if (!select.name || select.selectedIndex < 0) return;
+    const selectedOption = select.options[select.selectedIndex];
+    if (selectedOption?.value && selectedOption.text && selectedOption.value !== selectedOption.text) {
+      payload[select.name] = selectedOption.text;
+    }
+  });
+
+  form.querySelectorAll<HTMLInputElement>('input[type="checkbox"][name]').forEach((checkbox) => {
+    if (checkbox.name && !(checkbox.name in payload)) {
+      payload[checkbox.name] = 'false';
+    }
+  });
+
+  form.querySelectorAll<HTMLElement>('[data-studio-import-field-name][data-studio-import-payload-type]').forEach((field) => {
+    const fieldName = field.getAttribute('data-studio-import-field-name');
+    const payloadType = field.getAttribute('data-studio-import-payload-type');
+    if (!fieldName || !payloadType || !(fieldName in payload)) return;
+
+    const value = payload[fieldName];
+    if (payloadType === 'boolean') {
+      payload[fieldName] = value === true || value === 'true' || value === 'on' || value === '1';
+    } else if (payloadType === 'number') {
+      const nextValue = Array.isArray(value) ? value[0] : value;
+      const numberValue = Number(nextValue);
+      payload[fieldName] = Number.isFinite(numberValue) ? numberValue : null;
+    } else if (payloadType === 'stringArray') {
+      if (Array.isArray(value)) {
+        payload[fieldName] = value.map(String).filter((item) => item !== 'false');
+      } else if (value === 'false' || value === false || value == null) {
+        payload[fieldName] = [];
+      } else {
+        payload[fieldName] = [String(value)];
+      }
+    } else if (Array.isArray(value)) {
+      payload[fieldName] = value.map(String);
+    } else if (value != null) {
+      payload[fieldName] = String(value);
+    }
+  });
+
+  return payload;
+}
+
+function parseStudioFormEmail(form: HTMLFormElement): unknown {
+  const rawEmail = form.dataset.studioFormEmail;
+  if (!rawEmail) return undefined;
+  try {
+    return JSON.parse(rawEmail);
+  } catch {
+    return undefined;
+  }
+}
+
+function initializeStudioForms(): Array<() => void> {
+  const forms = Array.from(
+    document.querySelectorAll<HTMLFormElement>('form[data-studio-import-submit-mode], form[data-studio-import-submit-endpoint], form[data-studio-import-form]'),
+  );
+  if (forms.length === 0) return [];
+
+  const cleanups: Array<() => void> = [];
+
+  for (const form of forms) {
+    const onSubmit = async (event: SubmitEvent) => {
+      event.preventDefault();
+
+      const submitButton = form.querySelector<HTMLButtonElement | HTMLInputElement>('button[type="submit"], input[type="submit"]');
+      const successAlert = form.querySelector<HTMLElement>('[data-alert-type="success"]');
+      const errorAlert = form.querySelector<HTMLElement>('[data-alert-type="error"]');
+
+      if (successAlert) successAlert.style.display = 'none';
+      if (errorAlert) errorAlert.style.display = 'none';
+
+      setStudioImportSystemValues(form);
+
+      if (submitButton) submitButton.disabled = true;
+      try {
+        const response = await fetch('/ycode/api/form-submissions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            form_id: form.dataset.studioImportForm || form.getAttribute('id') || 'unnamed-form',
+            payload: buildStudioFormPayload(form),
+            metadata: {
+              page_url: window.location.href,
+            },
+            email: parseStudioFormEmail(form),
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Form submission failed with ${response.status}`);
+        }
+
+        form.reset();
+        if (form.dataset.studioFormSuccessAction === 'redirect' && form.dataset.studioFormRedirectHref) {
+          window.location.href = form.dataset.studioFormRedirectHref;
+        } else if (successAlert) {
+          successAlert.style.display = '';
+        }
+      } catch {
+        if (errorAlert) errorAlert.style.display = '';
+      } finally {
+        if (submitButton) submitButton.disabled = false;
+      }
+    };
+
+    form.addEventListener('submit', onSubmit);
+    cleanups.push(() => form.removeEventListener('submit', onSubmit));
+  }
+
+  return cleanups;
+}
+
 function formatCounterValue(value: number, prefix: string, suffix: string): string {
   return `${prefix}${Math.round(value).toLocaleString('de-DE')}${suffix}`;
 }
@@ -602,6 +743,9 @@ export default function StudioRuntimeInitializer() {
     }
     if (hasRuntimeAdapter('feature-tabs')) {
       cleanups.push(...initializeStudioFeatureTabs());
+    }
+    if (hasRuntimeAdapter('forms') || document.querySelector('form[data-studio-import-submit-mode], form[data-studio-import-submit-endpoint]')) {
+      cleanups.push(...initializeStudioForms());
     }
 
     return () => {

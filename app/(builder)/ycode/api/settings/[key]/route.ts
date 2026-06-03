@@ -4,6 +4,7 @@ import { clearAllCache } from '@/lib/services/cacheService';
 import { recordStudioCustomCodeMutation, requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 const CUSTOM_CODE_SETTING_KEYS = new Set(['custom_code_head', 'custom_code_body']);
+const OPERATOR_ONLY_SETTING_KEYS = new Set(['email']);
 const SETTINGS_READ_ROLES: StudioProjectRole[] = [
   'studio_admin',
   'studio_developer',
@@ -17,6 +18,14 @@ const SETTINGS_WRITE_ROLES: StudioProjectRole[] = [
   'customer_owner',
   'customer_editor',
 ];
+const SETTINGS_OPERATOR_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+];
+
+function rolesForSettingKey(key: string, fallbackRoles: StudioProjectRole[]): StudioProjectRole[] {
+  return OPERATOR_ONLY_SETTING_KEYS.has(key) ? SETTINGS_OPERATOR_ROLES : fallbackRoles;
+}
 
 /**
  * GET /ycode/api/settings/[key]
@@ -29,7 +38,7 @@ export async function GET(
 ) {
   try {
     const { key } = await params;
-    const roleCheck = await requireStudioProjectRole(request, SETTINGS_READ_ROLES);
+    const roleCheck = await requireStudioProjectRole(request, rolesForSettingKey(key, SETTINGS_READ_ROLES));
     if (!roleCheck.ok) return roleCheck.response;
 
     const value = await getSettingByKey(key, roleCheck.context.project.id);
@@ -72,7 +81,7 @@ export async function PUT(
       );
     }
 
-    const roleCheck = await requireStudioProjectRole(request, SETTINGS_WRITE_ROLES);
+    const roleCheck = await requireStudioProjectRole(request, rolesForSettingKey(key, SETTINGS_WRITE_ROLES));
     if (!roleCheck.ok) return roleCheck.response;
 
     await setSetting(key, value, roleCheck.context.project.id);

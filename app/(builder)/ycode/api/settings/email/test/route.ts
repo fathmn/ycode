@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { testSmtpConnection, type EmailSettings } from '@/lib/services/emailService';
+import { requireStudioProjectRole } from '@/lib/studio-platform';
 
 /**
  * POST /ycode/api/settings/email/test
@@ -8,6 +9,9 @@ import { testSmtpConnection, type EmailSettings } from '@/lib/services/emailServ
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, ['studio_admin', 'studio_developer']);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const body = await request.json();
 
     // Validate required fields

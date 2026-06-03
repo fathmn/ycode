@@ -46,6 +46,7 @@ import { getMapIframeProps, DEFAULT_MAP_SETTINGS } from '@/lib/map-utils';
 import { getMapboxAccessToken, getGoogleMapsEmbedApiKey } from '@/lib/map-server';
 import { getAssetsByIds } from '@/lib/repositories/assetRepository';
 import { isVirtualAssetField, findDisplayField } from '@/lib/collection-field-utils';
+import { resolveFormLayerId } from '@/lib/form-layer';
 import type { FieldVariable, AssetVariable, DynamicTextVariable, LinkSettings } from '@/types';
 import type { DesignColorVariable } from '@/types';
 
@@ -3630,6 +3631,45 @@ function layerToHtml(
 
   if (layer.id) {
     attrs.push(`data-layer-id="${escapeHtml(layer.id)}"`);
+  }
+
+  if (tag === 'form') {
+    const formId = resolveFormLayerId(layer);
+    const formSettings = layer.settings?.form;
+    const formAttributes = layer.attributes || {};
+    if (!formAttributes['data-studio-import-submit-mode'] && !formAttributes['data-studio-import-submit-endpoint']) {
+      attrs.push('data-studio-import-submit-mode="json"');
+    }
+    if (formId && !formAttributes['data-studio-import-form']) {
+      attrs.push(`data-studio-import-form="${escapeHtml(formId)}"`);
+    }
+    if (formSettings?.email_notification) {
+      attrs.push(`data-studio-form-email="${escapeHtml(JSON.stringify(formSettings.email_notification))}"`);
+    }
+    if (formSettings?.success_action) {
+      attrs.push(`data-studio-form-success-action="${escapeHtml(formSettings.success_action)}"`);
+    }
+    if (formSettings?.success_action === 'redirect' && formSettings.redirect_url) {
+      const redirectHref = generateLinkHref(formSettings.redirect_url, {
+        pages,
+        folders,
+        collectionItemSlugs,
+        collectionItemId: effectiveCollectionItemId,
+        pageCollectionItemId: pageLinkContext?.pageCollectionItemId,
+        collectionItemData: effectiveCollectionItemData,
+        pageCollectionItemData,
+        isPreview: pageLinkContext?.isPreview,
+        locale,
+        translations,
+        getAsset: makeAssetMapResolver(assetMap),
+        anchorMap,
+        layerDataMap: effectiveLayerDataMap,
+        pageCollectionSortedItemIds: pageLinkContext?.pageCollectionSortedItemIds,
+      });
+      if (redirectHref) {
+        attrs.push(`data-studio-form-redirect-href="${escapeHtml(redirectHref)}"`);
+      }
+    }
   }
 
   // Add data attributes for slider nav/pagination elements (used by SliderInitializer)

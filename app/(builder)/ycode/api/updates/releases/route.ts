@@ -1,5 +1,7 @@
 import packageJson from '../../../../../../package.json';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole } from '@/lib/studio-platform';
+import type { NextRequest } from 'next/server';
 
 const UPSTREAM_REPO = 'ycode/ycode'; // Official Ycode repo
 const CURRENT_VERSION = packageJson.version;
@@ -33,7 +35,10 @@ interface Release {
  *
  * Fetch all releases from the official Ycode repository
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const roleCheck = await requireStudioProjectRole(request, ['studio_admin', 'studio_developer']);
+  if (!roleCheck.ok) return roleCheck.response;
+
   try {
     // Fetch all releases from upstream repo
     const response = await fetch(

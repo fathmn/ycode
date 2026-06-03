@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { noCache } from '@/lib/api-response';
 import { exportAndUploadTemplate } from '@/lib/services/templateExportService';
+import { requireStudioProjectRole } from '@/lib/studio-platform';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -16,6 +17,9 @@ export const maxDuration = 120;
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, ['studio_admin', 'studio_developer']);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const body = await request.json();
     const { templateId, templateName, description, email } = body;
 

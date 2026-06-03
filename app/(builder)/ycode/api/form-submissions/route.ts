@@ -113,6 +113,12 @@ export async function POST(request: NextRequest) {
     const isPublishedDefinition = projectScope.definitionState === 'any'
       ? undefined
       : projectScope.definitionState === 'published';
+    if (!projectId && projectScope.definitionState !== 'any') {
+      return NextResponse.json(
+        { error: 'Form is not available for this project' },
+        { status: 404 }
+      );
+    }
     if (projectId && !(await hasDefinedFormId(body.form_id, projectId, isPublishedDefinition))) {
       return NextResponse.json(
         { error: 'Form is not available for this project' },

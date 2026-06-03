@@ -1,9 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { setSettings } from '@/lib/repositories/settingsRepository';
 import { clearAllCache } from '@/lib/services/cacheService';
-import { recordStudioCustomCodeMutation, requireStudioProjectRole } from '@/lib/studio-platform';
+import { recordStudioCustomCodeMutation, requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 const CUSTOM_CODE_SETTING_KEYS = new Set(['custom_code_head', 'custom_code_body']);
+const OPERATOR_ONLY_SETTING_KEYS = new Set(['email']);
+const SETTINGS_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
+const SETTINGS_OPERATOR_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+];
 
 /**
  * PUT /ycode/api/settings/batch
@@ -24,12 +35,11 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const roleCheck = await requireStudioProjectRole(request, [
-      'studio_admin',
-      'studio_developer',
-      'customer_owner',
-      'customer_editor',
-    ]);
+    const requestedKeys = Object.keys(settings);
+    const roles = requestedKeys.some((key) => OPERATOR_ONLY_SETTING_KEYS.has(key))
+      ? SETTINGS_OPERATOR_ROLES
+      : SETTINGS_WRITE_ROLES;
+    const roleCheck = await requireStudioProjectRole(request, roles);
     if (!roleCheck.ok) return roleCheck.response;
 
     const count = await setSettings(settings, roleCheck.context.project.id);

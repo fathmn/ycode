@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { noCache } from '@/lib/api-response';
 import { applyTemplate } from '@/lib/services/templateService';
+import { requireStudioProjectRole } from '@/lib/studio-platform';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -16,6 +17,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  const roleCheck = await requireStudioProjectRole(request, ['studio_admin', 'studio_developer']);
+  if (!roleCheck.ok) return roleCheck.response;
 
   // Get tenant ID from header (for cloud multi-tenant)
   const tenantId = request.headers.get('x-tenant-id') || undefined;
