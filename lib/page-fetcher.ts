@@ -55,6 +55,18 @@ import type { DesignColorVariable } from '@/types';
 let _cachedMapboxToken: string | null = null;
 let _cachedGoogleMapsEmbedKey: string | null = null;
 
+function shouldRenderLayerAsForm(layer: Layer, tag: string): boolean {
+  if (tag === 'form' || layer.name === 'form') return true;
+  const settings = layer.settings && typeof layer.settings === 'object' ? layer.settings : {};
+  const attributes = layer.attributes && typeof layer.attributes === 'object' ? layer.attributes : {};
+  return Boolean(
+    settings.form
+      || attributes['data-studio-import-submit-mode']
+      || attributes['data-studio-import-submit-endpoint']
+      || attributes['data-studio-import-form']
+  );
+}
+
 async function getTimezoneSetting(projectId?: string | null): Promise<string> {
   const settings = await getSettingsByKeys(['timezone'], projectId);
   return (settings.timezone as string | null) || 'UTC';
@@ -3575,7 +3587,9 @@ function layerToHtml(
 
   // Get the HTML tag
   let tag = getLayerHtmlTag(layer);
-  const resolvedFormLayerId = resolveFormLayerId(layer);
+  const resolvedFormLayerId = shouldRenderLayerAsForm(layer, tag)
+    ? resolveFormLayerId(layer)
+    : null;
   if (resolvedFormLayerId) {
     tag = 'form';
   }
