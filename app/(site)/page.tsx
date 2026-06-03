@@ -10,8 +10,10 @@ import { projectLookupFromHost, resolveStudioProjectId } from '@/lib/project-sco
 import { getSiteBaseUrl } from '@/lib/url-utils';
 import type { Metadata } from 'next';
 
-// Static by default for performance, dynamic only when pagination is requested
-export const revalidate = false; // Cache indefinitely until publish invalidates
+// Public pages resolve the Studio project from the request host. Keep the route
+// dynamic and cache fetched project data below with explicit revalidation tags.
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 async function resolvePublishedProjectId(): Promise<string | null> {
   const requestHeaders = await headers();
