@@ -1,10 +1,19 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { deleteItem } from '@/lib/repositories/collectionItemRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole } from '@/lib/studio-platform';
+import type { StudioProjectRole } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const COLLECTION_ITEM_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * POST /ycode/api/collections/items/delete
@@ -13,6 +22,10 @@ export const revalidate = 0;
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, COLLECTION_ITEM_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const body = await request.json();
     const { item_ids } = body;
     
@@ -30,7 +43,7 @@ export async function POST(request: NextRequest) {
     // Delete each item
     for (const itemId of item_ids) {
       try {
-        await deleteItem(itemId);
+        await deleteItem(itemId, false, projectId);
         deletedCount++;
       } catch (error) {
         console.error(`Error deleting item ${itemId}:`, error);

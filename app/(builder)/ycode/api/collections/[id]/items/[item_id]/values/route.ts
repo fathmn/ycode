@@ -1,11 +1,28 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getValuesByItemId } from '@/lib/repositories/collectionItemValueRepository';
 import { setValuesByFieldName } from '@/lib/repositories/collectionItemValueRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole } from '@/lib/studio-platform';
+import type { StudioProjectRole } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const COLLECTION_ITEM_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+
+const COLLECTION_ITEM_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * GET /ycode/api/collections/[id]/items/[item_id]/values
@@ -17,9 +34,12 @@ export async function GET(
 ) {
   try {
     const { item_id } = await params;
+    const roleCheck = await requireStudioProjectRole(request, COLLECTION_ITEM_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
 
     // Always get draft values in the builder
-    const values = await getValuesByItemId(item_id, false);
+    const values = await getValuesByItemId(item_id, false, projectId);
     return noCache({ data: values });
   } catch (error) {
     console.error('Error fetching item values:', error);
@@ -40,6 +60,9 @@ export async function PUT(
 ) {
   try {
     const { id, item_id } = await params;
+    const roleCheck = await requireStudioProjectRole(request, COLLECTION_ITEM_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
 
     const body = await request.json();
 
@@ -53,11 +76,12 @@ export async function PUT(
       id,
       body,
       {},
-      false // Update draft values
+      false, // Update draft values
+      projectId
     );
 
     // Get updated draft values
-    const values = await getValuesByItemId(item_id, false);
+    const values = await getValuesByItemId(item_id, false, projectId);
     return noCache({ data: values });
   } catch (error) {
     console.error('Error updating item values:', error);

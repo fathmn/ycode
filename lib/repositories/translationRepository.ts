@@ -6,6 +6,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import type { Translation, CreateTranslationData, UpdateTranslationData } from '@/types';
 
 /**
@@ -13,7 +14,8 @@ import type { Translation, CreateTranslationData, UpdateTranslationData } from '
  */
 export async function getTranslationsByLocale(
   localeId: string,
-  isPublished: boolean = false
+  isPublished: boolean = false,
+  projectId?: string | null
 ): Promise<Translation[]> {
   const client = await getSupabaseAdmin();
 
@@ -21,13 +23,16 @@ export async function getTranslationsByLocale(
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('translations')
     .select('*')
     .eq('locale_id', localeId)
     .eq('is_published', isPublished)
     .is('deleted_at', null)
     .order('created_at', { ascending: true });
+  query = (await applyProjectScopeToQuery(query, client, 'translations', projectId)).query;
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch translations: ${error.message}`);

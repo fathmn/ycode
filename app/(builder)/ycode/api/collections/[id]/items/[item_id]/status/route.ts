@@ -10,10 +10,18 @@ import { getCollectionById } from '@/lib/repositories/collectionRepository';
 import type { StatusAction } from '@/lib/collection-field-utils';
 import { clearAllCache } from '@/lib/services/cacheService';
 import { noCache } from '@/lib/api-response';
-import { getStudioLiveMutationBlocker } from '@/lib/studio-platform';
+import { getStudioLiveMutationBlocker, requireStudioProjectRole } from '@/lib/studio-platform';
+import type { StudioProjectRole } from '@/lib/studio-platform';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const COLLECTION_ITEM_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * PUT /ycode/api/collections/[id]/items/[item_id]/status
@@ -29,6 +37,10 @@ export async function PUT(
 ) {
   try {
     const { id: collectionId, item_id: itemId } = await params;
+    const roleCheck = await requireStudioProjectRole(request, COLLECTION_ITEM_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { action } = (await request.json()) as { action: StatusAction };
 
     if (!['draft', 'stage', 'publish'].includes(action)) {
@@ -42,7 +54,7 @@ export async function PUT(
 
     // Block publishing items when the collection itself hasn't been published
     if (action === 'publish') {
-      const publishedCollection = await getCollectionById(collectionId, true);
+      const publishedCollection = await getCollectionById(collectionId, true, false, projectId);
       if (!publishedCollection) {
         return noCache(
           { error: 'Cannot publish item: the collection has not been published yet' },
@@ -53,26 +65,26 @@ export async function PUT(
 
     switch (action) {
       case 'draft':
-        await unpublishSingleItem(itemId);
+        await unpublishSingleItem(itemId, projectId);
         await clearAllCache();
         break;
 
       case 'stage': {
-        const hadPublished = await stageSingleItem(itemId);
+        const hadPublished = await stageSingleItem(itemId, projectId);
         if (hadPublished) await clearAllCache();
         break;
       }
 
       case 'publish':
-        await publishSingleItem(itemId);
+        await publishSingleItem(itemId, projectId);
         await clearAllCache();
         break;
     }
 
     // Return enriched item
-    const item = await getItemWithValues(itemId, false);
+    const item = await getItemWithValues(itemId, false, projectId);
     if (item) {
-      await enrichSingleItemWithStatus(item, collectionId);
+      await enrichSingleItemWithStatus(item, collectionId, projectId);
     }
 
     return noCache({ data: item });

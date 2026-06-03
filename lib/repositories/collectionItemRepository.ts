@@ -7,7 +7,7 @@ import { getValuesByFieldId, getValuesByItemIds, getValuesByItemId } from '@/lib
 import { generateCollectionItemContentHash } from '@/lib/hash-utils';
 import { castValue } from '../collection-utils';
 import { findStatusFieldId, buildStatusValue } from '@/lib/collection-field-utils';
-import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired, tableHasProjectScopeColumn } from '@/lib/project-scope';
 
 /**
  * Collection Item Repository
@@ -400,7 +400,8 @@ export async function enrichSingleItemWithStatus(
 export async function getAllItemsByCollectionId(
   collection_id: string,
   is_published: boolean = false,
-  includeDeleted: boolean = false
+  includeDeleted: boolean = false,
+  projectId?: string | null
 ): Promise<CollectionItem[]> {
   const client = await getSupabaseAdmin();
 
@@ -421,6 +422,7 @@ export async function getAllItemsByCollectionId(
       .order('manual_order', { ascending: true })
       .order('created_at', { ascending: false })
       .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+    query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
 
     // For published queries, only include publishable items
     if (is_published) {
@@ -485,7 +487,11 @@ export async function getItemById(id: string, isPublished: boolean = false, proj
  * @param isPublished - Get draft (false) or published (true) items
  * @returns Array of items found
  */
-export async function getItemsByIds(ids: string[], isPublished: boolean = false): Promise<CollectionItem[]> {
+export async function getItemsByIds(
+  ids: string[],
+  isPublished: boolean = false,
+  projectId?: string | null
+): Promise<CollectionItem[]> {
   if (ids.length === 0) {
     return [];
   }
@@ -496,12 +502,15 @@ export async function getItemsByIds(ids: string[], isPublished: boolean = false)
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('collection_items')
     .select('*')
     .in('id', ids)
     .eq('is_published', isPublished)
     .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch collection items: ${error.message}`);
@@ -742,7 +751,8 @@ export async function getMaxManualOrder(
  */
 export async function getMaxIdValue(
   collection_id: string,
-  is_published: boolean = false
+  is_published: boolean = false,
+  projectId?: string | null
 ): Promise<number> {
   const client = await getSupabaseAdmin();
 
@@ -751,7 +761,7 @@ export async function getMaxIdValue(
   }
 
   // Get all fields for the collection
-  const fields = await getFieldsByCollectionId(collection_id, is_published);
+  const fields = await getFieldsByCollectionId(collection_id, is_published, undefined, projectId);
 
   // Find the field with key = 'id'
   const idField = fields.find(field => field.key === 'id');
@@ -762,7 +772,7 @@ export async function getMaxIdValue(
   }
 
   // Get all values for the ID field
-  const idValues = await getValuesByFieldId(idField.id, is_published);
+  const idValues = await getValuesByFieldId(idField.id, is_published, projectId);
 
   if (idValues.length === 0) {
     return 0;
@@ -824,7 +834,10 @@ export async function createItemsBulk(
 /**
  * Create a new item
  */
-export async function createItem(itemData: CreateCollectionItemData): Promise<CollectionItem> {
+export async function createItem(
+  itemData: CreateCollectionItemData,
+  projectId?: string | null
+): Promise<CollectionItem> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -833,18 +846,25 @@ export async function createItem(itemData: CreateCollectionItemData): Promise<Co
 
   const id = randomUUID();
   const isPublished = itemData.is_published ?? false;
+  const row: Record<string, unknown> = {
+    id,
+    ...itemData,
+    manual_order: itemData.manual_order ?? 0,
+    is_published: isPublished,
+    is_publishable: itemData.is_publishable ?? true,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  const hasProjectScope = await tableHasProjectScopeColumn(client, 'collection_items');
+  if (hasProjectScope && projectId) {
+    row.project_id = projectId;
+  } else if (hasProjectScope && isSharedDbProjectScopeRequired()) {
+    throw new Error('Project scope is required for collection_items');
+  }
 
   const { data, error } = await client
     .from('collection_items')
-    .insert({
-      id,
-      ...itemData,
-      manual_order: itemData.manual_order ?? 0,
-      is_published: isPublished,
-      is_publishable: itemData.is_publishable ?? true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
+    .insert(row)
     .select()
     .single();
 
@@ -864,7 +884,8 @@ export async function createItem(itemData: CreateCollectionItemData): Promise<Co
 export async function updateItem(
   id: string,
   itemData: UpdateCollectionItemData,
-  isPublished: boolean = false
+  isPublished: boolean = false,
+  projectId?: string | null
 ): Promise<CollectionItem> {
   const client = await getSupabaseAdmin();
 
@@ -872,7 +893,7 @@ export async function updateItem(
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('collection_items')
     .update({
       ...itemData,
@@ -880,9 +901,10 @@ export async function updateItem(
     })
     .eq('id', id)
     .eq('is_published', isPublished)
-    .is('deleted_at', null)
-    .select()
-    .single();
+    .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
+
+  const { data, error } = await query.select().single();
 
   if (error) {
     throw new Error(`Failed to update collection item: ${error.message}`);
@@ -899,7 +921,11 @@ export async function updateItem(
  * @param id - Item UUID
  * @param isPublished - Which version to delete: draft (false) or published (true). Defaults to false (draft).
  */
-export async function deleteItem(id: string, isPublished: boolean = false): Promise<void> {
+export async function deleteItem(
+  id: string,
+  isPublished: boolean = false,
+  projectId?: string | null
+): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -909,7 +935,7 @@ export async function deleteItem(id: string, isPublished: boolean = false): Prom
   const now = new Date().toISOString();
 
   // Soft delete the collection item
-  const { error: itemError } = await client
+  let itemQuery = client
     .from('collection_items')
     .update({
       deleted_at: now,
@@ -918,13 +944,16 @@ export async function deleteItem(id: string, isPublished: boolean = false): Prom
     .eq('id', id)
     .eq('is_published', isPublished)
     .is('deleted_at', null);
+  itemQuery = (await applyProjectScopeToQuery(itemQuery, client, 'collection_items', projectId)).query;
+
+  const { error: itemError } = await itemQuery;
 
   if (itemError) {
     throw new Error(`Failed to delete collection item: ${itemError.message}`);
   }
 
   // Soft delete all collection_item_values for this item (same published state)
-  const { error: valuesError } = await client
+  let valuesQuery = client
     .from('collection_item_values')
     .update({
       deleted_at: now,
@@ -933,6 +962,9 @@ export async function deleteItem(id: string, isPublished: boolean = false): Prom
     .eq('item_id', id)
     .eq('is_published', isPublished)
     .is('deleted_at', null);
+  valuesQuery = (await applyProjectScopeToQuery(valuesQuery, client, 'collection_item_values', projectId)).query;
+
+  const { error: valuesError } = await valuesQuery;
 
   if (valuesError) {
     throw new Error(`Failed to delete collection item values: ${valuesError.message}`);
@@ -946,18 +978,25 @@ export async function deleteItem(id: string, isPublished: boolean = false): Prom
  * @param id - Item UUID
  * @param isPublished - Which version to delete: draft (false) or published (true). Defaults to false (draft).
  */
-export async function hardDeleteItem(id: string, isPublished: boolean = false): Promise<void> {
+export async function hardDeleteItem(
+  id: string,
+  isPublished: boolean = false,
+  projectId?: string | null
+): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  const { error } = await client
+  let query = client
     .from('collection_items')
     .delete()
     .eq('id', id)
     .eq('is_published', isPublished);
+  query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
+
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to hard delete collection item: ${error.message}`);
@@ -1350,23 +1389,27 @@ async function countItemsWithValueChanges(
  * Unpublish a single item: deletes its published row and values (CASCADE).
  * Also sets is_publishable = false on the draft row.
  */
-export async function unpublishSingleItem(itemId: string): Promise<void> {
+export async function unpublishSingleItem(itemId: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
   if (!client) throw new Error('Supabase client not configured');
 
   // Delete published row (CASCADE deletes published values)
-  await client
+  let deletePublishedQuery = client
     .from('collection_items')
     .delete()
     .eq('id', itemId)
     .eq('is_published', true);
+  deletePublishedQuery = (await applyProjectScopeToQuery(deletePublishedQuery, client, 'collection_items', projectId)).query;
+  await deletePublishedQuery;
 
   // Set draft as not publishable
-  await client
+  let updateDraftQuery = client
     .from('collection_items')
     .update({ is_publishable: false, updated_at: new Date().toISOString() })
     .eq('id', itemId)
     .eq('is_published', false);
+  updateDraftQuery = (await applyProjectScopeToQuery(updateDraftQuery, client, 'collection_items', projectId)).query;
+  await updateDraftQuery;
 }
 
 /**
@@ -1374,35 +1417,41 @@ export async function unpublishSingleItem(itemId: string): Promise<void> {
  * then sets is_publishable = true on the draft row.
  * @returns true if a published version was removed (caller should clear cache)
  */
-export async function stageSingleItem(itemId: string): Promise<boolean> {
+export async function stageSingleItem(itemId: string, projectId?: string | null): Promise<boolean> {
   const client = await getSupabaseAdmin();
   if (!client) throw new Error('Supabase client not configured');
 
   // Check if a published version exists
-  const { data: published } = await client
+  let publishedQuery = client
     .from('collection_items')
     .select('id')
     .eq('id', itemId)
     .eq('is_published', true)
     .maybeSingle();
+  publishedQuery = (await applyProjectScopeToQuery(publishedQuery, client, 'collection_items', projectId)).query;
+  const { data: published } = await publishedQuery;
 
   const hadPublished = !!published;
 
   // Remove published version if it exists (CASCADE deletes published values)
   if (hadPublished) {
-    await client
+    let deletePublishedQuery = client
       .from('collection_items')
       .delete()
       .eq('id', itemId)
       .eq('is_published', true);
+    deletePublishedQuery = (await applyProjectScopeToQuery(deletePublishedQuery, client, 'collection_items', projectId)).query;
+    await deletePublishedQuery;
   }
 
   // Set draft as publishable
-  await client
+  let updateDraftQuery = client
     .from('collection_items')
     .update({ is_publishable: true, updated_at: new Date().toISOString() })
     .eq('id', itemId)
     .eq('is_published', false);
+  updateDraftQuery = (await applyProjectScopeToQuery(updateDraftQuery, client, 'collection_items', projectId)).query;
+  await updateDraftQuery;
 
   return hadPublished;
 }
@@ -1411,18 +1460,20 @@ export async function stageSingleItem(itemId: string): Promise<boolean> {
  * Publish a single item immediately: upserts a published item row
  * and copies draft values to published. Sets is_publishable = true.
  */
-export async function publishSingleItem(itemId: string): Promise<void> {
+export async function publishSingleItem(itemId: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
   if (!client) throw new Error('Supabase client not configured');
 
   // Get draft item
-  const { data: draftItem, error: draftErr } = await client
+  let draftQuery = client
     .from('collection_items')
     .select('*')
     .eq('id', itemId)
     .eq('is_published', false)
     .is('deleted_at', null)
     .single();
+  draftQuery = (await applyProjectScopeToQuery(draftQuery, client, 'collection_items', projectId)).query;
+  const { data: draftItem, error: draftErr } = await draftQuery;
 
   if (draftErr || !draftItem) {
     throw new Error('Draft item not found');
@@ -1432,53 +1483,72 @@ export async function publishSingleItem(itemId: string): Promise<void> {
 
   // Ensure draft is marked publishable
   if (!draftItem.is_publishable) {
-    await client
+    let markDraftQuery = client
       .from('collection_items')
       .update({ is_publishable: true, updated_at: now })
       .eq('id', itemId)
       .eq('is_published', false);
+    markDraftQuery = (await applyProjectScopeToQuery(markDraftQuery, client, 'collection_items', projectId)).query;
+    await markDraftQuery;
   }
 
   // Ensure published fields exist (values FK requires them)
-  const draftFields = await getFieldsByCollectionId(draftItem.collection_id, false);
+  const draftFields = await getFieldsByCollectionId(draftItem.collection_id, false, undefined, projectId);
   if (draftFields.length > 0) {
-    const fieldsToUpsert = draftFields.map(f => ({
-      id: f.id,
-      name: f.name,
-      key: f.key,
-      type: f.type,
-      default: f.default,
-      fillable: f.fillable,
-      order: f.order,
-      collection_id: f.collection_id,
-      reference_collection_id: f.reference_collection_id,
-      hidden: f.hidden,
-      is_computed: f.is_computed,
-      data: f.data,
-      is_published: true,
-      created_at: f.created_at,
-      updated_at: now,
-    }));
+    const hasFieldProjectScope = await tableHasProjectScopeColumn(client, 'collection_fields');
+    const fieldsToUpsert = draftFields.map(f => {
+      const row: Record<string, unknown> = {
+        id: f.id,
+        name: f.name,
+        key: f.key,
+        type: f.type,
+        default: f.default,
+        fillable: f.fillable,
+        order: f.order,
+        collection_id: f.collection_id,
+        reference_collection_id: f.reference_collection_id,
+        hidden: f.hidden,
+        is_computed: f.is_computed,
+        data: f.data,
+        is_published: true,
+        created_at: f.created_at,
+        updated_at: now,
+      };
+      if (hasFieldProjectScope && projectId) {
+        row.project_id = projectId;
+      } else if (hasFieldProjectScope && isSharedDbProjectScopeRequired()) {
+        throw new Error('Project scope is required for collection_fields');
+      }
+      return row;
+    });
     await client
       .from('collection_fields')
       .upsert(fieldsToUpsert, { onConflict: 'id,is_published' });
   }
 
   // Upsert published item row
+  const hasItemProjectScope = await tableHasProjectScopeColumn(client, 'collection_items');
+  const publishedItem: Record<string, unknown> = {
+    id: draftItem.id,
+    collection_id: draftItem.collection_id,
+    manual_order: draftItem.manual_order,
+    is_publishable: true,
+    is_published: true,
+    content_hash: draftItem.content_hash,
+    created_at: draftItem.created_at,
+    updated_at: now,
+  };
+  if (hasItemProjectScope && projectId) {
+    publishedItem.project_id = projectId;
+  } else if (hasItemProjectScope && isSharedDbProjectScopeRequired()) {
+    throw new Error('Project scope is required for collection_items');
+  }
+
   await client
     .from('collection_items')
-    .upsert({
-      id: draftItem.id,
-      collection_id: draftItem.collection_id,
-      manual_order: draftItem.manual_order,
-      is_publishable: true,
-      is_published: true,
-      content_hash: draftItem.content_hash,
-      created_at: draftItem.created_at,
-      updated_at: now,
-    }, { onConflict: 'id,is_published' });
+    .upsert(publishedItem, { onConflict: 'id,is_published' });
 
   // Copy draft values to published via existing publishValues utility
   const { publishValues } = await import('@/lib/repositories/collectionItemValueRepository');
-  await publishValues(itemId);
+  await publishValues(itemId, projectId);
 }

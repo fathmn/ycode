@@ -122,7 +122,7 @@ export async function getAssetsPaginated(options: GetAssetsOptions = {}): Promis
  * @param folderId - Optional folder ID to filter assets (null for root folder, undefined for all assets)
  * @deprecated Use getAssetsPaginated for better performance with large datasets
  */
-export async function getAllAssets(folderId?: string | null): Promise<Asset[]> {
+export async function getAllAssets(folderId?: string | null, projectId?: string | null): Promise<Asset[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -153,6 +153,7 @@ export async function getAllAssets(folderId?: string | null): Promise<Asset[]> {
         query = query.eq('asset_folder_id', folderId);
       }
     }
+    query = (await applyProjectScopeToQuery(query, client, 'assets', projectId)).query;
 
     const { data, error } = await query;
 

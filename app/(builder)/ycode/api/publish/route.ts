@@ -125,6 +125,7 @@ export async function POST(request: NextRequest) {
 
     const studioGate = await verifyStudioPublishGate(request);
     if (!studioGate.ok) return studioGate.response;
+    const projectId = studioGate.context.project.id;
 
     const publishedAt = new Date().toISOString();
 
@@ -210,7 +211,7 @@ export async function POST(request: NextRequest) {
 
         if (collectionIds && collectionIds.length > 0) {
           for (const collectionId of collectionIds) {
-            const { items } = await getItemsByCollectionId(collectionId, false);
+            const { items } = await getItemsByCollectionId(collectionId, false, undefined, projectId);
             collectionPublishes.push({
               collectionId,
               itemIds: items.map((item: any) => item.id),
@@ -219,7 +220,7 @@ export async function POST(request: NextRequest) {
         }
 
         if (collectionItemIds && collectionItemIds.length > 0) {
-          const itemsByCollection = await groupItemsByCollection(collectionItemIds);
+          const itemsByCollection = await groupItemsByCollection(collectionItemIds, projectId);
           itemsByCollection.forEach((itemIds, collectionId) => {
             const existing = collectionPublishes.find(cp => cp.collectionId === collectionId);
             if (existing) {
@@ -236,6 +237,7 @@ export async function POST(request: NextRequest) {
             const publishResult = await publishCollectionWithItems({
               collectionId: collectionPublish.collectionId,
               itemIds: collectionPublish.itemIds,
+              projectId,
             });
             totalItems += publishResult.published?.itemsCount || 0;
             totalValues += publishResult.published?.valuesCount || 0;
@@ -252,13 +254,14 @@ export async function POST(request: NextRequest) {
           result.changes.collectionItems = totalItems;
         }
       } else if (isPublishingAll) {
-        const allCollections = await getAllCollections({ is_published: false });
+        const allCollections = await getAllCollections({ is_published: false }, projectId);
 
         for (const collection of allCollections) {
-          const { items } = await getItemsByCollectionId(collection.id, false);
+          const { items } = await getItemsByCollectionId(collection.id, false, undefined, projectId);
           const publishResult = await publishCollectionWithItems({
             collectionId: collection.id,
             itemIds: items.map((item: any) => item.id),
+            projectId,
           });
           totalItems += publishResult.published?.itemsCount || 0;
           totalValues += publishResult.published?.valuesCount || 0;
@@ -345,7 +348,7 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        await cleanupDeletedCollections();
+        await cleanupDeletedCollections(projectId);
       } catch {
         // Non-fatal
       }

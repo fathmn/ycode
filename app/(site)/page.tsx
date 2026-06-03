@@ -1,12 +1,12 @@
 import { unstable_cache } from 'next/cache';
 import Link from 'next/link';
-import { headers } from 'next/headers';
+import { notFound } from 'next/navigation';
 import { fetchHomepage, fetchErrorPage } from '@/lib/page-fetcher';
 import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { generatePageMetadata, fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
-import { projectLookupFromHost, resolveCurrentYcodeSiteProjectId, resolveStudioProjectId } from '@/lib/project-scope';
+import { resolvePublishedProjectFromHeaders } from '@/lib/published-project';
 import { getSiteBaseUrl } from '@/lib/url-utils';
 import type { Metadata } from 'next';
 
@@ -14,15 +14,6 @@ import type { Metadata } from 'next';
 // dynamic and cache fetched project data below with explicit revalidation tags.
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-async function resolvePublishedProjectId(): Promise<string | null> {
-  const requestHeaders = await headers();
-  const hostLookup = projectLookupFromHost(
-    requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
-  );
-  if (hostLookup) return resolveStudioProjectId(hostLookup);
-  return resolveCurrentYcodeSiteProjectId();
-}
 
 /**
  * Fetch homepage data from database
@@ -101,7 +92,8 @@ async function fetchCachedErrorPage(errorCode: 401, projectId: string | null) {
 }
 
 export default async function Home() {
-  const projectId = await resolvePublishedProjectId();
+  const { projectId, unresolvedHost } = await resolvePublishedProjectFromHeaders();
+  if (unresolvedHost) notFound();
   // Cache-first homepage path; pagination is served through internal dynamic routes.
   const data = await fetchPublishedHomepage(projectId);
 
@@ -206,7 +198,13 @@ export default async function Home() {
 
 // Generate metadata
 export async function generateMetadata(): Promise<Metadata> {
-  const projectId = await resolvePublishedProjectId();
+  const { projectId, unresolvedHost } = await resolvePublishedProjectFromHeaders();
+  if (unresolvedHost) {
+    return {
+      title: 'Page Not Found',
+      robots: { index: false, follow: false },
+    };
+  }
   // Fetch page and global settings in parallel
   const [data, globalSettings] = await Promise.all([
     fetchPublishedHomepage(projectId),

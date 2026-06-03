@@ -1,10 +1,10 @@
 import type { NextRequest } from 'next/server';
 import {
-  projectLookupFromHost,
   resolveCurrentYcodeSiteProjectId,
   resolveSingleStudioProjectIdForCurrentUser,
   resolveStudioProjectId,
 } from '@/lib/project-scope';
+import { projectLookupFromRequestHosts } from '@/lib/project-host';
 import { canAccessStudioProject } from '@/lib/studio-platform';
 
 export class ProjectScopeAuthorizationError extends Error {
@@ -20,8 +20,9 @@ function explicitProjectLookup(request: NextRequest): string | null {
 }
 
 function hostProjectLookup(request: NextRequest): string | null {
-  return projectLookupFromHost(
-    request.headers.get('host') || request.headers.get('x-forwarded-host')
+  return projectLookupFromRequestHosts(
+    request.headers.get('host'),
+    request.headers.get('x-forwarded-host')
   );
 }
 
@@ -50,8 +51,13 @@ export async function resolveRequestProjectId(request: NextRequest): Promise<str
 export async function resolvePublicContentRequestProjectScope(request: NextRequest): Promise<PublicContentRequestProjectScope> {
   const hostLookup = hostProjectLookup(request);
   if (hostLookup) {
+    const projectId = await resolveStudioProjectId(hostLookup);
+    if (!projectId) {
+      throw new ProjectScopeAuthorizationError('Unknown Studio project host');
+    }
+
     return {
-      projectId: await resolveStudioProjectId(hostLookup),
+      projectId,
       source: 'host',
     };
   }
@@ -96,7 +102,7 @@ export async function resolvePublicFormSubmissionProjectScope(
     if (hostProjectId) {
       return { projectId: hostProjectId, definitionState: 'published' };
     }
-    return { projectId: null, definitionState: 'published' };
+    throw new ProjectScopeAuthorizationError('Unknown Studio project host');
   }
 
   const siteProjectId = await resolveCurrentYcodeSiteProjectId();

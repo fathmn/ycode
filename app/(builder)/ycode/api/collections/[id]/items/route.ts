@@ -8,12 +8,28 @@ import { getAssetsByIds } from '@/lib/repositories/assetRepository';
 import { findStatusFieldId, isAssetFieldType, isMultipleAssetField } from '@/lib/collection-field-utils';
 import type { StatusAction } from '@/lib/collection-field-utils';
 import { noCache } from '@/lib/api-response';
-import { getStudioLiveMutationBlocker } from '@/lib/studio-platform';
+import { getStudioLiveMutationBlocker, requireStudioProjectRole } from '@/lib/studio-platform';
+import type { StudioProjectRole } from '@/lib/studio-platform';
 import type { CollectionItemWithValues, CollectionField } from '@/types';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const COLLECTION_ITEM_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+
+const COLLECTION_ITEM_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * GET /ycode/api/collections/[id]/items
@@ -33,6 +49,9 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
+    const roleCheck = await requireStudioProjectRole(request, COLLECTION_ITEM_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
 
     // Extract query parameters
     const { searchParams } = new URL(request.url);
@@ -70,14 +89,14 @@ export async function GET(
     };
 
     // Always get draft items in the builder
-    let { items, total } = await getItemsWithValues(id, false, filters);
+    let { items, total } = await getItemsWithValues(id, false, filters, projectId);
 
     // Find status field ID for enrichment
-    const allFields = await getFieldsByCollectionId(id, false);
+    const allFields = await getFieldsByCollectionId(id, false, undefined, projectId);
     const statusFieldId = findStatusFieldId(allFields);
 
     // Enrich items with computed status values before sorting
-    await enrichItemsWithStatus(items, id, statusFieldId);
+    await enrichItemsWithStatus(items, id, statusFieldId, projectId);
 
     // Apply dynamic filters from filter layer conditions
     if (dynamicFilters.length > 0) {
@@ -155,7 +174,7 @@ export async function GET(
     if (includeAssets) {
       const assetIds = extractAssetIdsFromItems(items, allFields);
       if (assetIds.length > 0) {
-        const assetsMap = await getAssetsByIds(assetIds, false);
+        const assetsMap = await getAssetsByIds(assetIds, false, projectId);
         responseData.referencedAssets = Object.values(assetsMap);
       }
     }
@@ -215,6 +234,9 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
+    const roleCheck = await requireStudioProjectRole(request, COLLECTION_ITEM_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
 
     const body = await request.json();
 
@@ -226,9 +248,9 @@ export async function POST(
       collection_id: id,
       manual_order: itemData.manual_order ?? 0,
       is_published: false, // Always create as draft
-    });
+    }, projectId);
     // Get all fields to map field keys to field IDs
-    const fields = await getFieldsByCollectionId(id, false);
+    const fields = await getFieldsByCollectionId(id, false, undefined, projectId);
 
     // Find field IDs for built-in fields
     const idField = fields.find(f => f.key === 'id');
@@ -236,7 +258,7 @@ export async function POST(
     const updatedAtField = fields.find(f => f.key === 'updated_at');
 
     // Calculate auto-incrementing ID based on max ID value + 1
-    const maxId = await getMaxIdValue(id, false);
+    const maxId = await getMaxIdValue(id, false, projectId);
     const autoIncrementId = maxId + 1;
     // Get current timestamp for created_at and updated_at
     const now = new Date().toISOString();
@@ -265,7 +287,8 @@ export async function POST(
         id,
         valuesWithAutoFields,
         {},
-        false // Create draft values
+        false, // Create draft values
+        projectId
       );
     }
 
@@ -274,28 +297,28 @@ export async function POST(
     if (action === 'draft') {
       const blocker = getStudioLiveMutationBlocker();
       if (blocker) return noCache(blocker, 409);
-      await unpublishSingleItem(item.id);
+      await unpublishSingleItem(item.id, projectId);
       await clearAllCache();
     } else if (action === 'stage') {
       // New items are already staged (is_publishable defaults to true)
     } else if (action === 'publish') {
       const blocker = getStudioLiveMutationBlocker();
       if (blocker) return noCache(blocker, 409);
-      const publishedCollection = await getCollectionById(id, true);
+      const publishedCollection = await getCollectionById(id, true, false, projectId);
       if (!publishedCollection) {
         return noCache(
           { error: 'Cannot publish item: the collection has not been published yet' },
           400
         );
       }
-      await publishSingleItem(item.id);
+      await publishSingleItem(item.id, projectId);
       await clearAllCache();
     }
 
     // Get item with values and enrich with status
-    const itemWithValues = await getItemWithValues(item.id, false);
+    const itemWithValues = await getItemWithValues(item.id, false, projectId);
     if (itemWithValues) {
-      await enrichSingleItemWithStatus(itemWithValues, id);
+      await enrichSingleItemWithStatus(itemWithValues, id, projectId);
     }
 
     return noCache(

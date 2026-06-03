@@ -73,7 +73,8 @@ export async function resolveItemReferences(
   maxDepth: number = 6,
   currentDepth: number = 0,
   fieldProjections?: FieldProjections,
-  currentPath?: string
+  currentPath?: string,
+  projectId?: string | null
 ): Promise<Record<string, any>> {
   const result: Record<string, any> = {
     _id: itemId,
@@ -120,9 +121,9 @@ export async function resolveItemReferences(
     if (field.type === 'reference' && field.reference_collection_id) {
       // Single reference - resolve to nested object
       try {
-        const refItem = await getItemWithValues(value, isPublished);
+        const refItem = await getItemWithValues(value, isPublished, projectId);
         if (refItem) {
-          const refFields = await getFieldsByCollectionId(field.reference_collection_id, isPublished, { excludeComputed: true });
+          const refFields = await getFieldsByCollectionId(field.reference_collection_id, isPublished, { excludeComputed: true }, projectId);
           // Build the path for nested projections
           const nestedPath = currentPath ? `${currentPath}.${field.name}` : undefined;
           const resolved = await resolveItemReferences(
@@ -134,7 +135,8 @@ export async function resolveItemReferences(
             maxDepth,
             currentDepth + 1,
             fieldProjections,
-            nestedPath
+            nestedPath,
+            projectId
           );
           result[field.name] = resolved;
         } else {
@@ -160,12 +162,12 @@ export async function resolveItemReferences(
         }
 
         const resolvedItems: ResolvedItem[] = [];
-        const refFields = await getFieldsByCollectionId(field.reference_collection_id, isPublished);
+        const refFields = await getFieldsByCollectionId(field.reference_collection_id, isPublished, undefined, projectId);
         // Build the path for nested projections
         const nestedPath = currentPath ? `${currentPath}.${field.name}` : undefined;
         
         for (const refItemId of itemIds) {
-          const refItem = await getItemWithValues(refItemId, isPublished);
+          const refItem = await getItemWithValues(refItemId, isPublished, projectId);
           if (refItem) {
             const resolved = await resolveItemReferences(
               refItem.id,
@@ -176,7 +178,8 @@ export async function resolveItemReferences(
               maxDepth,
               currentDepth + 1,
               fieldProjections,
-              nestedPath
+              nestedPath,
+              projectId
             );
             resolvedItems.push(resolved as ResolvedItem);
           }
@@ -211,7 +214,8 @@ export async function transformItemToPublicWithRefs(
   fields: CollectionField[],
   isPublished: boolean = true,
   fieldProjections?: FieldProjections,
-  collectionName?: string
+  collectionName?: string,
+  projectId?: string | null
 ): Promise<Record<string, any>> {
   return resolveItemReferences(
     item.id,
@@ -222,7 +226,8 @@ export async function transformItemToPublicWithRefs(
     6,
     0,
     fieldProjections,
-    collectionName
+    collectionName,
+    projectId
   );
 }
 

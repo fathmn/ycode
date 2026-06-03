@@ -1,12 +1,29 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getItemWithValues, updateItem, deleteItem, enrichSingleItemWithStatus } from '@/lib/repositories/collectionItemRepository';
 import { setValuesByFieldName } from '@/lib/repositories/collectionItemValueRepository';
 import { deleteTranslationsInBulk } from '@/lib/repositories/translationRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole } from '@/lib/studio-platform';
+import type { StudioProjectRole } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const COLLECTION_ITEM_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+
+const COLLECTION_ITEM_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * GET /ycode/api/collections/[id]/items/[item_id]
@@ -20,13 +37,16 @@ export async function GET(
 ) {
   try {
     const { item_id } = await params;
+    const roleCheck = await requireStudioProjectRole(request, COLLECTION_ITEM_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
     const itemId = item_id; // UUID string, no parsing needed
 
     // Check for published query param
     const { searchParams } = new URL(request.url);
     const isPublished = searchParams.get('published') === 'true';
 
-    const item = await getItemWithValues(itemId, isPublished);
+    const item = await getItemWithValues(itemId, isPublished, projectId);
 
     if (!item) {
       return noCache({ error: 'Item not found' }, 404);
@@ -52,6 +72,9 @@ export async function PUT(
 ) {
   try {
     const { id, item_id } = await params;
+    const roleCheck = await requireStudioProjectRole(request, COLLECTION_ITEM_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
     const collectionId = id; // UUID string
     const itemId = item_id; // UUID string
 
@@ -67,7 +90,7 @@ export async function PUT(
     }
 
     // Always update the item's updated_at timestamp in collection_items table
-    await updateItem(itemId, updatePayload);
+    await updateItem(itemId, updatePayload, false, projectId);
 
     // Update field values if provided
     if (values && typeof values === 'object') {
@@ -76,14 +99,15 @@ export async function PUT(
         collectionId,
         values,
         {},
-        false // is_published (draft)
+        false, // is_published (draft)
+        projectId
       );
     }
 
     // Get updated item with values and enrich with status
-    const updatedItem = await getItemWithValues(itemId, false);
+    const updatedItem = await getItemWithValues(itemId, false, projectId);
     if (updatedItem) {
-      await enrichSingleItemWithStatus(updatedItem, collectionId);
+      await enrichSingleItemWithStatus(updatedItem, collectionId, projectId);
     }
 
     return noCache({ data: updatedItem });
@@ -107,10 +131,13 @@ export async function DELETE(
 ) {
   try {
     const { item_id } = await params;
+    const roleCheck = await requireStudioProjectRole(request, COLLECTION_ITEM_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
     const itemId = item_id; // UUID string, no parsing needed
 
     // Delete the collection item
-    await deleteItem(itemId);
+    await deleteItem(itemId, false, projectId);
 
     // Delete all translations for this CMS item
     await deleteTranslationsInBulk('cms', itemId);

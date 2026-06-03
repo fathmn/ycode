@@ -6,24 +6,28 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import type { Locale, CreateLocaleData, UpdateLocaleData } from '@/types';
 
 /**
  * Get all locales (draft by default)
  */
-export async function getAllLocales(isPublished: boolean = false): Promise<Locale[]> {
+export async function getAllLocales(isPublished: boolean = false, projectId?: string | null): Promise<Locale[]> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('locales')
     .select('*')
     .eq('is_published', isPublished)
     .is('deleted_at', null)
     .order('is_default', { ascending: false })
     .order('label', { ascending: true });
+  query = (await applyProjectScopeToQuery(query, client, 'locales', projectId)).query;
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch locales: ${error.message}`);

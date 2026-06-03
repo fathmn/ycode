@@ -1,20 +1,10 @@
 import '@/app/globals.css';
-import { headers } from 'next/headers';
 import RootLayoutShell, { defaultMetadata } from '@/components/RootLayoutShell';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
-import { projectLookupFromHost, resolveCurrentYcodeSiteProjectId, resolveStudioProjectId } from '@/lib/project-scope';
+import { resolvePublishedProjectFromHeaders } from '@/lib/published-project';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 
 export const metadata = defaultMetadata;
-
-async function resolvePublishedProjectId(): Promise<string | null> {
-  const requestHeaders = await headers();
-  const hostLookup = projectLookupFromHost(
-    requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
-  );
-  if (hostLookup) return resolveStudioProjectId(hostLookup);
-  return resolveCurrentYcodeSiteProjectId();
-}
 
 export default async function SiteLayout({
   children,
@@ -27,10 +17,12 @@ export default async function SiteLayout({
   // would force all pages dynamic. Cloud injects global head code from PageRenderer instead.
   if (process.env.SKIP_SETUP !== 'true') {
     try {
-      const projectId = await resolvePublishedProjectId();
-      const globalSettings = await fetchGlobalPageSettings(projectId);
-      if (globalSettings.globalCustomCodeHead) {
-        headElements = renderRootLayoutHeadCode(globalSettings.globalCustomCodeHead);
+      const { projectId, unresolvedHost } = await resolvePublishedProjectFromHeaders();
+      if (!unresolvedHost) {
+        const globalSettings = await fetchGlobalPageSettings(projectId);
+        if (globalSettings.globalCustomCodeHead) {
+          headElements = renderRootLayoutHeadCode(globalSettings.globalCustomCodeHead);
+        }
       }
     } catch {
       // Supabase not configured — skip custom code

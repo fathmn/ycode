@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import type { Collection, CreateCollectionData, UpdateCollectionData } from '@/types';
 import { randomUUID } from 'crypto';
 
@@ -22,7 +23,7 @@ export interface QueryFilters {
  * @param filters - Optional filters (is_published, deleted)
  * @param filters.is_published - Get draft (false) or published (true) collections. Defaults to false (draft).
  */
-export async function getAllCollections(filters?: QueryFilters): Promise<Collection[]> {
+export async function getAllCollections(filters?: QueryFilters, projectId?: string | null): Promise<Collection[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -50,6 +51,8 @@ export async function getAllCollections(filters?: QueryFilters): Promise<Collect
     // Default: exclude deleted
     query = query.is('deleted_at', null);
   }
+
+  query = (await applyProjectScopeToQuery(query, client, 'collections', projectId)).query;
 
   const { data, error } = await query;
 
@@ -118,7 +121,8 @@ export async function getPublishedCollectionIds(collectionIds: string[]): Promis
 export async function getCollectionById(
   id: string,
   isPublished: boolean = false,
-  includeDeleted: boolean = false
+  includeDeleted: boolean = false,
+  projectId?: string | null
 ): Promise<Collection | null> {
   const client = await getSupabaseAdmin();
 
@@ -136,6 +140,7 @@ export async function getCollectionById(
   if (!includeDeleted) {
     query = query.is('deleted_at', null);
   }
+  query = (await applyProjectScopeToQuery(query, client, 'collections', projectId)).query;
 
   const { data, error } = await query.single();
 
@@ -336,7 +341,11 @@ export async function deleteCollection(id: string, isPublished: boolean = false)
  * @param id - Collection UUID
  * @param isPublished - Which version to delete: draft (false) or published (true). Defaults to false (draft).
  */
-export async function hardDeleteCollection(id: string, isPublished: boolean = false): Promise<void> {
+export async function hardDeleteCollection(
+  id: string,
+  isPublished: boolean = false,
+  projectId?: string | null
+): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -344,11 +353,14 @@ export async function hardDeleteCollection(id: string, isPublished: boolean = fa
   }
 
   // Hard delete the collection (CASCADE will delete all related data)
-  const { error } = await client
+  let query = client
     .from('collections')
     .delete()
     .eq('id', id)
     .eq('is_published', isPublished);
+  query = (await applyProjectScopeToQuery(query, client, 'collections', projectId)).query;
+
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to hard delete collection: ${error.message}`);

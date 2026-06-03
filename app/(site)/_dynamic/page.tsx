@@ -1,26 +1,17 @@
 import { unstable_noStore } from 'next/cache';
 import Link from 'next/link';
-import { headers } from 'next/headers';
+import { notFound } from 'next/navigation';
 import { fetchHomepage, fetchErrorPage, PaginationContext } from '@/lib/page-fetcher';
 import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
-import { projectLookupFromHost, resolveCurrentYcodeSiteProjectId, resolveStudioProjectId } from '@/lib/project-scope';
+import { resolvePublishedProjectFromHeaders } from '@/lib/published-project';
 
 // Internal pagination path: always dynamic/no-store.
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-async function resolvePublishedProjectId(): Promise<string | null> {
-  const requestHeaders = await headers();
-  const hostLookup = projectLookupFromHost(
-    requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
-  );
-  if (hostLookup) return resolveStudioProjectId(hostLookup);
-  return resolveCurrentYcodeSiteProjectId();
-}
 
 interface DynamicHomeProps {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
@@ -48,7 +39,8 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
     defaultPage: 1,
   };
 
-  const projectId = await resolvePublishedProjectId();
+  const { projectId, unresolvedHost } = await resolvePublishedProjectFromHeaders();
+  if (unresolvedHost) notFound();
   const data = await fetchHomepage(true, paginationContext, undefined, undefined, undefined, projectId);
 
   if (!data || !data.pageLayers) {

@@ -5,6 +5,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import { SUPABASE_QUERY_LIMIT, SUPABASE_WRITE_BATCH_SIZE } from '@/lib/supabase-constants';
 import type { AssetFolder, CreateAssetFolderData, UpdateAssetFolderData } from '../../types';
 
@@ -12,19 +13,22 @@ import type { AssetFolder, CreateAssetFolderData, UpdateAssetFolderData } from '
  * Get all asset folders (drafts by default)
  * @param isPublished - Filter by published status (default: false for drafts)
  */
-export async function getAllAssetFolders(isPublished = false): Promise<AssetFolder[]> {
+export async function getAllAssetFolders(isPublished = false, projectId?: string | null): Promise<AssetFolder[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('asset_folders')
     .select('*')
     .eq('is_published', isPublished)
     .is('deleted_at', null)
     .order('order', { ascending: true });
+  query = (await applyProjectScopeToQuery(query, client, 'asset_folders', projectId)).query;
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch asset folders: ${error.message}`);

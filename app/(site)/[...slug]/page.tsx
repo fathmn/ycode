@@ -1,6 +1,5 @@
 import { notFound, redirect, permanentRedirect } from 'next/navigation';
 import { unstable_cache } from 'next/cache';
-import { headers } from 'next/headers';
 import type { Metadata } from 'next';
 import { generatePageMetadata, fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { fetchPageByPath, fetchErrorPage } from '@/lib/page-fetcher';
@@ -8,7 +7,7 @@ import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
-import { projectLookupFromHost, resolveCurrentYcodeSiteProjectId, resolveStudioProjectId } from '@/lib/project-scope';
+import { resolvePublishedProjectFromHeaders } from '@/lib/published-project';
 import { getSiteBaseUrl } from '@/lib/url-utils';
 import type { Page, Redirect as RedirectType } from '@/types';
 
@@ -17,15 +16,6 @@ import type { Page, Redirect as RedirectType } from '@/types';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 export const dynamicParams = true;
-
-async function resolvePublishedProjectId(): Promise<string | null> {
-  const requestHeaders = await headers();
-  const hostLookup = projectLookupFromHost(
-    requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
-  );
-  if (hostLookup) return resolveStudioProjectId(hostLookup);
-  return resolveCurrentYcodeSiteProjectId();
-}
 
 export async function generateStaticParams() {
   return [];
@@ -130,7 +120,8 @@ export default async function Page({ params }: PageProps) {
 
   // Handle catch-all slug (join array into path)
   const slugPath = Array.isArray(slug) ? slug.join('/') : slug;
-  const projectId = await resolvePublishedProjectId();
+  const { projectId, unresolvedHost } = await resolvePublishedProjectFromHeaders();
+  if (unresolvedHost) notFound();
 
   // Check for redirects before processing the page
   const currentPath = `/${slugPath}`;
@@ -266,7 +257,13 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
   // Handle catch-all slug (join array into path)
   const slugPath = Array.isArray(slug) ? slug.join('/') : slug;
-  const projectId = await resolvePublishedProjectId();
+  const { projectId, unresolvedHost } = await resolvePublishedProjectFromHeaders();
+  if (unresolvedHost) {
+    return {
+      title: 'Page Not Found',
+      robots: { index: false, follow: false },
+    };
+  }
 
   // Fetch page and global settings in parallel
   const [data, globalSettings] = await Promise.all([

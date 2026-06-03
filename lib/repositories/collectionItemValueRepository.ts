@@ -5,7 +5,7 @@ import { castValue, valueToString } from '../collection-utils';
 import { generateCollectionItemContentHash } from '../hash-utils';
 import { randomUUID } from 'crypto';
 import { deleteTranslationsInBulk, markTranslationsIncomplete } from '@/lib/repositories/translationRepository';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired, tableHasProjectScopeColumn } from '@/lib/project-scope';
 
 /**
  * Collection Item Value Repository
@@ -20,15 +20,23 @@ import { applyProjectScopeToQuery } from '@/lib/project-scope';
  */
 
 /** Update the content_hash on a collection_items row */
-async function updateContentHash(itemId: string, isPublished: boolean, hash: string): Promise<void> {
+async function updateContentHash(
+  itemId: string,
+  isPublished: boolean,
+  hash: string,
+  projectId?: string | null
+): Promise<void> {
   const client = await getSupabaseAdmin();
   if (!client) throw new Error('Supabase client not configured');
 
-  const { error } = await client
+  let query = client
     .from('collection_items')
     .update({ content_hash: hash, updated_at: new Date().toISOString() })
     .eq('id', itemId)
     .eq('is_published', isPublished);
+  query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
+
+  const { error } = await query;
 
   if (error) throw new Error(`Failed to update content_hash: ${error.message}`);
 }
@@ -226,7 +234,8 @@ export async function getValuesByItemId(
  */
 export async function getValuesByFieldId(
   field_id: string,
-  is_published: boolean = false
+  is_published: boolean = false,
+  projectId?: string | null
 ): Promise<CollectionItemValue[]> {
   const client = await getSupabaseAdmin();
 
@@ -234,12 +243,15 @@ export async function getValuesByFieldId(
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('collection_item_values')
     .select('*')
     .eq('field_id', field_id)
     .eq('is_published', is_published)
     .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'collection_item_values', projectId)).query;
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch field values: ${error.message}`);
@@ -257,7 +269,8 @@ export async function getValuesByFieldId(
 export async function getValue(
   item_id: string,
   field_id: string,
-  is_published: boolean = false
+  is_published: boolean = false,
+  projectId?: string | null
 ): Promise<CollectionItemValue | null> {
   const client = await getSupabaseAdmin();
 
@@ -265,14 +278,16 @@ export async function getValue(
     throw new Error('Supabase client not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('collection_item_values')
     .select('*')
     .eq('item_id', item_id)
     .eq('field_id', field_id)
     .eq('is_published', is_published)
-    .is('deleted_at', null)
-    .single();
+    .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'collection_item_values', projectId)).query;
+
+  const { data, error } = await query.single();
 
   if (error && error.code !== 'PGRST116') {
     throw new Error(`Failed to fetch value: ${error.message}`);
@@ -292,7 +307,8 @@ export async function setValue(
   item_id: string,
   field_id: string,
   value: string | null,
-  is_published: boolean = false
+  is_published: boolean = false,
+  projectId?: string | null
 ): Promise<CollectionItemValue> {
   const client = await getSupabaseAdmin();
 
@@ -301,19 +317,20 @@ export async function setValue(
   }
 
   // Check if value already exists for this specific version (draft or published)
-  const existing = await getValue(item_id, field_id, is_published);
+  const existing = await getValue(item_id, field_id, is_published, projectId);
   if (existing) {
     // Update existing value
-    const { data, error } = await client
+    let query = client
       .from('collection_item_values')
       .update({
         value,
         updated_at: new Date().toISOString(),
       })
       .eq('id', existing.id)
-      .eq('is_published', is_published)
-      .select()
-      .single();
+      .eq('is_published', is_published);
+    query = (await applyProjectScopeToQuery(query, client, 'collection_item_values', projectId)).query;
+
+    const { data, error } = await query.select().single();
 
     if (error) {
       throw new Error(`Failed to update value: ${error.message}`);
@@ -321,18 +338,26 @@ export async function setValue(
 
     return data;
   } else {
+    const row: Record<string, unknown> = {
+      id: randomUUID(),
+      item_id,
+      field_id,
+      value,
+      is_published,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const hasProjectScope = await tableHasProjectScopeColumn(client, 'collection_item_values');
+    if (hasProjectScope && projectId) {
+      row.project_id = projectId;
+    } else if (hasProjectScope && isSharedDbProjectScopeRequired()) {
+      throw new Error('Project scope is required for collection_item_values');
+    }
+
     // Create new value
     const { data, error } = await client
       .from('collection_item_values')
-      .insert({
-        id: randomUUID(),
-        item_id,
-        field_id,
-        value,
-        is_published,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
+      .insert(row)
       .select()
       .single();
 
@@ -353,13 +378,14 @@ export async function setValue(
 export async function setValues(
   item_id: string,
   values: Record<string, string | null>,
-  is_published: boolean = false
+  is_published: boolean = false,
+  projectId?: string | null
 ): Promise<CollectionItemValue[]> {
   const results: CollectionItemValue[] = [];
 
   // Process each value
   for (const [field_id, value] of Object.entries(values)) {
-    const result = await setValue(item_id, field_id, value, is_published);
+    const result = await setValue(item_id, field_id, value, is_published, projectId);
     results.push(result);
   }
 
@@ -381,7 +407,8 @@ export async function setValuesByFieldName(
   collection_id: string,
   values: Record<string, any>,
   fieldType: Record<string, CollectionFieldType>,
-  is_published: boolean = false
+  is_published: boolean = false,
+  projectId?: string | null
 ): Promise<CollectionItemValue[]> {
   const client = await getSupabaseAdmin();
 
@@ -392,7 +419,7 @@ export async function setValuesByFieldName(
   // Get current values to detect changes (only for draft updates)
   let currentValuesMap: Record<string, string | null> = {};
   if (!is_published) {
-    const currentValues = await getValuesByItemId(item_id, false);
+    const currentValues = await getValuesByItemId(item_id, false, projectId);
     currentValuesMap = currentValues.reduce((acc, val) => {
       acc[val.field_id] = val.value;
       return acc;
@@ -401,12 +428,15 @@ export async function setValuesByFieldName(
 
   // Get field mappings to validate field IDs and get types
   // Fields are fetched with the same is_published status as the values
-  const { data: fields, error } = await client
+  let fieldsQuery = client
     .from('collection_fields')
     .select('id, type, key')
     .eq('collection_id', collection_id)
     .eq('is_published', is_published)
     .is('deleted_at', null);
+  fieldsQuery = (await applyProjectScopeToQuery(fieldsQuery, client, 'collection_fields', projectId)).query;
+
+  const { data: fields, error } = await fieldsQuery;
 
   if (error) {
     throw new Error(`Failed to fetch fields: ${error.message}`);
@@ -464,12 +494,12 @@ export async function setValuesByFieldName(
     }
   }
 
-  const results = await setValues(item_id, valuesToSet, is_published);
+  const results = await setValues(item_id, valuesToSet, is_published, projectId);
 
   // Recompute content_hash from all current values
-  const allValues = await getValuesByItemId(item_id, is_published);
+  const allValues = await getValuesByItemId(item_id, is_published, projectId);
   const hash = generateCollectionItemContentHash(allValues.map(v => ({ field_id: v.field_id, value: v.value })));
-  await updateContentHash(item_id, is_published, hash);
+  await updateContentHash(item_id, is_published, hash, projectId);
 
   return results;
 }
@@ -584,7 +614,7 @@ export async function renameValuesForField(
  * @param item_id - Item UUID to publish
  * @returns Number of values published
  */
-export async function publishValues(item_id: string): Promise<number> {
+export async function publishValues(item_id: string, projectId?: string | null): Promise<number> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -592,7 +622,7 @@ export async function publishValues(item_id: string): Promise<number> {
   }
 
   // Get all draft values for this item
-  const draftValues = await getValuesByItemId(item_id, false);
+  const draftValues = await getValuesByItemId(item_id, false, projectId);
 
   if (draftValues.length === 0) {
     return 0;
@@ -600,15 +630,24 @@ export async function publishValues(item_id: string): Promise<number> {
 
   // Prepare values for batch upsert
   const now = new Date().toISOString();
-  const valuesToUpsert = draftValues.map(value => ({
-    id: value.id,
-    item_id: value.item_id,
-    field_id: value.field_id,
-    value: value.value,
-    is_published: true,
-    created_at: value.created_at,
-    updated_at: now,
-  }));
+  const hasProjectScope = await tableHasProjectScopeColumn(client, 'collection_item_values');
+  const valuesToUpsert = draftValues.map(value => {
+    const row: Record<string, unknown> = {
+      id: value.id,
+      item_id: value.item_id,
+      field_id: value.field_id,
+      value: value.value,
+      is_published: true,
+      created_at: value.created_at,
+      updated_at: now,
+    };
+    if (hasProjectScope && projectId) {
+      row.project_id = projectId;
+    } else if (hasProjectScope && isSharedDbProjectScopeRequired()) {
+      throw new Error('Project scope is required for collection_item_values');
+    }
+    return row;
+  });
 
   // Batch upsert all values
   const { error } = await client
@@ -623,7 +662,7 @@ export async function publishValues(item_id: string): Promise<number> {
 
   // Copy the draft content_hash to the published item
   const hash = generateCollectionItemContentHash(draftValues.map(v => ({ field_id: v.field_id, value: v.value })));
-  await updateContentHash(item_id, true, hash);
+  await updateContentHash(item_id, true, hash, projectId);
 
   return draftValues.length;
 }

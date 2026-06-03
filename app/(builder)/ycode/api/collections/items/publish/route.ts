@@ -1,14 +1,21 @@
 import { NextRequest } from 'next/server';
-import { publishValues } from '@/lib/repositories/collectionItemValueRepository';
-import { hardDeleteItem, getItemById } from '@/lib/repositories/collectionItemRepository';
+import { hardDeleteItem, getItemById, publishSingleItem } from '@/lib/repositories/collectionItemRepository';
 import { getCollectionById } from '@/lib/repositories/collectionRepository';
 import { cleanupDeletedCollections } from '@/lib/services/collectionService';
 import { noCache } from '@/lib/api-response';
-import { getStudioLiveMutationBlocker } from '@/lib/studio-platform';
+import { getStudioLiveMutationBlocker, requireStudioProjectRole } from '@/lib/studio-platform';
+import type { StudioProjectRole } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const COLLECTION_ITEM_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * POST /ycode/api/collections/items/publish
@@ -18,6 +25,10 @@ export const revalidate = 0;
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, COLLECTION_ITEM_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const blocker = getStudioLiveMutationBlocker();
     if (blocker) {
       return noCache(blocker, 409);
@@ -36,7 +47,7 @@ export async function POST(request: NextRequest) {
     for (const itemId of item_ids) {
       try {
         // Check if item is marked as deleted
-        const item = await getItemById(itemId);
+        const item = await getItemById(itemId, false, projectId);
         
         if (!item) {
           continue; // Item doesn't exist
@@ -44,17 +55,17 @@ export async function POST(request: NextRequest) {
         
         if (item.deleted_at) {
           // Hard delete the item and all its values (CASCADE)
-          await hardDeleteItem(itemId);
+          await hardDeleteItem(itemId, false, projectId);
           publishedCount++;
         } else {
           // Block publishing if the collection hasn't been published
-          const publishedCollection = await getCollectionById(item.collection_id, true);
+          const publishedCollection = await getCollectionById(item.collection_id, true, false, projectId);
           if (!publishedCollection) {
             console.warn(`Skipping item ${itemId}: collection ${item.collection_id} is not published`);
             continue;
           }
-          // Normal publish: copy draft values to published
-          await publishValues(itemId);
+          // Normal publish: create/update published item row and copy draft values.
+          await publishSingleItem(itemId, projectId);
           publishedCount++;
         }
       } catch (error) {
@@ -64,7 +75,7 @@ export async function POST(request: NextRequest) {
     }
     
     // Clean up any soft-deleted collections
-    await cleanupDeletedCollections();
+    await cleanupDeletedCollections(projectId);
     
     return noCache({ 
       data: { count: publishedCount } 

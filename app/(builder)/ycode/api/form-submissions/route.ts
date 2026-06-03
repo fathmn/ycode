@@ -6,12 +6,13 @@ import {
   deleteFormSubmissionsByFormId,
   bulkDeleteFormSubmissions,
   hasDefinedFormId,
+  getDefinedFormEmailNotification,
 } from '@/lib/repositories/formSubmissionRepository';
 import { dispatchFormSubmittedEvent } from '@/lib/services/webhookService';
 import { sendFormSubmissionEmail, extractReplyToEmail } from '@/lib/services/emailService';
 import { processAppIntegrations } from '@/lib/apps/integration-service';
 import { noCache } from '@/lib/api-response';
-import { resolvePublicFormSubmissionProjectScope } from '@/lib/request-project-scope';
+import { ProjectScopeAuthorizationError, resolvePublicFormSubmissionProjectScope } from '@/lib/request-project-scope';
 import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 // Disable caching for this route
@@ -125,6 +126,9 @@ export async function POST(request: NextRequest) {
         { status: 404 }
       );
     }
+    const emailNotification = projectId
+      ? await getDefinedFormEmailNotification(body.form_id, projectId, isPublishedDefinition)
+      : null;
 
     const submission = await createFormSubmission({
       form_id: body.form_id,
@@ -142,13 +146,13 @@ export async function POST(request: NextRequest) {
     });
 
     // Send email notification if enabled (fire and forget)
-    if (body.email?.enabled && body.email?.to) {
+    if (emailNotification?.enabled && emailNotification.to) {
       // Extract reply-to email from form payload (first email field found)
       const replyTo = extractReplyToEmail(body.payload);
 
       sendFormSubmissionEmail(
-        body.email.to,
-        body.email.subject || `New form submission: ${body.form_id}`,
+        emailNotification.to,
+        emailNotification.subject || `New form submission: ${body.form_id}`,
         {
           formId: body.form_id,
           submissionId: submission.id,
@@ -171,6 +175,13 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     console.error('Error creating form submission:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 403 }
+      );
+    }
+
     if (error instanceof Error && error.message === 'Not authorized for requested preview project') {
       return NextResponse.json(
         { error: error.message },

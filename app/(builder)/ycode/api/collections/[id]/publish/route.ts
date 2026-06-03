@@ -1,11 +1,18 @@
 import { NextRequest } from 'next/server';
 import { publishCollectionWithItems, cleanupDeletedCollections } from '@/lib/services/collectionService';
 import { noCache } from '@/lib/api-response';
-import { getStudioLiveMutationBlocker } from '@/lib/studio-platform';
+import { getStudioLiveMutationBlocker, requireStudioProjectRole } from '@/lib/studio-platform';
+import type { StudioProjectRole } from '@/lib/studio-platform';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const COLLECTION_PUBLISH_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+];
 
 /**
  * POST /ycode/api/collections/[id]/publish
@@ -33,6 +40,10 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, COLLECTION_PUBLISH_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const blocker = getStudioLiveMutationBlocker();
     if (blocker) {
       return noCache(blocker, 409);
@@ -54,10 +65,11 @@ export async function POST(
     const result = await publishCollectionWithItems({
       collectionId,
       itemIds,
+      projectId,
     });
     
     // Clean up any soft-deleted collections
-    await cleanupDeletedCollections();
+    await cleanupDeletedCollections(projectId);
     
     // Return appropriate status based on result
     if (result.success) {

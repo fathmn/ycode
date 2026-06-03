@@ -1,27 +1,17 @@
 import { notFound, redirect, permanentRedirect } from 'next/navigation';
 import { unstable_noStore } from 'next/cache';
-import { headers } from 'next/headers';
 import { fetchPageByPath, fetchErrorPage, PaginationContext } from '@/lib/page-fetcher';
 import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
-import { projectLookupFromHost, resolveCurrentYcodeSiteProjectId, resolveStudioProjectId } from '@/lib/project-scope';
+import { resolvePublishedProjectFromHeaders } from '@/lib/published-project';
 import type { Redirect as RedirectType } from '@/types';
 
 // Internal pagination path: always dynamic/no-store.
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-async function resolvePublishedProjectId(): Promise<string | null> {
-  const requestHeaders = await headers();
-  const hostLookup = projectLookupFromHost(
-    requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
-  );
-  if (hostLookup) return resolveStudioProjectId(hostLookup);
-  return resolveCurrentYcodeSiteProjectId();
-}
 
 interface DynamicSlugPageProps {
   params: Promise<{ slug: string | string[] }>;
@@ -34,7 +24,8 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
 
   const slugPath = Array.isArray(slug) ? slug.join('/') : slug;
   const currentPath = `/${slugPath}`;
-  const projectId = await resolvePublishedProjectId();
+  const { projectId, unresolvedHost } = await resolvePublishedProjectFromHeaders();
+  if (unresolvedHost) notFound();
 
   const redirects = await getSettingByKey('redirects', projectId) as RedirectType[] | null;
   if (redirects && Array.isArray(redirects)) {

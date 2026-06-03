@@ -8,6 +8,7 @@ import type {
   CreateFormSubmissionData,
   UpdateFormSubmissionData,
   FormSubmissionStatus,
+  FormSettings,
 } from '@/types';
 
 /**
@@ -98,6 +99,25 @@ function collectFormIdsFromLayers(layers: Layer[] | unknown, formIds: Set<string
   }
 }
 
+function findFormEmailNotification(
+  layers: Layer[] | unknown,
+  formId: string
+): FormSettings['email_notification'] | null {
+  if (!Array.isArray(layers)) return null;
+
+  for (const layer of layers as Layer[]) {
+    if (!layer || typeof layer !== 'object') continue;
+    if (resolveFormLayerId(layer) === formId) {
+      return layer.settings?.form?.email_notification || null;
+    }
+
+    const childMatch = findFormEmailNotification(layer.children, formId);
+    if (childMatch) return childMatch;
+  }
+
+  return null;
+}
+
 function applyPublishedState(query: any, isPublished?: boolean): any {
   return typeof isPublished === 'boolean'
     ? query.eq('is_published', isPublished)
@@ -158,6 +178,54 @@ export async function hasDefinedFormId(
 
   const formIds = await getDefinedFormIds(client, projectId, isPublished);
   return formIds.has(formId);
+}
+
+export async function getDefinedFormEmailNotification(
+  formId: string,
+  projectId?: string | null,
+  isPublished?: boolean
+): Promise<FormSettings['email_notification'] | null> {
+  const client = await getSupabaseAdmin();
+
+  if (!client) {
+    throw new Error('Supabase client not configured');
+  }
+
+  let query = client
+    .from('page_layers')
+    .select('layers')
+    .is('deleted_at', null);
+  query = applyPublishedState(query, isPublished);
+  query = (await applyProjectScopeToQuery(query, client, 'page_layers', projectId)).query;
+
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(`Failed to fetch form notification settings: ${error.message}`);
+  }
+
+  for (const row of data || []) {
+    const notification = findFormEmailNotification(row.layers, formId);
+    if (notification) return notification;
+  }
+
+  let componentsQuery = client
+    .from('components')
+    .select('layers')
+    .is('deleted_at', null);
+  componentsQuery = applyPublishedState(componentsQuery, isPublished);
+  componentsQuery = (await applyProjectScopeToQuery(componentsQuery, client, 'components', projectId)).query;
+
+  const { data: components, error: componentsError } = await componentsQuery;
+  if (componentsError) {
+    throw new Error(`Failed to fetch component form notification settings: ${componentsError.message}`);
+  }
+
+  for (const component of components || []) {
+    const notification = findFormEmailNotification(component.layers, formId);
+    if (notification) return notification;
+  }
+
+  return null;
 }
 
 /**

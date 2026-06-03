@@ -6,6 +6,8 @@ import { getItemWithValues, deleteItem } from '@/lib/repositories/collectionItem
 import { setValues } from '@/lib/repositories/collectionItemValueRepository';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { transformItemToPublicWithRefs, parseFieldProjections } from '../../../../reference-resolver';
+import { ProjectScopeAuthorizationError, resolveApiKeyRequestProjectId } from '@/lib/request-project-scope';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -27,6 +29,7 @@ export async function GET(
 
   try {
     const { collection_id, item_id } = await params;
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
     // Parse field projections from query params
     const { searchParams } = new URL(request.url);
@@ -34,7 +37,7 @@ export async function GET(
     const hasProjections = Object.keys(fieldProjections).length > 0;
 
     // Verify collection exists (published)
-    const collection = await getCollectionById(collection_id, true);
+    const collection = await getCollectionById(collection_id, true, false, projectId);
     if (!collection) {
       return NextResponse.json(
         { error: 'Collection not found', code: 'NOT_FOUND' },
@@ -43,7 +46,7 @@ export async function GET(
     }
 
     // Get the published item with values
-    const item = await getItemWithValues(item_id, true);
+    const item = await getItemWithValues(item_id, true, projectId);
     if (!item || item.collection_id !== collection_id) {
       return NextResponse.json(
         { error: 'Item not found', code: 'NOT_FOUND' },
@@ -52,7 +55,7 @@ export async function GET(
     }
 
     // Get published fields for reference resolution (exclude computed like Status)
-    const fields = await getFieldsByCollectionId(collection_id, true, { excludeComputed: true });
+    const fields = await getFieldsByCollectionId(collection_id, true, { excludeComputed: true }, projectId);
 
     // Transform with resolved references and optional field projections
     const response = await transformItemToPublicWithRefs(
@@ -60,11 +63,18 @@ export async function GET(
       fields, 
       true,
       hasProjections ? fieldProjections : undefined,
-      hasProjections ? collection.name : undefined
+      hasProjections ? collection.name : undefined,
+      projectId
     );
     return NextResponse.json(response);
   } catch (error) {
     console.error('Error fetching collection item:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to fetch collection item', code: 'INTERNAL_ERROR' },
       { status: 500 }
@@ -94,6 +104,7 @@ export async function PUT(
 
   try {
     const { collection_id, item_id } = await params;
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
     // Parse field projections from query params (for response filtering)
     const { searchParams } = new URL(request.url);
@@ -101,7 +112,7 @@ export async function PUT(
     const hasProjections = Object.keys(fieldProjections).length > 0;
 
     // Verify collection exists (published)
-    const collection = await getCollectionById(collection_id, true);
+    const collection = await getCollectionById(collection_id, true, false, projectId);
     if (!collection) {
       return NextResponse.json(
         { error: 'Collection not found', code: 'NOT_FOUND' },
@@ -110,7 +121,7 @@ export async function PUT(
     }
 
     // Verify item exists (published)
-    const existingItem = await getItemWithValues(item_id, true);
+    const existingItem = await getItemWithValues(item_id, true, projectId);
     if (!existingItem || existingItem.collection_id !== collection_id) {
       return NextResponse.json(
         { error: 'Item not found', code: 'NOT_FOUND' },
@@ -129,7 +140,7 @@ export async function PUT(
     }
 
     // Get published fields for mapping slugs to IDs (exclude computed like Status)
-    const fields = await getFieldsByCollectionId(collection_id, true, { excludeComputed: true });
+    const fields = await getFieldsByCollectionId(collection_id, true, { excludeComputed: true }, projectId);
     const fieldSlugToId: Record<string, string> = {};
     
     // Identify protected fields (cannot be modified by user)
@@ -171,29 +182,38 @@ export async function PUT(
     // Update the item's updated_at timestamp for both draft and published
     const client = await getSupabaseAdmin();
     if (client) {
-      await client
+      let itemUpdate = client
         .from('collection_items')
         .update({ updated_at: new Date().toISOString() })
         .eq('id', item_id)
         .in('is_published', [true, false]);
+      itemUpdate = (await applyProjectScopeToQuery(itemUpdate, client, 'collection_items', projectId)).query;
+      await itemUpdate;
     }
 
     // Set the values for both published and draft
-    await setValues(item_id, valuesToSet, true);
-    await setValues(item_id, valuesToSet, false);
+    await setValues(item_id, valuesToSet, true, projectId);
+    await setValues(item_id, valuesToSet, false, projectId);
 
     // Get updated item and transform with resolved references
-    const updatedItem = await getItemWithValues(item_id, true);
+    const updatedItem = await getItemWithValues(item_id, true, projectId);
     const response = await transformItemToPublicWithRefs(
       updatedItem!, 
       fields, 
       true,
       hasProjections ? fieldProjections : undefined,
-      hasProjections ? collection.name : undefined
+      hasProjections ? collection.name : undefined,
+      projectId
     );
     return NextResponse.json(response);
   } catch (error) {
     console.error('Error updating collection item:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to update collection item', code: 'INTERNAL_ERROR' },
       { status: 500 }
@@ -222,6 +242,7 @@ export async function PATCH(
 
   try {
     const { collection_id, item_id } = await params;
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
     // Parse field projections from query params (for response filtering)
     const { searchParams } = new URL(request.url);
@@ -229,7 +250,7 @@ export async function PATCH(
     const hasProjections = Object.keys(fieldProjections).length > 0;
 
     // Verify collection exists (published)
-    const collection = await getCollectionById(collection_id, true);
+    const collection = await getCollectionById(collection_id, true, false, projectId);
     if (!collection) {
       return NextResponse.json(
         { error: 'Collection not found', code: 'NOT_FOUND' },
@@ -238,7 +259,7 @@ export async function PATCH(
     }
 
     // Verify item exists (published)
-    const existingItem = await getItemWithValues(item_id, true);
+    const existingItem = await getItemWithValues(item_id, true, projectId);
     if (!existingItem || existingItem.collection_id !== collection_id) {
       return NextResponse.json(
         { error: 'Item not found', code: 'NOT_FOUND' },
@@ -257,7 +278,7 @@ export async function PATCH(
     }
 
     // Get published fields for mapping slugs to IDs (exclude computed like Status)
-    const fields = await getFieldsByCollectionId(collection_id, true, { excludeComputed: true });
+    const fields = await getFieldsByCollectionId(collection_id, true, { excludeComputed: true }, projectId);
     const fieldSlugToId: Record<string, string> = {};
     
     // Identify protected fields (cannot be modified by user)
@@ -290,31 +311,40 @@ export async function PATCH(
     // Update the item's updated_at timestamp for both draft and published
     const client = await getSupabaseAdmin();
     if (client) {
-      await client
+      let itemUpdate = client
         .from('collection_items')
         .update({ updated_at: new Date().toISOString() })
         .eq('id', item_id)
         .in('is_published', [true, false]);
+      itemUpdate = (await applyProjectScopeToQuery(itemUpdate, client, 'collection_items', projectId)).query;
+      await itemUpdate;
     }
 
     // Set the values for both published and draft
     if (Object.keys(valuesToSet).length > 0) {
-      await setValues(item_id, valuesToSet, true);
-      await setValues(item_id, valuesToSet, false);
+      await setValues(item_id, valuesToSet, true, projectId);
+      await setValues(item_id, valuesToSet, false, projectId);
     }
 
     // Get updated item and transform with resolved references
-    const updatedItem = await getItemWithValues(item_id, true);
+    const updatedItem = await getItemWithValues(item_id, true, projectId);
     const response = await transformItemToPublicWithRefs(
       updatedItem!, 
       fields, 
       true,
       hasProjections ? fieldProjections : undefined,
-      hasProjections ? collection.name : undefined
+      hasProjections ? collection.name : undefined,
+      projectId
     );
     return NextResponse.json(response);
   } catch (error) {
     console.error('Error patching collection item:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to patch collection item', code: 'INTERNAL_ERROR' },
       { status: 500 }
@@ -338,9 +368,10 @@ export async function DELETE(
 
   try {
     const { collection_id, item_id } = await params;
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
     // Verify collection exists (published)
-    const collection = await getCollectionById(collection_id, true);
+    const collection = await getCollectionById(collection_id, true, false, projectId);
     if (!collection) {
       return NextResponse.json(
         { error: 'Collection not found', code: 'NOT_FOUND' },
@@ -349,7 +380,7 @@ export async function DELETE(
     }
 
     // Verify item exists (published)
-    const existingItem = await getItemWithValues(item_id, true);
+    const existingItem = await getItemWithValues(item_id, true, projectId);
     if (!existingItem || existingItem.collection_id !== collection_id) {
       return NextResponse.json(
         { error: 'Item not found', code: 'NOT_FOUND' },
@@ -358,8 +389,8 @@ export async function DELETE(
     }
 
     // Delete both published and draft items
-    await deleteItem(item_id, true);
-    await deleteItem(item_id, false);
+    await deleteItem(item_id, true, projectId);
+    await deleteItem(item_id, false, projectId);
 
     return NextResponse.json({
       deleted: true,
@@ -367,6 +398,12 @@ export async function DELETE(
     });
   } catch (error) {
     console.error('Error deleting collection item:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to delete collection item', code: 'INTERNAL_ERROR' },
       { status: 500 }

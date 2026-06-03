@@ -17,6 +17,7 @@ import { getCollectionById, hardDeleteCollection } from '@/lib/repositories/coll
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import { getItemsByCollectionId, getAllItemsByCollectionId, getItemById, getItemsByIds } from '@/lib/repositories/collectionItemRepository';
 import { getValuesByItemId } from '@/lib/repositories/collectionItemValueRepository';
+import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired, tableHasProjectScopeColumn } from '@/lib/project-scope';
 
 /**
  * Options for publishing a collection
@@ -24,6 +25,7 @@ import { getValuesByItemId } from '@/lib/repositories/collectionItemValueReposit
 export interface PublishCollectionOptions {
   collectionId: string;
   itemIds?: string[]; // Optional: specific items to publish. If omitted, publish all
+  projectId?: string | null;
 }
 
 /**
@@ -93,7 +95,7 @@ export interface BatchPublishResult {
 export async function publishCollectionWithItems(
   options: PublishCollectionOptions
 ): Promise<PublishCollectionResult> {
-  const { collectionId, itemIds } = options;
+  const { collectionId, itemIds, projectId } = options;
 
   const result: PublishCollectionResult = {
     success: false,
@@ -115,23 +117,23 @@ export async function publishCollectionWithItems(
 
   try {
     // Check if the draft collection is soft-deleted (include deleted collections in query)
-    const draftCollection = await getCollectionById(collectionId, false, true);
+    const draftCollection = await getCollectionById(collectionId, false, true, projectId);
 
     // If draft is deleted, clean up both draft and published versions
     if (draftCollection && draftCollection.deleted_at) {
-      await cleanupDeletedCollection(collectionId);
+      await cleanupDeletedCollection(collectionId, projectId);
       result.success = true;
       return result;
     }
 
     // Validate the request
-    await validatePublishRequest(collectionId, itemIds);
+    await validatePublishRequest(collectionId, itemIds, projectId);
 
     // Execute publishing within transaction context
     await withTransaction(async () => {
       // Step 1: Publish collection metadata (skips if unchanged)
       const collectionStart = performance.now();
-      const collectionChanged = await publishCollectionMetadata(collectionId);
+      const collectionChanged = await publishCollectionMetadata(collectionId, projectId);
       result.published.collection = collectionChanged;
       result.timing!.collections = {
         durationMs: Math.round(performance.now() - collectionStart),
@@ -140,7 +142,7 @@ export async function publishCollectionWithItems(
 
       // Step 2: Publish all fields
       const fieldsStart = performance.now();
-      const fieldsCount = await publishAllFields(collectionId);
+      const fieldsCount = await publishAllFields(collectionId, projectId);
       result.published.fieldsCount = fieldsCount;
       result.timing!.fields = {
         durationMs: Math.round(performance.now() - fieldsStart),
@@ -151,7 +153,8 @@ export async function publishCollectionWithItems(
       const itemsStart = performance.now();
       const { itemsCount, valuesCount, itemsDurationMs, valuesDurationMs } = await publishSelectedItems(
         collectionId,
-        itemIds
+        itemIds,
+        projectId
       );
       result.published.itemsCount = itemsCount;
       result.published.valuesCount = valuesCount;
@@ -165,8 +168,8 @@ export async function publishCollectionWithItems(
       };
 
       // Step 4: Clean up soft-deleted items in published version
-      await cleanupDeletedPublishedItems(collectionId);
-      await cleanupDeletedPublishedFields(collectionId);
+      await cleanupDeletedPublishedItems(collectionId, projectId);
+      await cleanupDeletedPublishedFields(collectionId, projectId);
     });
 
     result.success = true;
@@ -224,17 +227,18 @@ export async function publishCollections(
  */
 async function validatePublishRequest(
   collectionId: string,
-  itemIds?: string[]
+  itemIds?: string[],
+  projectId?: string | null
 ): Promise<void> {
   // Check if draft collection exists
-  const draftCollection = await getCollectionById(collectionId, false);
+  const draftCollection = await getCollectionById(collectionId, false, false, projectId);
   if (!draftCollection) {
     throw new Error(`Draft collection ${collectionId} not found`);
   }
 
   // If specific item IDs provided, validate they exist (batch fetch)
   if (itemIds && itemIds.length > 0) {
-    const items = await getItemsByIds(itemIds, false);
+    const items = await getItemsByIds(itemIds, false, projectId);
     const foundIds = new Set(items.map(item => item.id));
 
     for (const itemId of itemIds) {
@@ -256,7 +260,7 @@ async function validatePublishRequest(
  * Publish collection metadata, skipping if unchanged
  * @returns true if collection was actually upserted
  */
-async function publishCollectionMetadata(collectionId: string): Promise<boolean> {
+async function publishCollectionMetadata(collectionId: string, projectId?: string | null): Promise<boolean> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -264,13 +268,13 @@ async function publishCollectionMetadata(collectionId: string): Promise<boolean>
   }
 
   // Get the draft version
-  const draft = await getCollectionById(collectionId, false);
+  const draft = await getCollectionById(collectionId, false, false, projectId);
   if (!draft) {
     throw new Error('Draft collection not found');
   }
 
   // Get existing published version for comparison
-  const published = await getCollectionById(collectionId, true);
+  const published = await getCollectionById(collectionId, true, false, projectId);
 
   // Skip if published version exists and all fields match
   if (published &&
@@ -281,17 +285,25 @@ async function publishCollectionMetadata(collectionId: string): Promise<boolean>
   }
 
   // Upsert published version (composite key handles insert/update automatically)
+  const collectionRow: Record<string, unknown> = {
+    id: draft.id,
+    name: draft.name,
+    sorting: draft.sorting,
+    order: draft.order,
+    is_published: true,
+    created_at: draft.created_at,
+    updated_at: new Date().toISOString(),
+  };
+  const hasProjectScope = await tableHasProjectScopeColumn(client, 'collections');
+  if (hasProjectScope && projectId) {
+    collectionRow.project_id = projectId;
+  } else if (hasProjectScope && isSharedDbProjectScopeRequired()) {
+    throw new Error('Project scope is required for collections');
+  }
+
   const { error } = await client
     .from('collections')
-    .upsert({
-      id: draft.id,
-      name: draft.name,
-      sorting: draft.sorting,
-      order: draft.order,
-      is_published: true,
-      created_at: draft.created_at,
-      updated_at: new Date().toISOString(),
-    }, {
+    .upsert(collectionRow, {
       onConflict: 'id,is_published',
     });
 
@@ -308,7 +320,7 @@ async function publishCollectionMetadata(collectionId: string): Promise<boolean>
  *
  * @returns Number of fields actually published
  */
-async function publishAllFields(collectionId: string): Promise<number> {
+async function publishAllFields(collectionId: string, projectId?: string | null): Promise<number> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -316,19 +328,20 @@ async function publishAllFields(collectionId: string): Promise<number> {
   }
 
   // Get all draft fields
-  const draftFields = await getFieldsByCollectionId(collectionId, false);
+  const draftFields = await getFieldsByCollectionId(collectionId, false, undefined, projectId);
 
   if (draftFields.length === 0) {
     return 0;
   }
 
   // Get published fields for comparison
-  const publishedFields = await getFieldsByCollectionId(collectionId, true);
+  const publishedFields = await getFieldsByCollectionId(collectionId, true, undefined, projectId);
   const publishedById = new Map(publishedFields.map(f => [f.id, f]));
 
   // Only upsert fields that are new or changed
   const now = new Date().toISOString();
   const fieldsToUpsert: any[] = [];
+  const hasProjectScope = await tableHasProjectScopeColumn(client, 'collection_fields');
 
   for (const field of draftFields) {
     const existing = publishedById.get(field.id);
@@ -350,7 +363,7 @@ async function publishAllFields(collectionId: string): Promise<number> {
       continue;
     }
 
-    fieldsToUpsert.push({
+    const row: Record<string, unknown> = {
       id: field.id,
       name: field.name,
       key: field.key,
@@ -366,7 +379,13 @@ async function publishAllFields(collectionId: string): Promise<number> {
       is_published: true,
       created_at: field.created_at,
       updated_at: now,
-    });
+    };
+    if (hasProjectScope && projectId) {
+      row.project_id = projectId;
+    } else if (hasProjectScope && isSharedDbProjectScopeRequired()) {
+      throw new Error('Project scope is required for collection_fields');
+    }
+    fieldsToUpsert.push(row);
   }
 
   if (fieldsToUpsert.length === 0) {
@@ -397,7 +416,8 @@ async function publishAllFields(collectionId: string): Promise<number> {
  */
 async function publishSelectedItems(
   collectionId: string,
-  itemIds?: string[]
+  itemIds?: string[],
+  projectId?: string | null
 ): Promise<{ itemsCount: number; valuesCount: number; itemsDurationMs: number; valuesDurationMs: number }> {
   const client = await getSupabaseAdmin();
 
@@ -412,7 +432,7 @@ async function publishSelectedItems(
     itemsToPublish = itemIds;
   } else {
     // Publish all items that need publishing
-    itemsToPublish = await getUnpublishedItemIds(collectionId);
+    itemsToPublish = await getUnpublishedItemIds(collectionId, projectId);
   }
 
   if (itemsToPublish.length === 0) {
@@ -420,7 +440,7 @@ async function publishSelectedItems(
   }
 
   // Batch fetch all draft items to publish
-  const draftItems = await getItemsByIds(itemsToPublish, false);
+  const draftItems = await getItemsByIds(itemsToPublish, false, projectId);
 
   if (draftItems.length === 0) {
     return { itemsCount: 0, valuesCount: 0, itemsDurationMs: 0, valuesDurationMs: 0 };
@@ -433,11 +453,13 @@ async function publishSelectedItems(
   // Remove published versions of non-publishable items
   if (nonPublishableItems.length > 0) {
     const nonPublishableIds = nonPublishableItems.map(item => item.id);
-    await client
+    let deleteQuery = client
       .from('collection_items')
       .delete()
       .in('id', nonPublishableIds)
       .eq('is_published', true);
+    deleteQuery = (await applyProjectScopeToQuery(deleteQuery, client, 'collection_items', projectId)).query;
+    await deleteQuery;
   }
 
   if (publishableItems.length === 0) {
@@ -446,7 +468,7 @@ async function publishSelectedItems(
 
   // Fetch existing published items for comparison
   const publishableIds = publishableItems.map(i => i.id);
-  const publishedItems = await getItemsByIds(publishableIds, true);
+  const publishedItems = await getItemsByIds(publishableIds, true, projectId);
   const publishedItemsById = new Map(publishedItems.map(i => [i.id, i]));
 
   // Time items upsert
@@ -456,6 +478,7 @@ async function publishSelectedItems(
   const now = new Date().toISOString();
   const itemsToUpsert: any[] = [];
   const itemIdsToPublishValues: string[] = [];
+  const hasProjectScope = await tableHasProjectScopeColumn(client, 'collection_items');
 
   for (const item of publishableItems) {
     const existing = publishedItemsById.get(item.id);
@@ -470,7 +493,7 @@ async function publishSelectedItems(
       continue;
     }
 
-    itemsToUpsert.push({
+    const row: Record<string, unknown> = {
       id: item.id,
       collection_id: item.collection_id,
       manual_order: item.manual_order,
@@ -479,7 +502,13 @@ async function publishSelectedItems(
       content_hash: item.content_hash,
       created_at: item.created_at,
       updated_at: now,
-    });
+    };
+    if (hasProjectScope && projectId) {
+      row.project_id = projectId;
+    } else if (hasProjectScope && isSharedDbProjectScopeRequired()) {
+      throw new Error('Project scope is required for collection_items');
+    }
+    itemsToUpsert.push(row);
     itemIdsToPublishValues.push(item.id);
   }
 
@@ -500,7 +529,7 @@ async function publishSelectedItems(
 
   // Time values publishing (pass all item IDs - values comparison happens inside)
   const valuesStart = performance.now();
-  const valuesCount = await publishItemValuesBatch(itemIdsToPublishValues);
+  const valuesCount = await publishItemValuesBatch(itemIdsToPublishValues, projectId);
   const valuesDurationMs = Math.round(performance.now() - valuesStart);
 
   return { itemsCount: itemsToUpsert.length, valuesCount, itemsDurationMs, valuesDurationMs };
@@ -513,7 +542,7 @@ async function publishSelectedItems(
  * @param itemIds - Array of item UUIDs
  * @returns Number of values actually published (changed)
  */
-async function publishItemValuesBatch(itemIds: string[]): Promise<number> {
+async function publishItemValuesBatch(itemIds: string[], projectId?: string | null): Promise<number> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -526,7 +555,7 @@ async function publishItemValuesBatch(itemIds: string[]): Promise<number> {
 
   // Batch fetch all draft values
   const allDraftValues = await Promise.all(
-    itemIds.map(itemId => getValuesByItemId(itemId, false))
+    itemIds.map(itemId => getValuesByItemId(itemId, false, projectId))
   );
   const draftValues = allDraftValues.flat();
 
@@ -536,7 +565,7 @@ async function publishItemValuesBatch(itemIds: string[]): Promise<number> {
 
   // Batch fetch all published values for comparison
   const allPublishedValues = await Promise.all(
-    itemIds.map(itemId => getValuesByItemId(itemId, true))
+    itemIds.map(itemId => getValuesByItemId(itemId, true, projectId))
   );
   const publishedById = new Map(
     allPublishedValues.flat().map(v => [v.id, v.value])
@@ -544,15 +573,8 @@ async function publishItemValuesBatch(itemIds: string[]): Promise<number> {
 
   // Only upsert values that are new or changed
   const now = new Date().toISOString();
-  const valuesToUpsert: Array<{
-    id: string;
-    item_id: string;
-    field_id: string;
-    value: string | null;
-    is_published: boolean;
-    created_at: string;
-    updated_at: string;
-  }> = [];
+  const valuesToUpsert: Array<Record<string, unknown>> = [];
+  const hasProjectScope = await tableHasProjectScopeColumn(client, 'collection_item_values');
 
   for (const value of draftValues) {
     // Skip if published version exists with identical value
@@ -560,7 +582,7 @@ async function publishItemValuesBatch(itemIds: string[]): Promise<number> {
       continue;
     }
 
-    valuesToUpsert.push({
+    const row: Record<string, unknown> = {
       id: value.id,
       item_id: value.item_id,
       field_id: value.field_id,
@@ -568,7 +590,13 @@ async function publishItemValuesBatch(itemIds: string[]): Promise<number> {
       is_published: true,
       created_at: value.created_at,
       updated_at: now,
-    });
+    };
+    if (hasProjectScope && projectId) {
+      row.project_id = projectId;
+    } else if (hasProjectScope && isSharedDbProjectScopeRequired()) {
+      throw new Error('Project scope is required for collection_item_values');
+    }
+    valuesToUpsert.push(row);
   }
 
   if (valuesToUpsert.length === 0) {
@@ -595,15 +623,15 @@ async function publishItemValuesBatch(itemIds: string[]): Promise<number> {
  * - Published version doesn't exist, OR
  * - Draft data differs from published data
  */
-async function getUnpublishedItemIds(collectionId: string): Promise<string[]> {
+async function getUnpublishedItemIds(collectionId: string, projectId?: string | null): Promise<string[]> {
   // Get all draft items for this collection (with pagination for >1000 items)
-  const draftItems = await getAllItemsByCollectionId(collectionId, false);
+  const draftItems = await getAllItemsByCollectionId(collectionId, false, false, projectId);
 
   const unpublishedItemIds: string[] = [];
 
   for (const draftItem of draftItems) {
     // Check if published version exists
-    const publishedItem = await getItemById(draftItem.id, true);
+    const publishedItem = await getItemById(draftItem.id, true, projectId);
 
     if (!publishedItem) {
       // Never published
@@ -621,7 +649,7 @@ async function getUnpublishedItemIds(collectionId: string): Promise<string[]> {
     }
 
     // Check if values differ
-    const valuesChanged = await hasValueChanges(draftItem.id);
+    const valuesChanged = await hasValueChanges(draftItem.id, projectId);
     if (valuesChanged) {
       unpublishedItemIds.push(draftItem.id);
     }
@@ -633,9 +661,9 @@ async function getUnpublishedItemIds(collectionId: string): Promise<string[]> {
 /**
  * Check if draft values differ from published values
  */
-async function hasValueChanges(itemId: string): Promise<boolean> {
-  const draftValues = await getValuesByItemId(itemId, false);
-  const publishedValues = await getValuesByItemId(itemId, true);
+async function hasValueChanges(itemId: string, projectId?: string | null): Promise<boolean> {
+  const draftValues = await getValuesByItemId(itemId, false, projectId);
+  const publishedValues = await getValuesByItemId(itemId, true, projectId);
 
   // Create maps for comparison
   const draftMap = new Map(draftValues.map(v => [v.field_id, v.value]));
@@ -664,7 +692,7 @@ async function hasValueChanges(itemId: string): Promise<boolean> {
  * Uses batch DELETE for efficiency
  * If a draft item is soft-deleted, permanently remove both draft and published versions
  */
-async function cleanupDeletedPublishedItems(collectionId: string): Promise<void> {
+async function cleanupDeletedPublishedItems(collectionId: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -675,7 +703,8 @@ async function cleanupDeletedPublishedItems(collectionId: string): Promise<void>
   const deletedDraftItems = await getAllItemsByCollectionId(
     collectionId,
     false,
-    true // Only deleted items
+    true, // Only deleted items
+    projectId
   );
 
   if (deletedDraftItems.length === 0) {
@@ -686,18 +715,22 @@ async function cleanupDeletedPublishedItems(collectionId: string): Promise<void>
   const deletedItemIds = deletedDraftItems.map(item => item.id);
 
   // Batch hard delete published versions (CASCADE will delete values)
-  await client
+  let deletePublishedQuery = client
     .from('collection_items')
     .delete()
     .in('id', deletedItemIds)
     .eq('is_published', true);
+  deletePublishedQuery = (await applyProjectScopeToQuery(deletePublishedQuery, client, 'collection_items', projectId)).query;
+  await deletePublishedQuery;
 
   // Batch hard delete draft versions (CASCADE will delete values)
-  await client
+  let deleteDraftQuery = client
     .from('collection_items')
     .delete()
     .in('id', deletedItemIds)
     .eq('is_published', false);
+  deleteDraftQuery = (await applyProjectScopeToQuery(deleteDraftQuery, client, 'collection_items', projectId)).query;
+  await deleteDraftQuery;
 }
 
 /**
@@ -706,7 +739,7 @@ async function cleanupDeletedPublishedItems(collectionId: string): Promise<void>
  * If a draft field is soft-deleted, permanently remove both draft and published versions
  * This also removes all associated collection_item_values via CASCADE
  */
-async function cleanupDeletedPublishedFields(collectionId: string): Promise<void> {
+async function cleanupDeletedPublishedFields(collectionId: string, projectId?: string | null): Promise<void> {
   // Get all fields (including soft-deleted) from draft by querying directly
   const client = await getSupabaseAdmin();
 
@@ -715,12 +748,14 @@ async function cleanupDeletedPublishedFields(collectionId: string): Promise<void
   }
 
   // Query for soft-deleted draft fields
-  const { data: deletedDraftFields, error } = await client
+  let deletedFieldsQuery = client
     .from('collection_fields')
     .select('*')
     .eq('collection_id', collectionId)
     .eq('is_published', false)
     .not('deleted_at', 'is', null); // Only get deleted fields
+  deletedFieldsQuery = (await applyProjectScopeToQuery(deletedFieldsQuery, client, 'collection_fields', projectId)).query;
+  const { data: deletedDraftFields, error } = await deletedFieldsQuery;
 
   if (error || !deletedDraftFields || deletedDraftFields.length === 0) {
     return;
@@ -730,18 +765,22 @@ async function cleanupDeletedPublishedFields(collectionId: string): Promise<void
   const deletedFieldIds = deletedDraftFields.map(field => field.id);
 
   // Batch hard delete published versions (CASCADE will delete values)
-  await client
+  let deletePublishedQuery = client
     .from('collection_fields')
     .delete()
     .in('id', deletedFieldIds)
     .eq('is_published', true);
+  deletePublishedQuery = (await applyProjectScopeToQuery(deletePublishedQuery, client, 'collection_fields', projectId)).query;
+  await deletePublishedQuery;
 
   // Batch hard delete draft versions (CASCADE will delete values)
-  await client
+  let deleteDraftQuery = client
     .from('collection_fields')
     .delete()
     .in('id', deletedFieldIds)
     .eq('is_published', false);
+  deleteDraftQuery = (await applyProjectScopeToQuery(deleteDraftQuery, client, 'collection_fields', projectId)).query;
+  await deleteDraftQuery;
 }
 
 /**
@@ -749,17 +788,17 @@ async function cleanupDeletedPublishedFields(collectionId: string): Promise<void
  * Hard deletes both draft and published versions of the collection
  * CASCADE constraints will automatically delete all related fields, items, and values
  */
-async function cleanupDeletedCollection(collectionId: string): Promise<void> {
+async function cleanupDeletedCollection(collectionId: string, projectId?: string | null): Promise<void> {
   // Check if published version exists
-  const publishedCollection = await getCollectionById(collectionId, true);
+  const publishedCollection = await getCollectionById(collectionId, true, false, projectId);
 
   if (publishedCollection) {
     // Hard delete the published version (CASCADE will delete all related data)
-    await hardDeleteCollection(collectionId, true);
+    await hardDeleteCollection(collectionId, true, projectId);
   }
 
   // Hard delete the draft version (CASCADE will delete all related data)
-  await hardDeleteCollection(collectionId, false);
+  await hardDeleteCollection(collectionId, false, projectId);
 }
 
 /**
@@ -767,7 +806,7 @@ async function cleanupDeletedCollection(collectionId: string): Promise<void> {
  * Uses batch DELETE operations for efficiency
  * Called during publish operations to ensure deleted collections are permanently removed
  */
-export async function cleanupDeletedCollections(): Promise<void> {
+export async function cleanupDeletedCollections(projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -775,11 +814,13 @@ export async function cleanupDeletedCollections(): Promise<void> {
   }
 
   // Find all soft-deleted draft collections
-  const { data: deletedCollections, error } = await client
+  let deletedCollectionsQuery = client
     .from('collections')
     .select('id')
     .eq('is_published', false)
     .not('deleted_at', 'is', null);
+  deletedCollectionsQuery = (await applyProjectScopeToQuery(deletedCollectionsQuery, client, 'collections', projectId)).query;
+  const { data: deletedCollections, error } = await deletedCollectionsQuery;
 
   if (error) {
     throw new Error(`Failed to fetch deleted collections: ${error.message}`);
@@ -793,18 +834,22 @@ export async function cleanupDeletedCollections(): Promise<void> {
   const collectionIds = deletedCollections.map(c => c.id);
 
   // Batch delete published versions (CASCADE deletes all related data: fields, items, values)
-  await client
+  let deletePublishedQuery = client
     .from('collections')
     .delete()
     .in('id', collectionIds)
     .eq('is_published', true);
+  deletePublishedQuery = (await applyProjectScopeToQuery(deletePublishedQuery, client, 'collections', projectId)).query;
+  await deletePublishedQuery;
 
   // Batch delete draft versions (CASCADE deletes all related data: fields, items, values)
-  await client
+  let deleteDraftQuery = client
     .from('collections')
     .delete()
     .in('id', collectionIds)
     .eq('is_published', false);
+  deleteDraftQuery = (await applyProjectScopeToQuery(deleteDraftQuery, client, 'collections', projectId)).query;
+  await deleteDraftQuery;
 }
 
 /**
@@ -893,7 +938,8 @@ export async function needsPublishing(collectionId: string): Promise<boolean> {
  * @returns Map of collection ID to array of item IDs
  */
 export async function groupItemsByCollection(
-  itemIds: string[]
+  itemIds: string[],
+  projectId?: string | null
 ): Promise<Map<string, string[]>> {
   const client = await getSupabaseAdmin();
 
@@ -905,11 +951,13 @@ export async function groupItemsByCollection(
     return new Map();
   }
 
-  const { data: items, error } = await client
+  let itemsQuery = client
     .from('collection_items')
     .select('id, collection_id')
     .eq('is_published', false)
     .in('id', itemIds);
+  itemsQuery = (await applyProjectScopeToQuery(itemsQuery, client, 'collection_items', projectId)).query;
+  const { data: items, error } = await itemsQuery;
 
   if (error) {
     throw new Error(`Failed to fetch collection items: ${error.message}`);

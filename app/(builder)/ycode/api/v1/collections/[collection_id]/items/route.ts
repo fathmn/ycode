@@ -5,6 +5,7 @@ import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepos
 import { getItemsWithValues, createItem, getMaxIdValue } from '@/lib/repositories/collectionItemRepository';
 import { setValues } from '@/lib/repositories/collectionItemValueRepository';
 import { transformItemToPublicWithRefs, parseFieldProjections } from '../../../reference-resolver';
+import { ProjectScopeAuthorizationError, resolveApiKeyRequestProjectId } from '@/lib/request-project-scope';
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -42,6 +43,7 @@ export async function GET(
 
   try {
     const { collection_id } = await params;
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
     // Parse query parameters
     const { searchParams } = new URL(request.url);
@@ -62,7 +64,7 @@ export async function GET(
     const offset = (page - 1) * perPage;
 
     // Verify collection exists (published)
-    const collection = await getCollectionById(collection_id, true);
+    const collection = await getCollectionById(collection_id, true, false, projectId);
     if (!collection) {
       return NextResponse.json(
         { error: 'Collection not found', code: 'NOT_FOUND' },
@@ -71,7 +73,7 @@ export async function GET(
     }
 
     // Get published fields for reference resolution and filtering (exclude computed like Status)
-    const fields = await getFieldsByCollectionId(collection_id, true, { excludeComputed: true });
+    const fields = await getFieldsByCollectionId(collection_id, true, { excludeComputed: true }, projectId);
     const fieldSlugToId: Record<string, string> = {};
     fields.forEach(field => {
       const slug = field.key || field.name.toLowerCase().replace(/\s+/g, '-');
@@ -99,7 +101,7 @@ export async function GET(
       limit: needsClientPagination ? undefined : (limitParam ? limit : perPage),
       offset: needsClientPagination ? undefined : offset,
       deleted: false,
-    });
+    }, projectId);
 
     // Apply client-side filtering (filter[field_slug]=value)
     if (Object.keys(filterParams).length > 0) {
@@ -161,7 +163,8 @@ export async function GET(
         fields, 
         true,
         hasProjections ? fieldProjections : undefined,
-        hasProjections ? collection.name : undefined
+        hasProjections ? collection.name : undefined,
+        projectId
       ))
     );
 
@@ -175,6 +178,12 @@ export async function GET(
     });
   } catch (error) {
     console.error('Error fetching collection items:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to fetch collection items', code: 'INTERNAL_ERROR' },
       { status: 500 }
@@ -207,6 +216,7 @@ export async function POST(
 
   try {
     const { collection_id } = await params;
+    const projectId = await resolveApiKeyRequestProjectId(request, authResult.projectId);
 
     // Parse field projections from query params (for response filtering)
     const { searchParams } = new URL(request.url);
@@ -214,7 +224,7 @@ export async function POST(
     const hasProjections = Object.keys(fieldProjections).length > 0;
 
     // Verify collection exists (published)
-    const collection = await getCollectionById(collection_id, true);
+    const collection = await getCollectionById(collection_id, true, false, projectId);
     if (!collection) {
       return NextResponse.json(
         { error: 'Collection not found', code: 'NOT_FOUND' },
@@ -233,7 +243,7 @@ export async function POST(
     }
 
     // Get published fields for mapping slugs to IDs (exclude computed like Status)
-    const fields = await getFieldsByCollectionId(collection_id, true, { excludeComputed: true });
+    const fields = await getFieldsByCollectionId(collection_id, true, { excludeComputed: true }, projectId);
     const fieldSlugToId: Record<string, string> = {};
     
     // Identify protected fields (cannot be set by user)
@@ -260,7 +270,7 @@ export async function POST(
     // Auto-generate ID field (always, user cannot override)
     const idField = fields.find(f => f.key === 'id');
     if (idField) {
-      const maxId = await getMaxIdValue(collection_id, true);
+      const maxId = await getMaxIdValue(collection_id, true, projectId);
       valuesToSet[idField.id] = String(maxId + 1);
     }
 
@@ -280,11 +290,11 @@ export async function POST(
     const item = await createItem({
       collection_id,
       is_published: false,
-    });
+    }, projectId);
 
     // Set values on draft first
     if (Object.keys(valuesToSet).length > 0) {
-      await setValues(item.id, valuesToSet, false);
+      await setValues(item.id, valuesToSet, false, projectId);
     }
 
     // Now create the published version with the same ID
@@ -294,21 +304,26 @@ export async function POST(
 
     if (client) {
       // Insert published item with same ID
+      const publishedItemRow: Record<string, unknown> = {
+        id: item.id,
+        collection_id,
+        manual_order: item.manual_order,
+        is_published: true,
+        is_publishable: true,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+      };
+      if (projectId) {
+        publishedItemRow.project_id = projectId;
+      }
+
       await client
         .from('collection_items')
-        .insert({
-          id: item.id,
-          collection_id,
-          manual_order: item.manual_order,
-          is_published: true,
-          is_publishable: true,
-          created_at: item.created_at,
-          updated_at: item.updated_at,
-        });
+        .insert(publishedItemRow);
 
       // Copy draft values to published with SAME IDs (matching publishValues pattern)
       if (Object.keys(valuesToSet).length > 0) {
-        const draftValues = await getValuesByItemId(item.id, false);
+        const draftValues = await getValuesByItemId(item.id, false, projectId);
         const now = new Date().toISOString();
         
         const publishedValues = draftValues.map(value => ({
@@ -319,6 +334,7 @@ export async function POST(
           is_published: true,
           created_at: value.created_at,
           updated_at: now,
+          ...(projectId ? { project_id: projectId } : {}),
         }));
 
         await client
@@ -329,7 +345,7 @@ export async function POST(
 
     // Get the created item with values and transform with resolved references
     const { getItemWithValues } = await import('@/lib/repositories/collectionItemRepository');
-    const createdItem = await getItemWithValues(item.id, true);
+    const createdItem = await getItemWithValues(item.id, true, projectId);
     
     if (!createdItem) {
       return NextResponse.json(
@@ -343,11 +359,18 @@ export async function POST(
       fields, 
       true,
       hasProjections ? fieldProjections : undefined,
-      hasProjections ? collection.name : undefined
+      hasProjections ? collection.name : undefined,
+      projectId
     );
     return NextResponse.json(response, { status: 201 });
   } catch (error) {
     console.error('Error creating collection item:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return NextResponse.json(
+        { error: error.message, code: 'PROJECT_SCOPE_FORBIDDEN' },
+        { status: 403 }
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to create collection item', code: 'INTERNAL_ERROR' },
       { status: 500 }

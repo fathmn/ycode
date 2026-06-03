@@ -6,6 +6,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import type { LayerStyle, Layer } from '@/types';
 import { generateLayerStyleContentHash } from '../hash-utils';
 
@@ -42,18 +43,21 @@ export interface LayerStyleSoftDeleteResult {
 /**
  * Get all layer styles (draft by default, excludes soft deleted)
  */
-export async function getAllStyles(isPublished: boolean = false): Promise<LayerStyle[]> {
+export async function getAllStyles(isPublished: boolean = false, projectId?: string | null): Promise<LayerStyle[]> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('layer_styles')
     .select('*')
     .eq('is_published', isPublished)
     .is('deleted_at', null)
     .order('created_at', { ascending: false });
+  query = (await applyProjectScopeToQuery(query, client, 'layer_styles', projectId)).query;
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch layer styles: ${error.message}`);

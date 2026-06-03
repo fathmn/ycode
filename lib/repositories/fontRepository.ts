@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import { SUPABASE_QUERY_LIMIT, SUPABASE_WRITE_BATCH_SIZE } from '@/lib/supabase-constants';
 import { cleanupOrphanedStorageFiles } from '@/lib/storage-utils';
 import { generateFontContentHash } from '@/lib/hash-utils';
@@ -7,20 +8,23 @@ import type { Font, CreateFontData, UpdateFontData } from '@/types';
 /**
  * Get all fonts (drafts only)
  */
-export async function getAllFonts(): Promise<Font[]> {
+export async function getAllFonts(projectId?: string | null): Promise<Font[]> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('fonts')
     .select('*')
     .eq('is_published', false)
     .is('deleted_at', null)
     .order('created_at', { ascending: true })
     .limit(SUPABASE_QUERY_LIMIT);
+  query = (await applyProjectScopeToQuery(query, client, 'fonts', projectId)).query;
+
+  const { data, error } = await query;
 
   if (error) throw new Error(`Failed to fetch fonts: ${error.message}`);
 

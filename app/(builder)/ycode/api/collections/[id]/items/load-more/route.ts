@@ -5,7 +5,7 @@ import { getAllPages } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { renderCollectionItemsToHtml, loadTranslationsForLocale } from '@/lib/page-fetcher';
 import { noCache } from '@/lib/api-response';
-import { resolvePublicContentRequestProjectScope } from '@/lib/request-project-scope';
+import { ProjectScopeAuthorizationError, resolvePublicContentRequestProjectScope } from '@/lib/request-project-scope';
 import type { Layer } from '@/types';
 
 // Disable caching for this route
@@ -150,6 +150,10 @@ export async function POST(
     });
   } catch (error) {
     console.error('Error fetching collection items for load-more:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return noCache({ error: error.message }, 403);
+    }
+
     return noCache(
       { error: error instanceof Error ? error.message : 'Failed to fetch items' },
       500
@@ -222,6 +226,10 @@ export async function GET(
     });
   } catch (error) {
     console.error('Error fetching collection items for load-more:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return noCache({ error: error.message }, 403);
+    }
+
     return noCache(
       { error: error instanceof Error ? error.message : 'Failed to fetch items' },
       500

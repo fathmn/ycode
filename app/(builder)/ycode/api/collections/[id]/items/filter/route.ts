@@ -8,7 +8,7 @@ import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { renderCollectionItemsToHtml, loadTranslationsForLocale } from '@/lib/page-fetcher';
 import { noCache } from '@/lib/api-response';
 import { isDatePreset, resolveDateFilterValue } from '@/lib/collection-field-utils';
-import { resolvePublicContentRequestProjectScope } from '@/lib/request-project-scope';
+import { ProjectScopeAuthorizationError, resolvePublicContentRequestProjectScope } from '@/lib/request-project-scope';
 import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import type { Layer, CollectionItem, CollectionItemWithValues } from '@/types';
 
@@ -675,6 +675,10 @@ export async function POST(
     });
   } catch (error) {
     console.error('Error filtering collection items:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return noCache({ error: error.message }, 403);
+    }
+
     return noCache(
       { error: error instanceof Error ? error.message : 'Failed to filter items' },
       500,

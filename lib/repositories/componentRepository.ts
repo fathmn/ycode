@@ -7,6 +7,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import type { Component, Layer } from '@/types';
 import { generateComponentContentHash } from '../hash-utils';
 import { deleteTranslationsInBulk, markTranslationsIncomplete } from '@/lib/repositories/translationRepository';
@@ -24,18 +25,21 @@ export interface CreateComponentData {
 /**
  * Get all components (draft by default, excludes soft deleted)
  */
-export async function getAllComponents(isPublished: boolean = false): Promise<Component[]> {
+export async function getAllComponents(isPublished: boolean = false, projectId?: string | null): Promise<Component[]> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
 
-  const { data, error } = await client
+  let query = client
     .from('components')
     .select('*')
     .eq('is_published', isPublished)
     .is('deleted_at', null)
     .order('created_at', { ascending: false });
+  query = (await applyProjectScopeToQuery(query, client, 'components', projectId)).query;
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(`Failed to fetch components: ${error.message}`);

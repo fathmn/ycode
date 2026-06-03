@@ -4,11 +4,11 @@
  * Generates sitemap.xml from published pages with localization support
  */
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { credentials } from '@/lib/credentials';
 
 import { getAllPages } from '@/lib/repositories/pageRepository';
-import { getAllPublishedPageFolders } from '@/lib/repositories/pageFolderRepository';
+import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { getAllLocales } from '@/lib/repositories/localeRepository';
 import { getTranslationsByLocale } from '@/lib/repositories/translationRepository';
 import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
@@ -20,9 +20,10 @@ import {
   getDefaultSitemapSettings,
 } from '@/lib/sitemap-utils';
 import { getSiteBaseUrl } from '@/lib/url-utils';
+import { ProjectScopeAuthorizationError, resolvePublicContentRequestProjectScope } from '@/lib/request-project-scope';
 import type { SitemapSettings, Translation, CollectionItem } from '@/types';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const hasSupabaseCredentials = await credentials.exists();
     if (!hasSupabaseCredentials) {
@@ -36,7 +37,10 @@ export async function GET() {
       });
     }
 
-    const allSettings = await getSettingsByKeys(['sitemap', 'global_canonical_url']);
+    const projectScope = await resolvePublicContentRequestProjectScope(request);
+    const projectId = projectScope.projectId;
+
+    const allSettings = await getSettingsByKeys(['sitemap', 'global_canonical_url'], projectId);
     const settings: SitemapSettings = allSettings.sitemap || getDefaultSitemapSettings();
     const globalCanonicalUrl: string | null = allSettings.global_canonical_url || null;
 
@@ -60,9 +64,9 @@ export async function GET() {
 
     // Fetch published pages and folders
     const [pages, folders, locales] = await Promise.all([
-      getAllPages({ is_published: true }),
-      getAllPublishedPageFolders(),
-      getAllLocales(true), // Get published locales
+      getAllPages({ is_published: true }, projectId),
+      getAllPageFolders({ is_published: true }, projectId),
+      getAllLocales(true, projectId), // Get published locales
     ]);
 
     // Filter out error pages (401, 404, 500) and soft-deleted pages
@@ -75,7 +79,7 @@ export async function GET() {
     if (locales.length > 1) {
       for (const locale of locales) {
         if (!locale.is_default) {
-          const translations = await getTranslationsByLocale(locale.id, true); // Get published translations
+          const translations = await getTranslationsByLocale(locale.id, true, projectId); // Get published translations
           const translationsMap: Record<string, Translation> = {};
           for (const t of translations) {
             // Create key: source_type:source_id:content_key
@@ -104,13 +108,13 @@ export async function GET() {
 
       try {
         // Fetch published items for this collection
-        const { items } = await getItemsByCollectionId(collectionId, true);
+        const { items } = await getItemsByCollectionId(collectionId, true, undefined, projectId);
 
         if (items.length === 0) continue;
 
         // Fetch values for these items (returns Record<itemId, Record<fieldId, value>>)
         const itemIds = items.map(i => i.id);
-        const valuesByItem = await getValuesByItemIds(itemIds, true);
+        const valuesByItem = await getValuesByItemIds(itemIds, true, projectId);
 
         // Build itemValues map: itemId -> fieldId -> value
         const itemValues = new Map<string, Map<string, string>>();
@@ -154,6 +158,10 @@ export async function GET() {
     });
   } catch (error) {
     console.error('[sitemap] Error generating sitemap:', error);
+    if (error instanceof ProjectScopeAuthorizationError) {
+      return new NextResponse('Sitemap not found', { status: 404 });
+    }
+
     return new NextResponse('Error generating sitemap', { status: 500 });
   }
 }
