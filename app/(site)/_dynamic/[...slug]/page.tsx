@@ -7,7 +7,7 @@ import PasswordForm from '@/components/PasswordForm';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
-import { projectLookupFromHost, resolveStudioProjectId } from '@/lib/project-scope';
+import { projectLookupFromHost, resolveCurrentYcodeSiteProjectId, resolveStudioProjectId } from '@/lib/project-scope';
 import type { Redirect as RedirectType } from '@/types';
 
 // Internal pagination path: always dynamic/no-store.
@@ -19,7 +19,8 @@ async function resolvePublishedProjectId(): Promise<string | null> {
   const hostLookup = projectLookupFromHost(
     requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
   );
-  return hostLookup ? resolveStudioProjectId(hostLookup) : null;
+  if (hostLookup) return resolveStudioProjectId(hostLookup);
+  return resolveCurrentYcodeSiteProjectId();
 }
 
 interface DynamicSlugPageProps {

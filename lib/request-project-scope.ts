@@ -1,5 +1,10 @@
 import type { NextRequest } from 'next/server';
-import { projectLookupFromHost, resolveStudioProjectId, resolveSingleStudioProjectIdForCurrentUser } from '@/lib/project-scope';
+import {
+  projectLookupFromHost,
+  resolveCurrentYcodeSiteProjectId,
+  resolveSingleStudioProjectIdForCurrentUser,
+  resolveStudioProjectId,
+} from '@/lib/project-scope';
 import { canAccessStudioProject } from '@/lib/studio-platform';
 
 export class ProjectScopeAuthorizationError extends Error {
@@ -29,7 +34,7 @@ export type PublicFormSubmissionProjectScope = {
 
 export type PublicContentRequestProjectScope = {
   projectId: string | null;
-  source: 'host' | 'authenticated-preview' | 'none';
+  source: 'host' | 'site-key' | 'authenticated-preview' | 'none';
 };
 
 export async function resolveRequestProjectId(request: NextRequest): Promise<string | null> {
@@ -37,6 +42,8 @@ export async function resolveRequestProjectId(request: NextRequest): Promise<str
   if (projectLookup) return resolveStudioProjectId(projectLookup);
   const hostLookup = hostProjectLookup(request);
   if (hostLookup) return resolveStudioProjectId(hostLookup);
+  const siteProjectId = await resolveCurrentYcodeSiteProjectId();
+  if (siteProjectId) return siteProjectId;
   return resolveSingleStudioProjectIdForCurrentUser();
 }
 
@@ -46,6 +53,14 @@ export async function resolvePublicContentRequestProjectScope(request: NextReque
     return {
       projectId: await resolveStudioProjectId(hostLookup),
       source: 'host',
+    };
+  }
+
+  const siteProjectId = await resolveCurrentYcodeSiteProjectId();
+  if (siteProjectId) {
+    return {
+      projectId: siteProjectId,
+      source: 'site-key',
     };
   }
 
@@ -82,6 +97,11 @@ export async function resolvePublicFormSubmissionProjectScope(
       return { projectId: hostProjectId, definitionState: 'published' };
     }
     return { projectId: null, definitionState: 'published' };
+  }
+
+  const siteProjectId = await resolveCurrentYcodeSiteProjectId();
+  if (siteProjectId) {
+    return { projectId: siteProjectId, definitionState: 'published' };
   }
 
   const projectLookup = explicitProjectLookup(request);

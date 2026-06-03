@@ -79,6 +79,23 @@ export function getCurrentYcodeSiteKey(): string {
   return process.env.STUDIO_YCODE_SITE_KEY || 'default';
 }
 
+export async function resolveCurrentYcodeSiteProjectId(): Promise<string | null> {
+  const siteKey = getCurrentYcodeSiteKey();
+  if (!siteKey || siteKey === 'default') return null;
+
+  const client = await getSupabaseAdmin();
+  if (!client) return null;
+
+  const { data, error } = await client
+    .from('studio_projects')
+    .select('id')
+    .eq('ycode_site_key', siteKey)
+    .eq('status', 'active');
+
+  if (error || !Array.isArray(data) || data.length !== 1) return null;
+  return data[0]?.id || null;
+}
+
 async function hasSiteAdminRole(client: any, userId: string): Promise<boolean> {
   const { data, error } = await client.auth.admin.getUserById(userId);
   if (error) return false;

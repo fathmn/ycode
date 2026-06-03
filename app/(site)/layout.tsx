@@ -2,7 +2,7 @@ import '@/app/globals.css';
 import { headers } from 'next/headers';
 import RootLayoutShell, { defaultMetadata } from '@/components/RootLayoutShell';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
-import { projectLookupFromHost, resolveStudioProjectId } from '@/lib/project-scope';
+import { projectLookupFromHost, resolveCurrentYcodeSiteProjectId, resolveStudioProjectId } from '@/lib/project-scope';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 
 export const metadata = defaultMetadata;
@@ -12,7 +12,8 @@ async function resolvePublishedProjectId(): Promise<string | null> {
   const hostLookup = projectLookupFromHost(
     requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
   );
-  return hostLookup ? resolveStudioProjectId(hostLookup) : null;
+  if (hostLookup) return resolveStudioProjectId(hostLookup);
+  return resolveCurrentYcodeSiteProjectId();
 }
 
 export default async function SiteLayout({

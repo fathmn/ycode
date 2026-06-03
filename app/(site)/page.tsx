@@ -6,7 +6,7 @@ import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { generatePageMetadata, fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
-import { projectLookupFromHost, resolveStudioProjectId } from '@/lib/project-scope';
+import { projectLookupFromHost, resolveCurrentYcodeSiteProjectId, resolveStudioProjectId } from '@/lib/project-scope';
 import { getSiteBaseUrl } from '@/lib/url-utils';
 import type { Metadata } from 'next';
 
@@ -20,7 +20,8 @@ async function resolvePublishedProjectId(): Promise<string | null> {
   const hostLookup = projectLookupFromHost(
     requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
   );
-  return hostLookup ? resolveStudioProjectId(hostLookup) : null;
+  if (hostLookup) return resolveStudioProjectId(hostLookup);
+  return resolveCurrentYcodeSiteProjectId();
 }
 
 /**

@@ -8,7 +8,7 @@ import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
-import { projectLookupFromHost, resolveStudioProjectId } from '@/lib/project-scope';
+import { projectLookupFromHost, resolveCurrentYcodeSiteProjectId, resolveStudioProjectId } from '@/lib/project-scope';
 import { getSiteBaseUrl } from '@/lib/url-utils';
 import type { Page, Redirect as RedirectType } from '@/types';
 
@@ -23,7 +23,8 @@ async function resolvePublishedProjectId(): Promise<string | null> {
   const hostLookup = projectLookupFromHost(
     requestHeaders.get('host') || requestHeaders.get('x-forwarded-host')
   );
-  return hostLookup ? resolveStudioProjectId(hostLookup) : null;
+  if (hostLookup) return resolveStudioProjectId(hostLookup);
+  return resolveCurrentYcodeSiteProjectId();
 }
 
 export async function generateStaticParams() {
