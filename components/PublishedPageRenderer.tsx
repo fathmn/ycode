@@ -227,7 +227,10 @@ function collectPublishedAnimationRuntime(layers: Layer[]): {
       && interaction.tweens.every((tween) => (
         !tween.splitText
         && tween.apply_styles?.autoAlpha === 'on-load'
-        && tween.apply_styles?.y === 'on-load'
+        && (
+          tween.apply_styles?.y === 'on-load'
+          || tween.apply_styles?.x === 'on-load'
+        )
       ));
 
     if (!isSimpleStudioReveal) {
@@ -240,6 +243,7 @@ function collectPublishedAnimationRuntime(layers: Layer[]): {
         layerId: tween.layer_id,
         durationMs: Number.isFinite(Number(tween.duration)) ? Number(tween.duration) * 1000 : undefined,
         delayMs: typeof tween.position === 'number' ? tween.position * 1000 : undefined,
+        x: Number.isFinite(Number(tween.from?.x)) ? Number(tween.from?.x) : undefined,
         y: Number.isFinite(Number(tween.from?.y)) ? Number(tween.from?.y) : undefined,
         breakpoints: interaction.timeline?.breakpoints,
       });

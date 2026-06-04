@@ -7,6 +7,7 @@ export interface StudioRevealTarget {
   layerId: string;
   durationMs?: number;
   delayMs?: number;
+  x?: number;
   y?: number;
   breakpoints?: Breakpoint[];
 }
@@ -36,11 +37,15 @@ function revealElement(element: HTMLElement, target: StudioRevealTarget) {
 
   const duration = Math.max(0, target.durationMs ?? 700);
   const delay = Math.max(0, target.delayMs ?? 0);
-  const y = Number.isFinite(target.y) ? target.y || 0 : 24;
+  const hasX = Number.isFinite(target.x);
+  const hasY = Number.isFinite(target.y);
+  const x = hasX ? target.x || 0 : 0;
+  const y = hasY ? target.y || 0 : hasX ? 0 : 24;
+  const initialTransform = `translate(${x}px, ${y}px)`;
   const animation = element.animate(
     [
-      { opacity: 0, transform: `translateY(${y}px)`, visibility: 'visible' },
-      { opacity: 1, transform: 'translateY(0)', visibility: 'visible' },
+      { opacity: 0, transform: initialTransform, visibility: 'visible' },
+      { opacity: 1, transform: 'translate(0, 0)', visibility: 'visible' },
     ],
     {
       duration,
