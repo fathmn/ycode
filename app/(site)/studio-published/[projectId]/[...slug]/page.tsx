@@ -5,6 +5,7 @@ import {
 } from '@/app/(site)/published-route';
 
 export const revalidate = false;
+export const dynamic = 'force-static';
 export const dynamicParams = true;
 
 interface PageProps {
