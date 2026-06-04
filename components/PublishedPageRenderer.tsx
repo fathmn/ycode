@@ -206,6 +206,18 @@ function collectPublishedAnimationRuntime(layers: Layer[]): {
   const revealTargets: StudioRevealTarget[] = [];
   let requiresGsap = false;
 
+  const motionOffset = (value: unknown): number | string | undefined => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value !== 'string') return undefined;
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    if (/^-?(?:\d+|\d*\.\d+)(?:px|rem|em|vh|vw|%)?$/.test(trimmed)) {
+      return /^-?(?:\d+|\d*\.\d+)$/.test(trimmed) ? Number(trimmed) : trimmed;
+    }
+    if (/^(?:calc|clamp|min|max)\(/.test(trimmed)) return trimmed;
+    return undefined;
+  };
+
   const isStudioRuntimeHandledInteraction = (layer: Layer): boolean => (
     layer.attributes?.['data-studio-mobile-drawer-trigger'] !== undefined
     || layer.attributes?.['data-studio-import-interaction'] === 'mobile-drawer'
@@ -243,8 +255,8 @@ function collectPublishedAnimationRuntime(layers: Layer[]): {
         layerId: tween.layer_id,
         durationMs: Number.isFinite(Number(tween.duration)) ? Number(tween.duration) * 1000 : undefined,
         delayMs: typeof tween.position === 'number' ? tween.position * 1000 : undefined,
-        x: Number.isFinite(Number(tween.from?.x)) ? Number(tween.from?.x) : undefined,
-        y: Number.isFinite(Number(tween.from?.y)) ? Number(tween.from?.y) : undefined,
+        x: motionOffset(tween.from?.x),
+        y: motionOffset(tween.from?.y),
         breakpoints: interaction.timeline?.breakpoints,
       });
     });

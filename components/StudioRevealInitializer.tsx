@@ -7,8 +7,8 @@ export interface StudioRevealTarget {
   layerId: string;
   durationMs?: number;
   delayMs?: number;
-  x?: number;
-  y?: number;
+  x?: number | string;
+  y?: number | string;
   breakpoints?: Breakpoint[];
 }
 
@@ -24,6 +24,12 @@ function shouldRunOnCurrentBreakpoint(target: StudioRevealTarget): boolean {
   return target.breakpoints.includes(getCurrentBreakpoint());
 }
 
+function toCssDistance(value: StudioRevealTarget['x'], fallback: string): string {
+  if (typeof value === 'number' && Number.isFinite(value)) return `${value}px`;
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  return fallback;
+}
+
 function revealElement(element: HTMLElement, target: StudioRevealTarget) {
   element.removeAttribute('data-gsap-hidden');
   element.style.visibility = 'visible';
@@ -37,11 +43,10 @@ function revealElement(element: HTMLElement, target: StudioRevealTarget) {
 
   const duration = Math.max(0, target.durationMs ?? 700);
   const delay = Math.max(0, target.delayMs ?? 0);
-  const hasX = Number.isFinite(target.x);
-  const hasY = Number.isFinite(target.y);
-  const x = hasX ? target.x || 0 : 0;
-  const y = hasY ? target.y || 0 : hasX ? 0 : 24;
-  const initialTransform = `translate(${x}px, ${y}px)`;
+  const hasX = target.x !== undefined && target.x !== null && `${target.x}`.trim() !== '';
+  const x = toCssDistance(target.x, '0px');
+  const y = toCssDistance(target.y, hasX ? '0px' : '24px');
+  const initialTransform = `translate(${x}, ${y})`;
   const animation = element.animate(
     [
       { opacity: 0, transform: initialTransform, visibility: 'visible' },
