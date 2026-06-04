@@ -505,7 +505,10 @@ function getMediaQueryForBreakpoints(breakpoints: Breakpoint[] | undefined): str
  * Now checks per-property apply_styles on each tween.
  * Respects breakpoint restrictions on animations.
  */
-export function generateInitialAnimationCSS(layers: Layer[]): InitialAnimationResult {
+export function generateInitialAnimationCSS(
+  layers: Layer[],
+  options: { skipLayerIds?: Set<string> } = {}
+): InitialAnimationResult {
   const cssRules: string[] = [];
   const hiddenLayerInfo: HiddenLayerInfo[] = [];
 
@@ -529,6 +532,8 @@ export function generateInitialAnimationCSS(layers: Layer[]): InitialAnimationRe
           const breakpointValue = interaction.timeline?.breakpoints?.join(' ') || null;
 
           (interaction.tweens || []).forEach((tween) => {
+            if (options.skipLayerIds?.has(tween.layer_id)) return;
+
             const styles: string[] = [];
             const transforms: string[] = [];
 

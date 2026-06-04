@@ -680,8 +680,10 @@ export default async function PublishedPageRenderer({
   const safeGaId = safeGaMeasurementId(gaMeasurementId);
   const hasLayers = childLayers.length > 0;
   const hasPageTransition = hasStudioPageTransition(childLayers);
-  const { css: initialAnimationCSS } = generateInitialAnimationCSS(resolvedLayers);
   const animationRuntime = collectPublishedAnimationRuntime(resolvedLayers);
+  const { css: initialAnimationCSS } = generateInitialAnimationCSS(resolvedLayers, {
+    skipLayerIds: new Set(animationRuntime.revealTargets.map((target) => target.layerId)),
+  });
   const needsStudioRuntime = Boolean(runtimeAdapters);
 
   return (
