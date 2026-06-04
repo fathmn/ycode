@@ -2,7 +2,7 @@ import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 import { STUDIO_PREVIEW_NONCE_COOKIE } from '@/lib/studio-preview-nonce';
-import { projectLookupFromHost } from '@/lib/project-host';
+import { projectLookupFromHost, projectLookupFromRequestHosts } from '@/lib/project-host';
 import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
 import { findStudioProjectHostMatches } from '@/lib/studio-project-hostnames';
 import { getConfiguredSiteAdminRoleForUser } from '@/lib/studio-site-admin';
@@ -48,6 +48,15 @@ type ProjectIsolationCheck = {
 type ApiAuthResult =
   | { ok: true; requestHeaders?: Headers }
   | { ok: false; response: NextResponse };
+
+type PublishedProjectProxyCacheEntry = {
+  projectId: string | null;
+  unresolvedHost: boolean;
+  expiresAt: number;
+};
+
+const PUBLISHED_PROJECT_PROXY_CACHE_TTL_MS = 5 * 60 * 1000;
+const publishedProjectProxyCache = new Map<string, PublishedProjectProxyCacheEntry>();
 
 const PROJECT_SCOPE_TABLES = [
   'pages',
@@ -577,6 +586,41 @@ async function findProjectBySlugOrDomain(client: any, value: string): Promise<{ 
   return match?.id ? { id: match.id } : null;
 }
 
+async function resolvePublishedProjectForProxy(request: NextRequest): Promise<{
+  projectId: string | null;
+  unresolvedHost: boolean;
+}> {
+  const hostLookup = projectLookupFromRequestHosts(
+    request.headers.get('host'),
+    request.headers.get('x-forwarded-host')
+  );
+
+  if (!hostLookup) {
+    return { projectId: null, unresolvedHost: false };
+  }
+
+  const cached = publishedProjectProxyCache.get(hostLookup);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { projectId: cached.projectId, unresolvedHost: cached.unresolvedHost };
+  }
+
+  const config = getSupabaseEnvConfig();
+  if (!config) {
+    return { projectId: null, unresolvedHost: true };
+  }
+
+  const client = createClient(config.url, config.secretKey || config.anonKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const project = await findProjectBySlugOrDomain(client, hostLookup);
+  const resolution = { projectId: project?.id || null, unresolvedHost: !project?.id };
+  publishedProjectProxyCache.set(hostLookup, {
+    ...resolution,
+    expiresAt: Date.now() + PUBLISHED_PROJECT_PROXY_CACHE_TTL_MS,
+  });
+  return resolution;
+}
+
 function getAuditDescriptor(pathname: string, method: string): { action: string; entityType: string } | null {
   if (!isMutatingRequest(method)) return null;
 
@@ -971,6 +1015,16 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   let forwardedRequestHeaders: Headers | undefined;
 
+  if (pathname.startsWith('/studio-published')) {
+    return new NextResponse('Not found', {
+      status: 404,
+      headers: {
+        'cache-control': 'no-store',
+        'content-type': 'text/plain; charset=utf-8',
+      },
+    });
+  }
+
   if (isStudioHost(request) && pathname === '/robots.txt') {
     return studioRobotsResponse();
   }
@@ -1072,7 +1126,9 @@ export async function proxy(request: NextRequest) {
 
   const isPublicPage = !pathname.startsWith('/ycode')
     && !pathname.startsWith('/_next')
+    && !pathname.startsWith('/studio-published')
     && !pathname.startsWith('/api')
+    && !pathname.startsWith('/a/')
     && !pathname.startsWith('/dynamic');
   const hasPaginationParams = Array.from(request.nextUrl.searchParams.keys())
     .some((key) => key.startsWith('p_'));
@@ -1084,6 +1140,31 @@ export async function proxy(request: NextRequest) {
     const rewriteResponse = NextResponse.rewrite(rewriteUrl);
     rewriteResponse.headers.set('x-pathname', pathname);
     return rewriteResponse;
+  }
+
+  if (isPublicPage && request.method === 'GET') {
+    const { projectId, unresolvedHost } = await resolvePublishedProjectForProxy(request);
+
+    if (unresolvedHost) {
+      return new NextResponse('Page not found', {
+        status: 404,
+        headers: {
+          'cache-control': 'public, s-maxage=60',
+          'content-type': 'text/plain; charset=utf-8',
+        },
+      });
+    }
+
+    if (projectId) {
+      const rewriteUrl = request.nextUrl.clone();
+      rewriteUrl.pathname = pathname === '/'
+        ? `/studio-published/${encodeURIComponent(projectId)}`
+        : `/studio-published/${encodeURIComponent(projectId)}${pathname}`;
+      const rewriteResponse = NextResponse.rewrite(rewriteUrl);
+      rewriteResponse.headers.set('x-pathname', pathname);
+      rewriteResponse.headers.set('Cache-Control', 'public, s-maxage=31536000, stale-while-revalidate=31536000');
+      return rewriteResponse;
+    }
   }
 
   // Create response
