@@ -73,7 +73,7 @@ export function getImageSizesForLayer(layer: ImageLayerLike): string {
     return '100vw';
   }
   if (isFramedContentImageLayer(layer)) {
-    return '(max-width: 809px) 100vw, (max-width: 1199px) 50vw, 24vw';
+    return '(max-width: 809px) 100vw, (max-width: 1199px) 50vw, (max-width: 1599px) 20vw, 24vw';
   }
   return '(max-width: 809px) 100vw, 50vw';
 }
@@ -87,7 +87,7 @@ export function getImageSrcsetWidthsForLayer(layer: ImageLayerLike): number[] {
 export function getFallbackImageWidthForLayer(layer: ImageLayerLike): number {
   if (isSmallBrandImageLayer(layer)) return 96;
   if (isPriorityImageLayer(layer)) return 1280;
-  return isFramedContentImageLayer(layer) ? 480 : 768;
+  return isFramedContentImageLayer(layer) ? 320 : 768;
 }
 
 export function getImageTransformQualityForLayer(layer: ImageLayerLike): number {
