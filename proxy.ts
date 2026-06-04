@@ -311,6 +311,14 @@ function isStudioAppRequest(request: NextRequest, pathname: string): boolean {
   return isStudioHost(request) && !isReservedStudioPath(pathname);
 }
 
+function isPublicMetadataPath(pathname: string): boolean {
+  return pathname === '/robots.txt'
+    || pathname === '/sitemap.xml'
+    || pathname === '/llms.txt'
+    || pathname === '/favicon.ico'
+    || pathname === '/icon.svg';
+}
+
 function projectLookupFromPublicRequest(request: NextRequest): string | null {
   const helperLookup = projectLookupFromRequestHosts(
     request.headers.get('host'),
@@ -1146,7 +1154,8 @@ export async function proxy(request: NextRequest) {
     && !pathname.startsWith('/studio-published')
     && !pathname.startsWith('/api')
     && !pathname.startsWith('/a/')
-    && !pathname.startsWith('/dynamic');
+    && !pathname.startsWith('/dynamic')
+    && !isPublicMetadataPath(pathname);
   const hasPaginationParams = Array.from(request.nextUrl.searchParams.keys())
     .some((key) => key.startsWith('p_'));
 
