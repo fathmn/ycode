@@ -20,6 +20,7 @@ import { removeSpaces } from '@/lib/utils';
 import { getFontAvailableWeights, FONT_WEIGHTS } from '@/lib/font-utils';
 import { buildBgImgVarName } from '@/lib/tailwind-class-mapper';
 import { isTextContentLayer } from '@/lib/layer-utils';
+import { formatDesignValueHint } from '@/lib/design-value-labels';
 import type { Collection, CollectionField, Layer } from '@/types';
 import type { FieldGroup } from '@/lib/collection-field-utils';
 import ColorPropertyField from './ColorPropertyField';
@@ -64,6 +65,9 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
   const underlineOffset = getDesignProperty('typography', 'underlineOffset') || '';
   const placeholderColor = getDesignProperty('typography', 'placeholderColor') || '';
   const lineClamp = getDesignProperty('typography', 'lineClamp') || '';
+  const fontSizeHint = formatDesignValueHint(fontSize);
+  const letterSpacingHint = formatDesignValueHint(letterSpacing);
+  const lineHeightHint = formatDesignValueHint(lineHeight);
 
   // Get available weights for the selected font
   const selectedFont = getFontByFamily(fontFamily);
@@ -406,12 +410,16 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
               <div className="col-span-2 *:w-full">
                 <InputGroup>
                   <InputGroupInput
+                    title={fontSizeHint || fontSize || undefined}
                     value={fontSizeInput}
                     onChange={(e) => handleFontSizeChange(e.target.value)}
                     stepper
                     min="0"
                   />
                 </InputGroup>
+                {fontSizeHint && (
+                  <p className="mt-1 truncate text-[11px] text-muted-foreground">{fontSizeHint}</p>
+                )}
               </div>
             </div>
           </>
@@ -517,6 +525,7 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
                 </InputGroupAddon>
                 <InputGroupInput
                   className="pr-0!"
+                  title={letterSpacingHint || letterSpacing || undefined}
                   value={letterSpacingInput}
                   onChange={(e) => handleLetterSpacingChange(e.target.value)}
                   onStepperChange={handleLetterSpacingStepper}
@@ -540,6 +549,7 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
                 </InputGroupAddon>
                 <InputGroupInput
                   className="pr-0!"
+                  title={lineHeightHint || lineHeight || undefined}
                   value={lineHeightInput}
                   onChange={(e) => handleLineHeightChange(e.target.value)}
                   onStepperChange={handleLineHeightStepper}

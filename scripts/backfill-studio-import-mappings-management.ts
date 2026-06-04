@@ -1,13 +1,15 @@
 import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 import {
   normalizeStudioImportLayers,
   type StudioImportNormalizationStats,
   type StudioImportPageTarget,
 } from '../lib/studio-import-normalizer';
+import { cleanImportDesign, styleToClasses } from '../lib/html-layer-converter';
+import { classesToDesign, propertyToClass, replaceConflictingClasses } from '../lib/tailwind-class-mapper';
 import { DEFAULT_TEXT_STYLES } from '../lib/text-format-utils';
-import type { Layer } from '../types';
+import type { DesignProperties, Layer } from '../types';
 
 const DEFAULT_PROJECT_REF = 'ueeecqiswvxpfpmujrtj';
 
@@ -29,6 +31,20 @@ interface SqlLayerRow {
   layers: Layer[] | null;
 }
 
+interface SourceStyleRepairStats {
+  layersVisited: number;
+  sourceStyleMatches: number;
+  layersChanged: number;
+  propertiesRepaired: number;
+  classesAdded: number;
+}
+
+interface SourceLayerStyle {
+  style: string;
+  classes: string[];
+  design?: DesignProperties;
+}
+
 let compilerCache: { build: (candidates: string[]) => string } | null = null;
 type TailwindCompile = (input: string, options: Record<string, any>) => Promise<{ build: (candidates: string[]) => string }>;
 
@@ -40,6 +56,11 @@ function readArg(name: string): string | null {
 
 function hasFlag(name: string): boolean {
   return process.argv.includes(`--${name}`);
+}
+
+function resolveInputPath(path: string): string {
+  if (isAbsolute(path)) return path;
+  return resolve(process.cwd(), path);
 }
 
 function sqlLiteral(value: string): string {
@@ -103,6 +124,186 @@ function emptyStats(): StudioImportNormalizationStats {
     classesAdded: 0,
     designObjectsAdded: 0,
   };
+}
+
+function emptySourceStyleRepairStats(): SourceStyleRepairStats {
+  return {
+    layersVisited: 0,
+    sourceStyleMatches: 0,
+    layersChanged: 0,
+    propertiesRepaired: 0,
+    classesAdded: 0,
+  };
+}
+
+function addSourceStyleRepairStats(target: SourceStyleRepairStats, source: SourceStyleRepairStats) {
+  target.layersVisited += source.layersVisited;
+  target.sourceStyleMatches += source.sourceStyleMatches;
+  target.layersChanged += source.layersChanged;
+  target.propertiesRepaired += source.propertiesRepaired;
+  target.classesAdded += source.classesAdded;
+}
+
+function normalizeClassList(classes: Layer['classes'] | undefined): string[] {
+  if (Array.isArray(classes)) return classes.filter(Boolean);
+  if (typeof classes !== 'string') return [];
+  return classes.split(/\s+/).filter(Boolean);
+}
+
+function mergeMissingClasses(existing: string[], additions: string[]): { classes: string[]; addedCount: number } {
+  const next = [...existing];
+  const seen = new Set(next);
+  let addedCount = 0;
+
+  for (const cls of additions) {
+    if (!cls || seen.has(cls)) continue;
+    next.push(cls);
+    seen.add(cls);
+    addedCount += 1;
+  }
+
+  return { classes: next, addedCount };
+}
+
+function isEmptyDesignValue(value: unknown): boolean {
+  return value === undefined || value === null || value === '';
+}
+
+function shouldRepairDesignProperty(
+  category: keyof DesignProperties,
+  property: string,
+  currentValue: unknown,
+  sourceValue: unknown,
+): boolean {
+  if (isEmptyDesignValue(sourceValue)) return false;
+  if (isEmptyDesignValue(currentValue)) return true;
+
+  if (category === 'typography' && property === 'fontFamily' && typeof sourceValue === 'string') {
+    const sourceIsDisplayToken = sourceValue.includes('var(--font-display') || sourceValue.includes('var(--font-spectral');
+    if (!sourceIsDisplayToken) return false;
+
+    if (typeof currentValue !== 'string') return true;
+    const current = currentValue.trim().toLowerCase();
+    return current === 'inter' || current === 'sans' || current === 'serif' || !current.includes('var(--font-');
+  }
+
+  return false;
+}
+
+function repairLayerFromSourceStyle(
+  layer: Layer,
+  sourceStyles: Map<string, SourceLayerStyle>,
+  stats: SourceStyleRepairStats,
+): { layer: Layer; changed: boolean } {
+  stats.layersVisited += 1;
+
+  const source = sourceStyles.get(layer.id);
+  let changed = false;
+  let nextLayer = { ...layer };
+  let nextClasses = normalizeClassList(layer.classes);
+
+  if (source?.design) {
+    stats.sourceStyleMatches += 1;
+    const currentDesign = nextLayer.design || {};
+    const repairedDesign: DesignProperties = { ...currentDesign };
+    let repairedProperties = 0;
+
+    for (const [category, sourceCategory] of Object.entries(source.design) as [keyof DesignProperties, Record<string, unknown>][]) {
+      if (!sourceCategory || typeof sourceCategory !== 'object') continue;
+      const currentCategory = (currentDesign[category] || {}) as Record<string, unknown>;
+      const nextCategory = { ...currentCategory };
+
+      for (const [property, sourceValue] of Object.entries(sourceCategory)) {
+        if (property === 'isActive') continue;
+        if (!shouldRepairDesignProperty(category, property, currentCategory[property], sourceValue)) continue;
+
+        nextCategory[property] = sourceValue;
+        nextCategory.isActive = true;
+        repairedProperties += 1;
+
+        const className = propertyToClass(category, property, String(sourceValue));
+        if (className) {
+          nextClasses = replaceConflictingClasses(nextClasses, property, className);
+        }
+      }
+
+      if (Object.keys(nextCategory).length > 0) {
+        repairedDesign[category] = nextCategory as any;
+      }
+    }
+
+    if (repairedProperties > 0) {
+      const merged = mergeMissingClasses(nextClasses, source.classes);
+      nextClasses = merged.classes;
+      stats.classesAdded += merged.addedCount;
+      stats.propertiesRepaired += repairedProperties;
+      nextLayer = {
+        ...nextLayer,
+        design: cleanImportDesign(repairedDesign),
+        classes: nextClasses.join(' '),
+      };
+      changed = true;
+    }
+  }
+
+  if (nextLayer.children?.length) {
+    const repairedChildren = nextLayer.children.map((child) => repairLayerFromSourceStyle(child, sourceStyles, stats));
+    if (repairedChildren.some((child) => child.changed)) {
+      nextLayer = {
+        ...nextLayer,
+        children: repairedChildren.map((child) => child.layer),
+      };
+      changed = true;
+    }
+  }
+
+  if (changed) stats.layersChanged += 1;
+  return { layer: nextLayer, changed };
+}
+
+function repairLayersFromSourceStyles(layers: Layer[], sourceStyles: Map<string, SourceLayerStyle>) {
+  const stats = emptySourceStyleRepairStats();
+  const repaired = layers.map((layer) => repairLayerFromSourceStyle(layer, sourceStyles, stats));
+
+  return {
+    layers: repaired.map((item) => item.layer),
+    changed: repaired.some((item) => item.changed),
+    stats,
+  };
+}
+
+function collectSourceStylesFromNode(node: unknown, styles: Map<string, SourceLayerStyle>) {
+  if (!node || typeof node !== 'object') return;
+
+  if (Array.isArray(node)) {
+    node.forEach((item) => collectSourceStylesFromNode(item, styles));
+    return;
+  }
+
+  const maybeLayer = node as Record<string, any>;
+  const id = maybeLayer.id;
+  const style = maybeLayer.attributes?.style;
+  if (typeof id === 'string' && typeof style === 'string' && style.trim()) {
+    const classes = styleToClasses(style);
+    styles.set(id, {
+      style,
+      classes,
+      design: cleanImportDesign(classesToDesign(classes)),
+    });
+  }
+
+  for (const value of Object.values(maybeLayer)) {
+    collectSourceStylesFromNode(value, styles);
+  }
+}
+
+async function loadSourceStyles(sourceReportPath: string | null): Promise<Map<string, SourceLayerStyle>> {
+  if (!sourceReportPath) return new Map();
+  const resolvedPath = resolveInputPath(sourceReportPath);
+  const report = JSON.parse(await readFile(resolvedPath, 'utf-8'));
+  const styles = new Map<string, SourceLayerStyle>();
+  collectSourceStylesFromNode(report.plan?.records ?? report.records ?? report, styles);
+  return styles;
 }
 
 async function updateJsonColumn(table: string, id: string, column: string, value: unknown) {
@@ -271,6 +472,7 @@ async function backfillTable(
   table: 'page_layers' | 'components',
   projectId: string,
   pageTargets: StudioImportPageTarget[],
+  sourceStyles: Map<string, SourceLayerStyle>,
   write: boolean,
 ) {
   const rows = await querySql<SqlLayerRow>(`
@@ -281,32 +483,42 @@ async function backfillTable(
   `);
 
   const totals = emptyStats();
+  const sourceStyleTotals = emptySourceStyleRepairStats();
   let changedRows = 0;
 
   for (const row of rows) {
     if (!Array.isArray(row.layers)) continue;
     const result = normalizeStudioImportLayers(row.layers, pageTargets);
     addStats(totals, result.stats);
-    if (!result.changed) continue;
+    const sourceStyleResult = sourceStyles.size > 0
+      ? repairLayersFromSourceStyles(result.layers, sourceStyles)
+      : null;
+    if (sourceStyleResult) addSourceStyleRepairStats(sourceStyleTotals, sourceStyleResult.stats);
+
+    const nextLayers = sourceStyleResult?.layers || result.layers;
+    const rowChanged = result.changed || Boolean(sourceStyleResult?.changed);
+    if (!rowChanged) continue;
 
     changedRows += 1;
     if (write) {
-      await updateJsonColumn(table, row.id, 'layers', result.layers);
+      await updateJsonColumn(table, row.id, 'layers', nextLayers);
     }
   }
 
-  return { table, rowsScanned: rows.length, changedRows, stats: totals };
+  return { table, rowsScanned: rows.length, changedRows, stats: totals, sourceStyleStats: sourceStyleTotals };
 }
 
 async function main() {
   const projectSlug = readArg('studio-project') || process.env.STUDIO_PROJECT_SLUG || 'hr-interim-solutions';
+  const sourceReportPath = readArg('source-report');
   const write = hasFlag('write');
   const projectId = await loadProjectId(projectSlug);
   const pageTargets = await loadPageTargets(projectId);
+  const sourceStyles = await loadSourceStyles(sourceReportPath);
 
   const results = await Promise.all([
-    backfillTable('page_layers', projectId, pageTargets, write),
-    backfillTable('components', projectId, pageTargets, write),
+    backfillTable('page_layers', projectId, pageTargets, sourceStyles, write),
+    backfillTable('components', projectId, pageTargets, sourceStyles, write),
   ]);
   const css = write ? await regenerateProjectCss(projectId) : null;
 
@@ -315,6 +527,8 @@ async function main() {
     projectSlug,
     projectId,
     pageTargets: pageTargets.length,
+    sourceReportPath,
+    sourceStyles: sourceStyles.size,
     results,
     css,
   }, null, 2));

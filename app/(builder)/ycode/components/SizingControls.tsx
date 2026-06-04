@@ -22,6 +22,7 @@ import { useEditorStore } from '@/stores/useEditorStore';
 import { usePagesStore } from '@/stores/usePagesStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
 import { extractMeasurementValue, formatMeasurementValue } from '@/lib/measurement-utils';
+import { formatDesignValueHint } from '@/lib/design-value-labels';
 import type { Layer } from '@/types';
 
 interface SizingControlsProps {
@@ -52,6 +53,12 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
   const objectFit = getDesignProperty('sizing', 'objectFit') || '';
   const gridColumnSpan = getDesignProperty('sizing', 'gridColumnSpan') || '';
   const gridRowSpan = getDesignProperty('sizing', 'gridRowSpan') || '';
+  const widthHint = formatDesignValueHint(width);
+  const heightHint = formatDesignValueHint(height);
+  const minWidthHint = formatDesignValueHint(minWidth);
+  const minHeightHint = formatDesignValueHint(minHeight);
+  const maxWidthHint = formatDesignValueHint(maxWidth);
+  const maxHeightHint = formatDesignValueHint(maxHeight);
 
   // Extract aspect ratio value for display (remove brackets)
   const extractAspectRatioValue = (value: string): string => {
@@ -422,6 +429,7 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
         <div className="col-span-2 flex flex-col gap-2">
           <ButtonGroup>
             <Input
+              title={widthHint || width || undefined}
               value={widthInput} onChange={(e) => handleWidthChange(e.target.value)}
             />
             <ButtonGroupSeparator />
@@ -436,6 +444,9 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
               </SelectContent>
             </Select>
           </ButtonGroup>
+          {widthHint && (
+            <p className="truncate text-[11px] text-muted-foreground">{widthHint}</p>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <div className="w-full group relative">
               <ButtonGroup className="w-full">
@@ -454,6 +465,7 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
                   </InputGroupAddon>
                   <InputGroupInput
                     placeholder="Min" value={minWidthInput}
+                    title={minWidthHint || minWidth || undefined}
                     onChange={(e) => handleMinWidthChange(e.target.value)}
                   />
                 </InputGroup>
@@ -488,6 +500,7 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
                   </InputGroupAddon>
                   <InputGroupInput
                     placeholder="Max" value={maxWidthInput}
+                    title={maxWidthHint || maxWidth || undefined}
                     onChange={(e) => handleMaxWidthChange(e.target.value)}
                   />
                 </InputGroup>
@@ -514,6 +527,7 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
         <div className="col-span-2 flex flex-col gap-2">
           <ButtonGroup>
             <Input
+              title={heightHint || height || undefined}
               value={heightInput} onChange={(e) => handleHeightChange(e.target.value)}
             />
             <ButtonGroupSeparator />
@@ -527,6 +541,9 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
               </SelectContent>
             </Select>
           </ButtonGroup>
+          {heightHint && (
+            <p className="truncate text-[11px] text-muted-foreground">{heightHint}</p>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <div className="w-full group relative">
               <ButtonGroup className="w-full">
@@ -545,6 +562,7 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
                   </InputGroupAddon>
                   <InputGroupInput
                     placeholder="Min" value={minHeightInput}
+                    title={minHeightHint || minHeight || undefined}
                     onChange={(e) => handleMinHeightChange(e.target.value)}
                   />
                 </InputGroup>
@@ -578,6 +596,7 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
                   </InputGroupAddon>
                   <InputGroupInput
                     placeholder="Max" value={maxHeightInput}
+                    title={maxHeightHint || maxHeight || undefined}
                     onChange={(e) => handleMaxHeightChange(e.target.value)}
                   />
                 </InputGroup>

@@ -123,6 +123,8 @@ export default function LinkSettings(props: LinkSettingsProps) {
   // Stores
   const pages = usePagesStore((state) => state.pages);
   const draftsByPageId = usePagesStore((state) => state.draftsByPageId);
+  const loadPages = usePagesStore((state) => state.loadPages);
+  const loadFolders = usePagesStore((state) => state.loadFolders);
   const currentPageId = useEditorStore((state) => state.currentPageId);
   const openFileManager = useEditorStore((state) => state.openFileManager);
   const editingComponentId = useEditorStore((state) => state.editingComponentId);
@@ -189,6 +191,11 @@ export default function LinkSettings(props: LinkSettingsProps) {
     if (!pageId) return null;
     return pages.find((p) => p.id === pageId) || null;
   }, [pageId, pages]);
+
+  useEffect(() => {
+    if (!pageId || selectedPage || pages.length > 0) return;
+    void Promise.all([loadPages(), loadFolders()]);
+  }, [loadFolders, loadPages, pageId, pages.length, selectedPage]);
 
   // Flatten layers and find all layers with a custom ID (settings.id takes priority over attributes.id)
   const findLayersWithId = useCallback((layers: Layer[]): Array<{ layer: Layer; id: string }> => {

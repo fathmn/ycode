@@ -15,6 +15,7 @@ import { useModeToggle } from '@/hooks/use-mode-toggle';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { extractMeasurementValue } from '@/lib/measurement-utils';
 import { removeSpaces } from '@/lib/utils';
+import { formatDesignValueHint } from '@/lib/design-value-labels';
 import type { Layer } from '@/types';
 
 interface LayoutControlsProps {
@@ -42,6 +43,9 @@ const LayoutControls = memo(function LayoutControls({ layer, onLayerUpdate }: La
   const rowGap = getDesignProperty('layout', 'rowGap') || '';
   const gridCols = getDesignProperty('layout', 'gridTemplateColumns') || '';
   const gridRows = getDesignProperty('layout', 'gridTemplateRows') || '';
+  const gapHint = formatDesignValueHint(gap);
+  const columnGapHint = formatDesignValueHint(columnGap);
+  const rowGapHint = formatDesignValueHint(rowGap);
 
   // Extract number from grid template: "repeat(2, 1fr)" → "2"
   const extractGridNumber = (value: string): string => {
@@ -354,6 +358,7 @@ const LayoutControls = memo(function LayoutControls({ layer, onLayerUpdate }: La
                                 stepper
                                 min="0"
                                 step="1"
+                                title={gapHint || gap || undefined}
                                 disabled={gapModeToggle.mode === 'individual'}
                                 value={gapInput}
                                 onChange={(e) => handleGapChange(e.target.value)}
@@ -367,6 +372,9 @@ const LayoutControls = memo(function LayoutControls({ layer, onLayerUpdate }: La
                               <Icon name="link" />
                           </Button>
                       </div>
+                      {gapHint && gapModeToggle.mode !== 'individual' && (
+                        <p className="truncate text-[11px] text-muted-foreground">{gapHint}</p>
+                      )}
                       {gapModeToggle.mode === 'individual' && (
                            <div className="col-span-2 grid grid-cols-2 gap-2">
                            <InputGroup>
@@ -386,6 +394,7 @@ const LayoutControls = memo(function LayoutControls({ layer, onLayerUpdate }: La
                                  stepper
                                  min="0"
                                  step="1"
+                                 title={columnGapHint || columnGap || undefined}
                                  value={columnGapInput}
                                  onChange={(e) => handleColumnGapChange(e.target.value)}
                                />
@@ -407,11 +416,17 @@ const LayoutControls = memo(function LayoutControls({ layer, onLayerUpdate }: La
                                  stepper
                                  min="0"
                                  step="1"
+                                 title={rowGapHint || rowGap || undefined}
                                  value={rowGapInput}
                                  onChange={(e) => handleRowGapChange(e.target.value)}
                                />
                            </InputGroup>
                        </div>
+                      )}
+                      {gapModeToggle.mode === 'individual' && (columnGapHint || rowGapHint) && (
+                        <p className="truncate text-[11px] text-muted-foreground">
+                          {[columnGapHint, rowGapHint].filter(Boolean).join(' / ')}
+                        </p>
                       )}
                   </div>
               </div>

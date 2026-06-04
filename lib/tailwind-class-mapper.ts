@@ -168,35 +168,52 @@ function formatMeasurementClass(
   prefix: string,
   allowedNamedValues: string[] = []
 ): string {
+  const normalizedValue = value.trim();
+
   // Check for named values first (e.g., "auto", "full")
-  if (allowedNamedValues.includes(value)) {
-    return `${prefix}-${value}`;
+  if (allowedNamedValues.includes(normalizedValue)) {
+    return `${prefix}-${normalizedValue}`;
+  }
+
+  const arbitraryValue = normalizedValue.replace(/\s+/g, '_');
+  const isCssFunction = /^[a-z-]+\(/i.test(normalizedValue);
+  const isCssVariable = normalizedValue.startsWith('--') || normalizedValue.startsWith('var(');
+  const isIntrinsicKeyword = /^(min-content|max-content|fit-content|stretch)$/i.test(normalizedValue);
+  const needsArbitrarySyntax = isCssFunction
+    || isCssVariable
+    || isIntrinsicKeyword
+    || normalizedValue.includes('%')
+    || normalizedValue.includes(',')
+    || normalizedValue.includes('/');
+
+  if (needsArbitrarySyntax) {
+    return `${prefix}-[${arbitraryValue}]`;
   }
 
   // Check if value already ends with px - don't add it again
-  if (value.endsWith('px')) {
-    return `${prefix}-[${value}]`;
+  if (normalizedValue.endsWith('px')) {
+    return `${prefix}-[${normalizedValue}]`;
   }
 
   // Check if value is just a number (e.g., "100" without any unit)
-  const isPlainNumber = /^-?\d*\.?\d+$/.test(value);
+  const isPlainNumber = /^-?\d*\.?\d+$/.test(normalizedValue);
   if (isPlainNumber) {
     // Add px to plain numbers
-    return `${prefix}-[${value}px]`;
+    return `${prefix}-[${normalizedValue}px]`;
   }
 
   // For values with other units (rem, em, %, etc.) or negative prefix, wrap in arbitrary value
-  if (value.match(/^-/)) {
-    return `${prefix}-[${value}]`;
+  if (normalizedValue.match(/^-/)) {
+    return `${prefix}-[${normalizedValue}]`;
   }
 
   // For values starting with a digit but not caught above
-  if (value.match(/^\d/)) {
-    return `${prefix}-[${value}]`;
+  if (normalizedValue.match(/^\d/)) {
+    return `${prefix}-[${normalizedValue}]`;
   }
 
   // Otherwise use as named class (e.g., "large", "small")
-  return `${prefix}-${value}`;
+  return `${prefix}-${normalizedValue}`;
 }
 
 /**

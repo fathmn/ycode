@@ -1,6 +1,6 @@
 import type { Layer, LinkSettings } from '@/types';
 import { cleanImportDesign, styleToClasses } from '@/lib/html-layer-converter';
-import { classesToDesign, mergeDesign } from '@/lib/tailwind-class-mapper';
+import { classesToDesign, mergeDesign, propertyToClass, replaceConflictingClasses } from '@/lib/tailwind-class-mapper';
 
 export interface StudioImportPageTarget {
   id: string;
@@ -170,6 +170,55 @@ function normalizeClassList(classes: Layer['classes'] | undefined): string[] {
   return classes.split(/\s+/).filter(Boolean);
 }
 
+function repairLegacyInvalidImportClasses(layer: Layer): { classes: string; changed: boolean; addedCount: number } {
+  const classes = normalizeClassList(layer.classes);
+  if (classes.length === 0) return { classes: typeof layer.classes === 'string' ? layer.classes : '', changed: false, addedCount: 0 };
+
+  let changed = false;
+  let addedCount = 0;
+  let repaired = classes.filter((cls) => {
+    const isInvalidTextFunction = /^text-(?:clamp|calc|var|min|max|fit)-?\(/.test(cls) || /^text-var\(/.test(cls);
+    const isInvalidIntrinsicWidth = /^(?:w|min-w|max-w|h|min-h|max-h)-(?:min-content|max-content|fit-content)$/.test(cls);
+    const isInvalidGapFunction = /^gap-(?:clamp|calc|var)\(/.test(cls);
+
+    if (isInvalidTextFunction || isInvalidIntrinsicWidth || isInvalidGapFunction) {
+      changed = true;
+      return false;
+    }
+    return true;
+  });
+
+  const addDesignClass = (
+    category: keyof NonNullable<Layer['design']>,
+    property: string,
+    value: unknown,
+  ) => {
+    if (typeof value !== 'string' || !value) return;
+    const cls = propertyToClass(category, property, value);
+    if (!cls) return;
+    const before = repaired.length;
+    repaired = replaceConflictingClasses(repaired, property, cls);
+    if (repaired.length > before || !repaired.includes(cls)) addedCount += 1;
+    changed = true;
+  };
+
+  addDesignClass('typography', 'fontSize', layer.design?.typography?.fontSize);
+  addDesignClass('typography', 'color', layer.design?.typography?.color);
+  addDesignClass('layout', 'gap', layer.design?.layout?.gap);
+  addDesignClass('sizing', 'width', layer.design?.sizing?.width);
+  addDesignClass('sizing', 'height', layer.design?.sizing?.height);
+  addDesignClass('sizing', 'minWidth', layer.design?.sizing?.minWidth);
+  addDesignClass('sizing', 'minHeight', layer.design?.sizing?.minHeight);
+  addDesignClass('sizing', 'maxWidth', layer.design?.sizing?.maxWidth);
+  addDesignClass('sizing', 'maxHeight', layer.design?.sizing?.maxHeight);
+
+  return {
+    classes: repaired.join(' '),
+    changed,
+    addedCount,
+  };
+}
+
 function mergeClassList(existing: Layer['classes'] | undefined, additions: string[]): { classes: string; addedCount: number } {
   const merged = new Set(normalizeClassList(existing));
   let addedCount = 0;
@@ -248,6 +297,16 @@ function normalizeLayer(
   let changed = false;
   let nextLayer: Layer = { ...layer };
   let nextAttributes = { ...(layer.attributes || {}) };
+
+  const classRepair = repairLegacyInvalidImportClasses(nextLayer);
+  if (classRepair.changed) {
+    nextLayer = {
+      ...nextLayer,
+      classes: classRepair.classes,
+    };
+    stats.classesAdded += classRepair.addedCount;
+    changed = true;
+  }
 
   const rawHref = nextAttributes.href;
   const currentLink = nextLayer.variables?.link as LinkSettings | null | undefined;

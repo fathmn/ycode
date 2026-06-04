@@ -14,6 +14,7 @@ import { BUILT_IN_FONTS, ALLOWED_FONT_EXTENSIONS, getFontFamilyValue } from '@/l
 import { loadGoogleFontPreview, resetGoogleFontPreview } from '@/lib/google-font-preview';
 import { useDebounce } from '@/hooks/use-debounce';
 import { cn } from '@/lib/utils';
+import { formatCssVariableLabel } from '@/lib/design-value-labels';
 import type { Font } from '@/types';
 
 const PAGE_SIZE = 50;
@@ -21,17 +22,6 @@ const PAGE_SIZE = 50;
 interface FontPickerProps {
   value: string; // Current fontFamily value (e.g., 'sans', 'Open Sans')
   onChange: (value: string) => void;
-}
-
-function formatCssVariableFontLabel(value: string): string | null {
-  const match = value.match(/^var\(\s*--font-([a-z0-9_-]+)(?:\s*,\s*(.+))?\)$/i);
-  if (!match) return null;
-
-  const tokenName = match[1]
-    .replace(/[-_]/g, ' ')
-    .replace(/\b\w/g, c => c.toUpperCase());
-
-  return `${tokenName} Font`;
 }
 
 export default function FontPicker({ value, onChange }: FontPickerProps) {
@@ -125,7 +115,7 @@ export default function FontPicker({ value, onChange }: FontPickerProps) {
   const getDisplayLabel = useCallback(() => {
     if (!value || value === 'inherit') return 'Inherit';
 
-    const cssVariableLabel = formatCssVariableFontLabel(value);
+    const cssVariableLabel = formatCssVariableLabel(value);
     if (cssVariableLabel) return cssVariableLabel;
 
     // Check built-in fonts
