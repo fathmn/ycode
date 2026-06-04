@@ -22,7 +22,7 @@ export default function Error({ error, reset }: ErrorProps) {
           Die Seite konnte gerade nicht geladen werden.
         </h1>
         <p className="mb-8 text-base leading-7 text-neutral-600">
-          Bitte versuchen Sie es erneut. Falls der Fehler bestehen bleibt, pruefen wir die Website im Studio.
+          Bitte versuchen Sie es erneut. Falls der Fehler bestehen bleibt, prüfen wir die Website im Studio.
         </p>
         <button
           type="button"
