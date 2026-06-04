@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { setDefaultLocale } from '@/lib/repositories/localeRepository';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const LOCALE_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * POST /ycode/api/locales/[id]/default
@@ -10,8 +18,11 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, LOCALE_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { id } = await params;
-    const locale = await setDefaultLocale(id);
+    const locale = await setDefaultLocale(id, roleCheck.context.project.id);
     
     return NextResponse.json({ data: locale });
   } catch (error) {

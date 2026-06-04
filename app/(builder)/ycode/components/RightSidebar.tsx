@@ -2206,18 +2206,18 @@ const RightSidebar = React.memo(function RightSidebar({
             {/* Locale Label Panel - only show for localeSelector layers */}
             {selectedLayer && selectedLayer.name === 'localeSelector' && (
               <SettingsPanel
-                title="Locale selector"
+                title="Sprachauswahl"
                 isOpen={localeLabelOpen}
                 onToggle={() => setLocaleLabelOpen(!localeLabelOpen)}
               >
                 <div className="flex flex-col gap-2">
                   <div className="grid grid-cols-3">
-                    <Label variant="muted">Display</Label>
+                    <Label variant="muted">Anzeige</Label>
                     <div className="col-span-2 *:w-full">
                       <ToggleGroup
                         options={[
-                          { label: 'English', value: 'locale' },
-                          { label: 'EN', value: 'code' },
+                          { label: 'Deutsch', value: 'locale' },
+                          { label: 'DE', value: 'code' },
                         ]}
                         value={selectedLayer.settings?.locale?.format || 'locale'}
                         onChange={(value) => {
@@ -2245,7 +2245,7 @@ const RightSidebar = React.memo(function RightSidebar({
                                 text: {
                                   type: 'dynamic_text',
                                   data: {
-                                    content: format === 'code' ? 'EN' : 'English'
+                                    content: format === 'code' ? 'DE' : 'Deutsch'
                                   }
                                 }
                               }

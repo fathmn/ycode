@@ -12,14 +12,14 @@ export async function DELETE(request: NextRequest) {
   try {
     const auth = await getAuthUser();
     if (!auth) {
-      return noCache({ error: 'Not authenticated' }, 401);
+      return noCache({ error: 'Nicht angemeldet.' }, 401);
     }
 
     // Use admin client to delete user
     const adminClient = await getSupabaseAdmin();
 
     if (!adminClient) {
-      return noCache({ error: 'Server configuration error' }, 500);
+      return noCache({ error: 'Serverkonfiguration unvollständig.' }, 500);
     }
 
     // Delete user using admin client
@@ -36,11 +36,11 @@ export async function DELETE(request: NextRequest) {
     return noCache({
       data: {
         success: true,
-        message: 'Profile deleted successfully',
+        message: 'Profil wurde gelöscht.',
       },
     });
   } catch (error) {
     console.error('Failed to delete profile:', error);
-    return noCache({ error: 'Failed to delete profile' }, 500);
+    return noCache({ error: 'Profil konnte nicht gelöscht werden.' }, 500);
   }
 }

@@ -1,5 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLocaleById, updateLocale, deleteLocale } from '@/lib/repositories/localeRepository';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const LOCALE_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+
+const LOCALE_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * GET /ycode/api/locales/[id]
@@ -10,8 +26,11 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, LOCALE_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { id } = await params;
-    const locale = await getLocaleById(id);
+    const locale = await getLocaleById(id, false, roleCheck.context.project.id);
     
     if (!locale) {
       return NextResponse.json({ error: 'Locale not found' }, { status: 404 });
@@ -36,6 +55,9 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, LOCALE_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { id } = await params;
     const body = await request.json();
     const { code, label, is_default } = body;
@@ -45,7 +67,7 @@ export async function PUT(
     if (label !== undefined) updates.label = label;
     if (is_default !== undefined) updates.is_default = is_default;
     
-    const { locale, locales } = await updateLocale(id, updates);
+    const { locale, locales } = await updateLocale(id, updates, roleCheck.context.project.id);
     
     return NextResponse.json({ data: { locale, locales } });
   } catch (error) {
@@ -66,8 +88,11 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, LOCALE_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const { id } = await params;
-    await deleteLocale(id);
+    await deleteLocale(id, roleCheck.context.project.id);
     
     return NextResponse.json({ message: 'Locale deleted successfully' });
   } catch (error) {

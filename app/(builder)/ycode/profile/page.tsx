@@ -121,13 +121,13 @@ export default function ProfilePage() {
 
     // Validate file type
     if (!file.type.startsWith('image/')) {
-      setPhotoError('Please select an image file');
+      setPhotoError('Bitte wählen Sie eine Bilddatei aus.');
       return;
     }
 
     // Validate file size (max 5MB)
     if (file.size > 5 * 1024 * 1024) {
-      setPhotoError('Image must be less than 5MB');
+      setPhotoError('Das Bild darf maximal 5 MB groß sein.');
       return;
     }
 
@@ -146,14 +146,14 @@ export default function ProfilePage() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to upload photo');
+        throw new Error(result.error || 'Profilfoto konnte nicht hochgeladen werden.');
       }
 
       // Refresh user data to get new avatar
       await checkSession();
     } catch (error) {
       console.error('Failed to upload photo:', error);
-      setPhotoError(error instanceof Error ? error.message : 'Failed to upload photo');
+      setPhotoError(error instanceof Error ? error.message : 'Profilfoto konnte nicht hochgeladen werden.');
     } finally {
       setIsUploadingPhoto(false);
       // Reset file input
@@ -166,7 +166,7 @@ export default function ProfilePage() {
   // Handle name update
   const handleSaveName = async () => {
     if (!nameInput.trim()) {
-      setNameError('Name is required');
+      setNameError('Name ist erforderlich.');
       return;
     }
 
@@ -183,7 +183,7 @@ export default function ProfilePage() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to update name');
+        throw new Error(result.error || 'Name konnte nicht gespeichert werden.');
       }
 
       // Refresh user data
@@ -191,7 +191,7 @@ export default function ProfilePage() {
       setIsNameDialogOpen(false);
     } catch (error) {
       console.error('Failed to update name:', error);
-      setNameError(error instanceof Error ? error.message : 'Failed to update name');
+      setNameError(error instanceof Error ? error.message : 'Name konnte nicht gespeichert werden.');
     } finally {
       setIsSavingName(false);
     }
@@ -200,12 +200,12 @@ export default function ProfilePage() {
   // Handle email update
   const handleSaveEmail = async () => {
     if (!emailInput.trim()) {
-      setEmailError('Email is required');
+      setEmailError('E-Mail-Adresse ist erforderlich.');
       return;
     }
 
     if (!emailPasswordInput) {
-      setEmailError('Password is required to change email');
+      setEmailError('Zum Ändern der E-Mail-Adresse ist das aktuelle Passwort erforderlich.');
       return;
     }
 
@@ -225,7 +225,7 @@ export default function ProfilePage() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to update email');
+        throw new Error(result.error || 'E-Mail-Adresse konnte nicht gespeichert werden.');
       }
 
       // Refresh user data
@@ -233,7 +233,7 @@ export default function ProfilePage() {
       setIsEmailDialogOpen(false);
     } catch (error) {
       console.error('Failed to update email:', error);
-      setEmailError(error instanceof Error ? error.message : 'Failed to update email');
+      setEmailError(error instanceof Error ? error.message : 'E-Mail-Adresse konnte nicht gespeichert werden.');
     } finally {
       setIsSavingEmail(false);
     }
@@ -242,22 +242,22 @@ export default function ProfilePage() {
   // Handle password update
   const handleSavePassword = async () => {
     if (!currentPasswordInput) {
-      setPasswordError('Current password is required');
+      setPasswordError('Aktuelles Passwort ist erforderlich.');
       return;
     }
 
     if (!newPasswordInput) {
-      setPasswordError('New password is required');
+      setPasswordError('Neues Passwort ist erforderlich.');
       return;
     }
 
     if (newPasswordInput.length < 6) {
-      setPasswordError('New password must be at least 6 characters');
+      setPasswordError('Das neue Passwort muss mindestens 6 Zeichen lang sein.');
       return;
     }
 
     if (newPasswordInput !== confirmPasswordInput) {
-      setPasswordError('Passwords do not match');
+      setPasswordError('Die Passwörter stimmen nicht überein.');
       return;
     }
 
@@ -277,7 +277,7 @@ export default function ProfilePage() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to update password');
+        throw new Error(result.error || 'Passwort konnte nicht gespeichert werden.');
       }
 
       // Clear inputs and close dialog with success
@@ -291,7 +291,7 @@ export default function ProfilePage() {
       await checkSession();
     } catch (error) {
       console.error('Failed to update password:', error);
-      setPasswordError(error instanceof Error ? error.message : 'Failed to update password');
+      setPasswordError(error instanceof Error ? error.message : 'Passwort konnte nicht gespeichert werden.');
     } finally {
       setIsSavingPassword(false);
     }
@@ -300,7 +300,7 @@ export default function ProfilePage() {
   // Handle profile deletion
   const handleDeleteProfile = async () => {
     if (deleteConfirmInput !== 'DELETE') {
-      setDeleteError('Please type DELETE to confirm');
+      setDeleteError('Bitte geben Sie DELETE zur Bestätigung ein.');
       return;
     }
 
@@ -315,7 +315,7 @@ export default function ProfilePage() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to delete profile');
+        throw new Error(result.error || 'Profil konnte nicht gelöscht werden.');
       }
 
       // Sign out and redirect
@@ -324,7 +324,7 @@ export default function ProfilePage() {
       window.location.href = '/';
     } catch (error) {
       console.error('Failed to delete profile:', error);
-      setDeleteError(error instanceof Error ? error.message : 'Failed to delete profile');
+      setDeleteError(error instanceof Error ? error.message : 'Profil konnte nicht gelöscht werden.');
     } finally {
       setIsDeletingProfile(false);
     }
@@ -335,28 +335,28 @@ export default function ProfilePage() {
       <div className="max-w-3xl mx-auto">
 
         <header className="pt-8 pb-3">
-          <span className="text-base font-medium">My profile</span>
+          <span className="text-base font-medium">Mein Profil</span>
         </header>
 
         {/* Profile Details Section */}
         <div className="grid grid-cols-3 gap-10 bg-secondary/20 p-8 rounded-lg">
 
           <div>
-            <FieldLegend>Profile details</FieldLegend>
-            <FieldDescription>Manage your personal information and account settings.</FieldDescription>
+            <FieldLegend>Profildaten</FieldLegend>
+            <FieldDescription>Verwalten Sie Ihre persönlichen Informationen und Kontoeinstellungen.</FieldDescription>
           </div>
 
           <div className="col-span-2 space-y-0">
 
             {/* Profile Photo */}
             <div className="flex items-center justify-between py-4">
-              <div className="text-sm text-muted-foreground">Profile photo</div>
+              <div className="text-sm text-muted-foreground">Profilfoto</div>
               <div className="flex items-center gap-4">
                 <div className="relative">
                   {avatarUrl ? (
                     <Image
                       src={avatarUrl}
-                      alt="Profile"
+                      alt="Profilfoto"
                       width={40}
                       height={40}
                       className="size-10 rounded-full object-cover"
@@ -387,7 +387,7 @@ export default function ProfilePage() {
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isUploadingPhoto}
                   >
-                    Upload
+                    Hochladen
                   </Button>
                   {photoError && (
                     <p className="text-xs text-destructive mt-1">{photoError}</p>
@@ -400,15 +400,15 @@ export default function ProfilePage() {
 
             {/* Full Name */}
             <div className="flex items-center justify-between py-4">
-              <div className="text-sm text-muted-foreground">Full name</div>
+              <div className="text-sm text-muted-foreground">Vollständiger Name</div>
               <div className="flex items-center gap-4">
-                <span className="text-sm">{displayName || 'Not set'}</span>
+                <span className="text-sm">{displayName || 'Nicht gesetzt'}</span>
                 <Button
                   variant="secondary"
                   size="sm"
                   onClick={() => setIsNameDialogOpen(true)}
                 >
-                  Edit
+                  Bearbeiten
                 </Button>
               </div>
             </div>
@@ -417,7 +417,7 @@ export default function ProfilePage() {
 
             {/* Email Address */}
             <div className="flex items-center justify-between py-4">
-              <div className="text-sm text-muted-foreground">Email address</div>
+              <div className="text-sm text-muted-foreground">E-Mail-Adresse</div>
               <div className="flex items-center gap-4">
                 <span className="text-sm">{email}</span>
                 <Button
@@ -425,7 +425,7 @@ export default function ProfilePage() {
                   size="sm"
                   onClick={() => setIsEmailDialogOpen(true)}
                 >
-                  Edit
+                  Bearbeiten
                 </Button>
               </div>
             </div>
@@ -434,7 +434,7 @@ export default function ProfilePage() {
 
             {/* Password */}
             <div className="flex items-center justify-between py-4">
-              <div className="text-sm text-muted-foreground">Password</div>
+              <div className="text-sm text-muted-foreground">Passwort</div>
               <div className="flex items-center gap-4">
                 <span className="text-sm">••••••••••••••••••••</span>
                 <Button
@@ -442,7 +442,7 @@ export default function ProfilePage() {
                   size="sm"
                   onClick={() => setIsPasswordDialogOpen(true)}
                 >
-                  Change password
+                  Passwort ändern
                 </Button>
               </div>
             </div>
@@ -455,8 +455,8 @@ export default function ProfilePage() {
         <div className="bg-secondary/20 p-8 rounded-lg mt-6">
           <div className="flex items-center justify-center gap-10">
             <div className="flex-1">
-              <FieldLegend>Delete profile</FieldLegend>
-              <FieldDescription>Deleting your profile removes your email, name and other profile related data from database. You will no longer be able to log in into this profile after deleting it.</FieldDescription>
+              <FieldLegend>Profil löschen</FieldLegend>
+              <FieldDescription>Beim Löschen Ihres Profils werden E-Mail-Adresse, Name und weitere Profildaten dauerhaft entfernt. Danach können Sie sich mit diesem Profil nicht mehr einloggen.</FieldDescription>
             </div>
             <Button
               variant="destructive"
@@ -464,7 +464,7 @@ export default function ProfilePage() {
               className="shrink-0"
               onClick={() => setIsDeleteDialogOpen(true)}
             >
-              Delete profile
+              Profil löschen
             </Button>
           </div>
         </div>
@@ -475,11 +475,11 @@ export default function ProfilePage() {
       <Dialog open={isNameDialogOpen} onOpenChange={setIsNameDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit name</DialogTitle>
+            <DialogTitle>Namen bearbeiten</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <Input
-              placeholder="Full name"
+              placeholder="Vollständiger Name"
               value={nameInput}
               onChange={(e) => setNameInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSaveName()}
@@ -490,10 +490,10 @@ export default function ProfilePage() {
           </div>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="secondary">Close</Button>
+              <Button variant="secondary">Schließen</Button>
             </DialogClose>
             <Button onClick={handleSaveName} disabled={isSavingName}>
-              {isSavingName ? <Spinner className="size-4" /> : 'Save changes'}
+              {isSavingName ? <Spinner className="size-4" /> : 'Änderungen speichern'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -503,18 +503,18 @@ export default function ProfilePage() {
       <Dialog open={isEmailDialogOpen} onOpenChange={setIsEmailDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Change email</DialogTitle>
+            <DialogTitle>E-Mail-Adresse ändern</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <Input
               type="email"
-              placeholder="New email address"
+              placeholder="Neue E-Mail-Adresse"
               value={emailInput}
               onChange={(e) => setEmailInput(e.target.value)}
             />
             <Input
               type="password"
-              placeholder="Current password"
+              placeholder="Aktuelles Passwort"
               value={emailPasswordInput}
               onChange={(e) => setEmailPasswordInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSaveEmail()}
@@ -525,10 +525,10 @@ export default function ProfilePage() {
           </div>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="secondary">Close</Button>
+              <Button variant="secondary">Schließen</Button>
             </DialogClose>
             <Button onClick={handleSaveEmail} disabled={isSavingEmail}>
-              {isSavingEmail ? <Spinner className="size-4" /> : 'Save changes'}
+              {isSavingEmail ? <Spinner className="size-4" /> : 'Änderungen speichern'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -538,24 +538,24 @@ export default function ProfilePage() {
       <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Change password</DialogTitle>
+            <DialogTitle>Passwort ändern</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <Input
               type="password"
-              placeholder="Current password"
+              placeholder="Aktuelles Passwort"
               value={currentPasswordInput}
               onChange={(e) => setCurrentPasswordInput(e.target.value)}
             />
             <Input
               type="password"
-              placeholder="New password"
+              placeholder="Neues Passwort"
               value={newPasswordInput}
               onChange={(e) => setNewPasswordInput(e.target.value)}
             />
             <Input
               type="password"
-              placeholder="Confirm new password"
+              placeholder="Neues Passwort bestätigen"
               value={confirmPasswordInput}
               onChange={(e) => setConfirmPasswordInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSavePassword()}
@@ -566,10 +566,10 @@ export default function ProfilePage() {
           </div>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="secondary">Close</Button>
+              <Button variant="secondary">Schließen</Button>
             </DialogClose>
             <Button onClick={handleSavePassword} disabled={isSavingPassword}>
-              {isSavingPassword ? <Spinner className="size-4" /> : 'Save changes'}
+              {isSavingPassword ? <Spinner className="size-4" /> : 'Änderungen speichern'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -579,14 +579,14 @@ export default function ProfilePage() {
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete profile</DialogTitle>
+            <DialogTitle>Profil löschen</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <p className="text-sm text-muted-foreground">
-              This action cannot be undone. All your data will be permanently deleted.
+              Diese Aktion kann nicht rückgängig gemacht werden. Alle Profildaten werden dauerhaft gelöscht.
             </p>
             <p className="text-sm">
-              Type <strong>DELETE</strong> to confirm:
+              Geben Sie <strong>DELETE</strong> zur Bestätigung ein:
             </p>
             <Input
               placeholder="DELETE"
@@ -600,14 +600,14 @@ export default function ProfilePage() {
           </div>
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="secondary">Close</Button>
+              <Button variant="secondary">Schließen</Button>
             </DialogClose>
             <Button
               variant="destructive"
               onClick={handleDeleteProfile}
               disabled={isDeletingProfile || deleteConfirmInput !== 'DELETE'}
             >
-              {isDeletingProfile ? <Spinner className="size-4" /> : 'Delete profile'}
+              {isDeletingProfile ? <Spinner className="size-4" /> : 'Profil löschen'}
             </Button>
           </DialogFooter>
         </DialogContent>

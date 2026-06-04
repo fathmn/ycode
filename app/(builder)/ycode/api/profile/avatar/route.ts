@@ -17,30 +17,30 @@ export async function POST(request: NextRequest) {
     const file = formData.get('file') as File;
 
     if (!file) {
-      return noCache({ error: 'No file provided' }, 400);
+      return noCache({ error: 'Keine Datei übermittelt.' }, 400);
     }
 
     // Validate file type
     if (!file.type.startsWith('image/')) {
-      return noCache({ error: 'Only image files are allowed' }, 400);
+      return noCache({ error: 'Nur Bilddateien sind erlaubt.' }, 400);
     }
 
     // Validate file size (5MB max)
     const maxSize = 5 * 1024 * 1024;
     if (file.size > maxSize) {
-      return noCache({ error: 'File size must be less than 5MB' }, 400);
+      return noCache({ error: 'Die Datei darf maximal 5 MB groß sein.' }, 400);
     }
 
     const auth = await getAuthUser();
     if (!auth) {
-      return noCache({ error: 'Not authenticated' }, 401);
+      return noCache({ error: 'Nicht angemeldet.' }, 401);
     }
 
     // Use admin client for storage operations
     const adminClient = await getSupabaseAdmin();
 
     if (!adminClient) {
-      return noCache({ error: 'Server configuration error' }, 500);
+      return noCache({ error: 'Serverkonfiguration unvollständig.' }, 500);
     }
 
     // Convert image to WebP and resize for avatar
@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
 
     if (uploadError) {
       console.error('Failed to upload avatar:', uploadError);
-      return noCache({ error: `Failed to upload avatar: ${uploadError.message}` }, 500);
+      return noCache({ error: `Profilfoto konnte nicht hochgeladen werden: ${uploadError.message}` }, 500);
     }
 
     // Get public URL
@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
 
     if (updateError) {
       console.error('Failed to update user metadata:', updateError);
-      return noCache({ error: 'Failed to update profile' }, 500);
+      return noCache({ error: 'Profil konnte nicht gespeichert werden.' }, 500);
     }
 
     return noCache({
@@ -112,6 +112,6 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Failed to upload avatar:', error);
     const message = error instanceof Error ? error.message : 'Unknown error';
-    return noCache({ error: `Failed to upload avatar: ${message}` }, 500);
+    return noCache({ error: `Profilfoto konnte nicht hochgeladen werden: ${message}` }, 500);
   }
 }

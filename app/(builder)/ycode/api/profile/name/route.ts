@@ -13,12 +13,12 @@ export async function PUT(request: NextRequest) {
     const { name } = body;
 
     if (!name || typeof name !== 'string') {
-      return noCache({ error: 'Name is required' }, 400);
+      return noCache({ error: 'Name ist erforderlich.' }, 400);
     }
 
     const auth = await getAuthUser();
     if (!auth) {
-      return noCache({ error: 'Not authenticated' }, 401);
+      return noCache({ error: 'Nicht angemeldet.' }, 401);
     }
 
     // Update user metadata
@@ -40,6 +40,6 @@ export async function PUT(request: NextRequest) {
     });
   } catch (error) {
     console.error('Failed to update name:', error);
-    return noCache({ error: 'Failed to update name' }, 500);
+    return noCache({ error: 'Name konnte nicht gespeichert werden.' }, 500);
   }
 }

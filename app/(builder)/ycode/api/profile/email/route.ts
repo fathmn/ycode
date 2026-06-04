@@ -13,16 +13,16 @@ export async function PUT(request: NextRequest) {
     const { email, password } = body;
 
     if (!email || typeof email !== 'string') {
-      return noCache({ error: 'Email is required' }, 400);
+      return noCache({ error: 'E-Mail-Adresse ist erforderlich.' }, 400);
     }
 
     if (!password || typeof password !== 'string') {
-      return noCache({ error: 'Password is required to change email' }, 400);
+      return noCache({ error: 'Zum Ändern der E-Mail-Adresse ist das aktuelle Passwort erforderlich.' }, 400);
     }
 
     const auth = await getAuthUser();
     if (!auth) {
-      return noCache({ error: 'Not authenticated' }, 401);
+      return noCache({ error: 'Nicht angemeldet.' }, 401);
     }
 
     // Verify current password by re-authenticating
@@ -32,7 +32,7 @@ export async function PUT(request: NextRequest) {
     });
 
     if (signInError) {
-      return noCache({ error: 'Incorrect password' }, 400);
+      return noCache({ error: 'Das aktuelle Passwort ist falsch.' }, 400);
     }
 
     // Update email
@@ -47,11 +47,11 @@ export async function PUT(request: NextRequest) {
     return noCache({
       data: {
         user: data.user,
-        message: 'Email update initiated. Check your new email for confirmation.',
+        message: 'E-Mail-Änderung gestartet. Bitte bestätigen Sie die neue E-Mail-Adresse.',
       },
     });
   } catch (error) {
     console.error('Failed to update email:', error);
-    return noCache({ error: 'Failed to update email' }, 500);
+    return noCache({ error: 'E-Mail-Adresse konnte nicht gespeichert werden.' }, 500);
   }
 }

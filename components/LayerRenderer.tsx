@@ -994,7 +994,7 @@ const LayerItem: React.FC<{
 
       // Fallback if no locale data available
       if (!displayLocale) {
-        return 'English';
+        return localeSelectorFormat === 'code' ? 'DE' : 'Deutsch';
       }
 
       // Use format from parent localeSelector layer (passed as prop)
