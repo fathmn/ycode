@@ -275,7 +275,7 @@ function getStudioAppHost(): string {
 }
 
 function normalizeHost(host: string | null): string {
-  return (host || '').split(':')[0].toLowerCase();
+  return (host || '').split(',')[0]?.trim().split(':')[0].toLowerCase();
 }
 
 function isStudioHost(request: NextRequest): boolean {
@@ -309,6 +309,26 @@ function isReservedStudioPath(pathname: string): boolean {
 
 function isStudioAppRequest(request: NextRequest, pathname: string): boolean {
   return isStudioHost(request) && !isReservedStudioPath(pathname);
+}
+
+function projectLookupFromPublicRequest(request: NextRequest): string | null {
+  const helperLookup = projectLookupFromRequestHosts(
+    request.headers.get('host'),
+    request.headers.get('x-forwarded-host')
+  );
+  if (helperLookup) return helperLookup;
+
+  if (isStudioHost(request)) return null;
+
+  const host = normalizeHost(
+    request.headers.get('host')
+      || request.headers.get('x-forwarded-host')
+  );
+  if (!host || host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]') {
+    return null;
+  }
+
+  return host;
 }
 
 function studioRobotsResponse(): Response {
@@ -590,10 +610,7 @@ async function resolvePublishedProjectForProxy(request: NextRequest): Promise<{
   projectId: string | null;
   unresolvedHost: boolean;
 }> {
-  const hostLookup = projectLookupFromRequestHosts(
-    request.headers.get('host'),
-    request.headers.get('x-forwarded-host')
-  );
+  const hostLookup = projectLookupFromPublicRequest(request);
 
   if (!hostLookup) {
     return { projectId: null, unresolvedHost: false };
