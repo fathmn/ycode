@@ -66,6 +66,16 @@ export function formatClampLabel(value: string): string | null {
   return `Responsive: ${parts[0]} bis ${parts[2]}`;
 }
 
+export function formatClampControlValue(value: string): string | null {
+  const match = value.match(/^clamp\((.+)\)$/i);
+  if (!match) return null;
+
+  const parts = splitTopLevelComma(match[1]);
+  if (parts.length !== 3) return null;
+
+  return `${parts[0]} - ${parts[2]}`;
+}
+
 export function formatIntrinsicSizeLabel(value: string): string | null {
   const labels: Record<string, string> = {
     'max-content': 'Inhalt: maximale Breite',
@@ -74,6 +84,15 @@ export function formatIntrinsicSizeLabel(value: string): string | null {
   };
 
   return labels[value] || null;
+}
+
+export function formatDesignControlValue(value: string | null | undefined): string | null {
+  if (!value) return null;
+
+  return formatClampControlValue(value)
+    || formatCssVariableLabel(value)
+    || formatIntrinsicSizeLabel(value)
+    || null;
 }
 
 export function formatDesignValueHint(value: string | null | undefined): string | null {

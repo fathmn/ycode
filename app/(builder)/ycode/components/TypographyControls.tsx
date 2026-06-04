@@ -20,7 +20,7 @@ import { removeSpaces } from '@/lib/utils';
 import { getFontAvailableWeights, FONT_WEIGHTS } from '@/lib/font-utils';
 import { buildBgImgVarName } from '@/lib/tailwind-class-mapper';
 import { isTextContentLayer } from '@/lib/layer-utils';
-import { formatDesignValueHint } from '@/lib/design-value-labels';
+import { formatDesignControlValue, formatDesignValueHint } from '@/lib/design-value-labels';
 import type { Collection, CollectionField, Layer } from '@/types';
 import type { FieldGroup } from '@/lib/collection-field-utils';
 import ColorPropertyField from './ColorPropertyField';
@@ -68,6 +68,7 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
   const fontSizeHint = formatDesignValueHint(fontSize);
   const letterSpacingHint = formatDesignValueHint(letterSpacing);
   const lineHeightHint = formatDesignValueHint(lineHeight);
+  const fontSizeDisplayValue = formatDesignControlValue(fontSize);
 
   // Get available weights for the selected font
   const selectedFont = getFontByFamily(fontFamily);
@@ -106,6 +107,7 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
   const [decorationThicknessInput, setDecorationThicknessInput] = useControlledInput(textDecorationThickness, extractMeasurementValue);
   const [underlineOffsetInput, setUnderlineOffsetInput] = useControlledInput(underlineOffset, extractMeasurementValue);
   const [lineClampInput, setLineClampInput] = useControlledInput(lineClamp);
+  const [isFontSizeFocused, setIsFontSizeFocused] = useState(false);
 
   // Map numeric font weights to named values
   const fontWeightMap: Record<string, string> = {
@@ -411,7 +413,12 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
                 <InputGroup>
                   <InputGroupInput
                     title={fontSizeHint || fontSize || undefined}
-                    value={fontSizeInput}
+                    value={!isFontSizeFocused && fontSizeDisplayValue ? fontSizeDisplayValue : fontSizeInput}
+                    onFocus={() => {
+                      setIsFontSizeFocused(true);
+                      setFontSizeInput(extractMeasurementValue(fontSize));
+                    }}
+                    onBlur={() => setIsFontSizeFocused(false)}
                     onChange={(e) => handleFontSizeChange(e.target.value)}
                     stepper
                     min="0"
