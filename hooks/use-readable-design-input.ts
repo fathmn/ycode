@@ -14,16 +14,17 @@ export function useReadableDesignInput({
   setInputValue,
   transformRawValue,
 }: ReadableDesignInputOptions) {
-  const [isFocused, setIsFocused] = useState(false);
+  const [focusedRawValue, setFocusedRawValue] = useState<string | null>(null);
   const displayValue = formatDesignControlValue(rawValue);
+  const isFocused = focusedRawValue === rawValue;
 
   return {
     value: !isFocused && displayValue ? displayValue : inputValue,
     isFocused,
     onFocus: () => {
-      setIsFocused(true);
+      setFocusedRawValue(rawValue);
       setInputValue?.(transformRawValue ? transformRawValue(rawValue) : rawValue);
     },
-    onBlur: () => setIsFocused(false),
+    onBlur: () => setFocusedRawValue(null),
   };
 }

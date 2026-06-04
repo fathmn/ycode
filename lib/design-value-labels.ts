@@ -77,13 +77,23 @@ export function formatClampControlValue(value: string): string | null {
 }
 
 export function formatIntrinsicSizeLabel(value: string): string | null {
+  const normalized = value.match(/^\[(.+)\]$/)?.[1] || value;
   const labels: Record<string, string> = {
     'max-content': 'Inhalt: maximale Breite',
     'min-content': 'Inhalt: minimale Breite',
     'fit-content': 'Inhalt: passend',
+    fit: 'Inhalt: passend',
+    min: 'Inhalt: minimale Breite',
+    max: 'Inhalt: maximale Breite',
+    full: 'Volle Breite',
+    screen: 'Viewport',
+    '100%': 'Fill',
+    '100vw': 'Viewport-Breite',
+    '100vh': 'Viewport-Höhe',
+    '100svh': 'Viewport-Höhe',
   };
 
-  return labels[value] || null;
+  return labels[normalized] || null;
 }
 
 export function formatDesignControlValue(value: string | null | undefined): string | null {

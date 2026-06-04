@@ -1098,7 +1098,9 @@ export async function proxy(request: NextRequest) {
     await applyPreviewNonceCookie(request, response, `${pathname}${request.nextUrl.search}`);
   }
 
-  // Cache-Control for public pages is configured centrally via next.config.ts headers().
+  if (isPublicPage && request.method === 'GET') {
+    response.headers.set('Cache-Control', 'public, s-maxage=31536000, stale-while-revalidate=31536000');
+  }
 
   return response;
 }

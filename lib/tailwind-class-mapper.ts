@@ -647,6 +647,9 @@ export function propertyToClass(
       case 'fontFamily':
         // Built-in fonts: sans, serif, mono → font-sans, font-serif, font-mono
         if (['sans', 'serif', 'mono'].includes(value)) return `font-${value}`;
+        if (value.startsWith('var(')) {
+          return `font-[family-name:${value.replace(/\s+/g, '_')}]`;
+        }
         // Google/custom fonts: replace spaces with underscores for Tailwind arbitrary values
         return `font-[${value.replace(/\s+/g, '_')}]`;
       case 'lineHeight':
@@ -1360,8 +1363,11 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
     if (cls.startsWith('font-[') && !cls.match(/^font-\[\d/)) {
       const value = extractArbitraryValue(cls);
       if (value) {
+        const normalizedValue = value.startsWith('family-name:')
+          ? value.slice('family-name:'.length)
+          : value;
         // Convert underscores back to spaces for font family names
-        design.typography!.fontFamily = value.replace(/_/g, ' ');
+        design.typography!.fontFamily = normalizedValue.replace(/_/g, ' ');
       }
     }
     // Font Family (named values)
@@ -2087,8 +2093,9 @@ function shouldIncludeClassForProperty(className: string, property: string, patt
     const value = extractArbitraryValue(baseClass);
     if (value) {
       const isNumeric = /^\d/.test(value);
+      const isFamilyName = value.startsWith('family-name:') || value.startsWith('var(');
       if (property === 'fontWeight' && !isNumeric) return false;
-      if (property === 'fontFamily' && isNumeric) return false;
+      if (property === 'fontFamily' && isNumeric && !isFamilyName) return false;
     }
   }
 

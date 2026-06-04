@@ -159,9 +159,9 @@
   [data-studio-import-global] h4 {
     overflow-wrap: normal;
     word-break: keep-all;
-    hyphens: auto;
-    -webkit-hyphens: auto;
-    hyphenate-limit-chars: 7 4 3;
+    hyphens: none;
+    -webkit-hyphens: none;
+    text-wrap: balance;
   }
 
   [data-studio-import-id] p,

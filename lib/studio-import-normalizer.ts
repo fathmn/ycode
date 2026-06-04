@@ -206,8 +206,9 @@ function repairLegacyInvalidImportClasses(layer: Layer): { classes: string; chan
     const isInvalidTextFunction = /^text-(?:clamp|calc|var|min|max|fit)-?\(/.test(cls) || /^text-var\(/.test(cls);
     const isInvalidIntrinsicWidth = /^(?:w|min-w|max-w|h|min-h|max-h)-(?:min-content|max-content|fit-content)$/.test(cls);
     const isInvalidGapFunction = /^gap-(?:clamp|calc|var)\(/.test(cls);
+    const isInvalidFontFamilyVariable = /^font-\[var\(--font/.test(cls);
 
-    if (isInvalidTextFunction || isInvalidIntrinsicWidth || isInvalidGapFunction) {
+    if (isInvalidTextFunction || isInvalidIntrinsicWidth || isInvalidGapFunction || isInvalidFontFamilyVariable) {
       changed = true;
       return false;
     }
@@ -235,6 +236,7 @@ function repairLegacyInvalidImportClasses(layer: Layer): { classes: string; chan
   };
 
   addDesignClass('typography', 'fontSize', layer.design?.typography?.fontSize);
+  addDesignClass('typography', 'fontFamily', layer.design?.typography?.fontFamily);
   addDesignClass('typography', 'color', layer.design?.typography?.color);
   addDesignClass('layout', 'gap', layer.design?.layout?.gap);
   addDesignClass('sizing', 'width', layer.design?.sizing?.width);

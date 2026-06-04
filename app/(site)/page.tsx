@@ -10,10 +10,12 @@ import { resolvePublishedProjectFromHeaders } from '@/lib/published-project';
 import { getSiteBaseUrl } from '@/lib/url-utils';
 import type { Metadata } from 'next';
 
-// Public pages resolve the Studio project from the request host. Keep the route
-// dynamic and cache fetched project data below with explicit revalidation tags.
+// Public pages resolve the Studio project from the request host and cache the
+// fetched project data below with explicit revalidation tags. The route must
+// stay dynamic because host-based project resolution uses request headers; the
+// public CDN cache policy is applied in proxy.ts.
 export const dynamic = 'force-dynamic';
-export const revalidate = 0;
+export const revalidate = false;
 
 /**
  * Fetch homepage data from database
