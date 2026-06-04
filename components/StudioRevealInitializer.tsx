@@ -1,6 +1,3 @@
-'use client';
-
-import { useEffect } from 'react';
 import type { Breakpoint } from '@/types';
 
 export interface StudioRevealTarget {
@@ -12,102 +9,100 @@ export interface StudioRevealTarget {
   breakpoints?: Breakpoint[];
 }
 
-function getCurrentBreakpoint(): Breakpoint {
-  if (typeof window === 'undefined') return 'desktop';
-  if (window.innerWidth < 768) return 'mobile';
-  if (window.innerWidth < 1024) return 'tablet';
-  return 'desktop';
-}
-
-function shouldRunOnCurrentBreakpoint(target: StudioRevealTarget): boolean {
-  if (!target.breakpoints || target.breakpoints.length === 0) return true;
-  return target.breakpoints.includes(getCurrentBreakpoint());
-}
-
-function toCssDistance(value: StudioRevealTarget['x'], fallback: string): string {
-  if (typeof value === 'number' && Number.isFinite(value)) return `${value}px`;
-  if (typeof value === 'string' && value.trim()) return value.trim();
-  return fallback;
-}
-
-function revealElement(element: HTMLElement, target: StudioRevealTarget) {
-  element.removeAttribute('data-gsap-hidden');
-  element.style.visibility = 'visible';
-
-  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-  if (reduce || typeof element.animate !== 'function') {
-    element.style.opacity = '1';
-    element.style.transform = '';
-    return;
-  }
-
-  const duration = Math.max(0, target.durationMs ?? 700);
-  const delay = Math.max(0, target.delayMs ?? 0);
-  const hasX = target.x !== undefined && target.x !== null && `${target.x}`.trim() !== '';
-  const x = toCssDistance(target.x, '0px');
-  const y = toCssDistance(target.y, hasX ? '0px' : '24px');
-  const initialTransform = `translate(${x}, ${y})`;
-  const animation = element.animate(
-    [
-      { opacity: 0, transform: initialTransform, visibility: 'visible' },
-      { opacity: 1, transform: 'translate(0, 0)', visibility: 'visible' },
-    ],
-    {
-      duration,
-      delay,
-      easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
-      fill: 'both',
-    },
-  );
-
-  animation.finished.then(() => {
-    element.style.opacity = '1';
-    element.style.transform = '';
-    element.style.visibility = 'visible';
-  }).catch(() => undefined);
+function safeScriptJson(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c');
 }
 
 export default function StudioRevealInitializer({ targets }: { targets: StudioRevealTarget[] }) {
-  useEffect(() => {
-    if (targets.length === 0) return undefined;
+  if (targets.length === 0) return null;
 
-    const pending = targets
-      .filter(shouldRunOnCurrentBreakpoint)
-      .map((target) => {
-        const element = document.querySelector<HTMLElement>(`[data-layer-id="${CSS.escape(target.layerId)}"]`);
-        return element ? { target, element } : null;
-      })
-      .filter((entry): entry is { target: StudioRevealTarget; element: HTMLElement } => Boolean(entry));
+  return (
+    <script
+      id="studio-reveal-initializer"
+      dangerouslySetInnerHTML={{
+        __html: `
+(() => {
+  const targets = ${safeScriptJson(targets)};
+  const currentBreakpoint = () => {
+    if (window.innerWidth < 768) return 'mobile';
+    if (window.innerWidth < 1024) return 'tablet';
+    return 'desktop';
+  };
+  const shouldRun = (target) => (
+    !Array.isArray(target.breakpoints)
+    || target.breakpoints.length === 0
+    || target.breakpoints.includes(currentBreakpoint())
+  );
+  const cssDistance = (value, fallback) => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value + 'px';
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    return fallback;
+  };
+  const setVisible = (element) => {
+    element.removeAttribute('data-gsap-hidden');
+    element.style.opacity = '1';
+    element.style.visibility = 'visible';
+    element.style.transform = 'translate(0, 0)';
+  };
+  const reveal = (element, target) => {
+    const hasX = target.x !== undefined && target.x !== null && String(target.x).trim() !== '';
+    const x = cssDistance(target.x, '0px');
+    const y = cssDistance(target.y, hasX ? '0px' : '24px');
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
-    if (pending.length === 0) return undefined;
-
-    if (typeof IntersectionObserver === 'undefined') {
-      pending.forEach(({ element, target }) => revealElement(element, target));
-      return undefined;
+    element.removeAttribute('data-gsap-hidden');
+    if (reduce || typeof element.animate !== 'function') {
+      setVisible(element);
+      return;
     }
 
-    const byElement = new Map<HTMLElement, StudioRevealTarget>();
-    pending.forEach(({ element, target }) => byElement.set(element, target));
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (!entry.isIntersecting) return;
-          const element = entry.target as HTMLElement;
-          const target = byElement.get(element);
-          if (!target) return;
-          observer.unobserve(element);
-          byElement.delete(element);
-          revealElement(element, target);
-        });
+    const animation = element.animate(
+      [
+        { opacity: 0, transform: 'translate(' + x + ', ' + y + ')', visibility: 'visible' },
+        { opacity: 1, transform: 'translate(0, 0)', visibility: 'visible' },
+      ],
+      {
+        duration: Math.max(0, Number(target.durationMs) || 700),
+        delay: Math.max(0, Number(target.delayMs) || 0),
+        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+        fill: 'both',
       },
-      { rootMargin: '0px 0px -15% 0px', threshold: 0.05 },
     );
+    animation.finished.then(() => setVisible(element)).catch(() => setVisible(element));
+  };
 
-    byElement.forEach((_, element) => observer.observe(element));
+  const pending = targets
+    .filter(shouldRun)
+    .map((target) => {
+      const element = document.querySelector('[data-layer-id="' + CSS.escape(target.layerId) + '"]');
+      return element instanceof HTMLElement ? { target, element } : null;
+    })
+    .filter(Boolean);
 
-    return () => observer.disconnect();
-  }, [targets]);
+  if (pending.length === 0) return;
 
-  return null;
+  if (typeof IntersectionObserver === 'undefined') {
+    pending.forEach(({ element, target }) => reveal(element, target));
+    return;
+  }
+
+  const byElement = new Map(pending.map(({ element, target }) => [element, target]));
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const element = entry.target;
+      const target = byElement.get(element);
+      if (!target) return;
+      observer.unobserve(element);
+      byElement.delete(element);
+      reveal(element, target);
+    });
+  }, { rootMargin: '0px 0px -15% 0px', threshold: 0.05 });
+
+  byElement.forEach((_, element) => observer.observe(element));
+})();
+        `,
+      }}
+    />
+  );
 }
