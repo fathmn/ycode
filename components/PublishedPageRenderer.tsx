@@ -669,7 +669,7 @@ export default async function PublishedPageRenderer({
   const hasLayers = childLayers.length > 0;
   const hasPageTransition = hasStudioPageTransition(childLayers);
   const { css: initialAnimationCSS } = generateInitialAnimationCSS(resolvedLayers);
-  const animationRuntime = collectPublishedAnimationRuntime(childLayers);
+  const animationRuntime = collectPublishedAnimationRuntime(resolvedLayers);
   const needsStudioRuntime = Boolean(runtimeAdapters);
 
   return (
