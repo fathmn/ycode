@@ -12,16 +12,9 @@ import { getSiteBaseUrl } from '@/lib/url-utils';
 import type { Page, Redirect as RedirectType } from '@/types';
 
 // Public pages resolve the Studio project from the request host and cache the
-// fetched project data below with explicit revalidation tags. The route must
-// stay dynamic because host-based project resolution uses request headers; the
-// public CDN cache policy is applied in proxy.ts.
-export const dynamic = 'force-dynamic';
+// fetched project data below with explicit revalidation tags.
 export const revalidate = false;
 export const dynamicParams = true;
-
-export async function generateStaticParams() {
-  return [];
-}
 
 /**
  * Fetch published page and layers data from database
