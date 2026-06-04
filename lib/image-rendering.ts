@@ -1,9 +1,10 @@
 import type { Layer } from '@/types';
 
-type ImageLayerLike = Pick<Layer, 'id' | 'name' | 'customName' | 'attributes'>;
+type ImageLayerLike = Pick<Layer, 'id' | 'name' | 'customName' | 'attributes' | 'classes'>;
 
-const SMALL_IMAGE_SRCSET_WIDTHS = [96, 160, 240, 320];
-const DEFAULT_IMAGE_SRCSET_WIDTHS = [320, 640, 960, 1280, 1920];
+const BRAND_IMAGE_SRCSET_WIDTHS = [64, 80, 96, 128, 160];
+const CONTENT_IMAGE_SRCSET_WIDTHS = [320, 480, 640, 768, 960, 1280];
+const PRIORITY_IMAGE_SRCSET_WIDTHS = [320, 640, 960, 1280, 1920];
 
 function getAttribute(layer: ImageLayerLike, name: string): unknown {
   return layer.attributes?.[name];
@@ -17,6 +18,10 @@ function layerText(layer: ImageLayerLike): string {
     String(getAttribute(layer, 'data-layer-id') || ''),
     String(getAttribute(layer, 'data-studio-import-asset-id') || ''),
   ].join(' ').toLowerCase();
+}
+
+function classText(layer: ImageLayerLike): string {
+  return Array.isArray(layer.classes) ? layer.classes.join(' ') : layer.classes || '';
 }
 
 export function isPriorityImageLayer(layer: ImageLayerLike): boolean {
@@ -34,6 +39,24 @@ export function isSmallBrandImageLayer(layer: ImageLayerLike): boolean {
   );
 }
 
+function isFramedContentImageLayer(layer: ImageLayerLike): boolean {
+  if (isPriorityImageLayer(layer) || isSmallBrandImageLayer(layer)) return false;
+
+  const classes = classText(layer);
+  const text = layerText(layer);
+
+  return Boolean(
+    text.includes('welcome-image')
+    || text.includes('feature-tab-image')
+    || text.includes('about')
+    || (
+      classes.includes('object-cover')
+      && classes.includes('w-full')
+      && classes.includes('h-full')
+    )
+  );
+}
+
 export function getImageLoadingAttribute(layer: ImageLayerLike): 'eager' | 'lazy' {
   return isPriorityImageLayer(layer) || isSmallBrandImageLayer(layer) ? 'eager' : 'lazy';
 }
@@ -44,22 +67,32 @@ export function getImageFetchPriority(layer: ImageLayerLike): 'high' | 'auto' | 
 
 export function getImageSizesForLayer(layer: ImageLayerLike): string {
   if (isSmallBrandImageLayer(layer)) {
-    return '(max-width: 809px) 96px, 160px';
+    return '(max-width: 809px) 80px, 96px';
   }
-  return '100vw';
+  if (isPriorityImageLayer(layer)) {
+    return '100vw';
+  }
+  if (isFramedContentImageLayer(layer)) {
+    return '(max-width: 809px) 100vw, (max-width: 1199px) 50vw, 38vw';
+  }
+  return '(max-width: 809px) 100vw, 50vw';
 }
 
 export function getImageSrcsetWidthsForLayer(layer: ImageLayerLike): number[] {
-  return isSmallBrandImageLayer(layer) ? SMALL_IMAGE_SRCSET_WIDTHS : DEFAULT_IMAGE_SRCSET_WIDTHS;
+  if (isSmallBrandImageLayer(layer)) return BRAND_IMAGE_SRCSET_WIDTHS;
+  if (isPriorityImageLayer(layer)) return PRIORITY_IMAGE_SRCSET_WIDTHS;
+  return CONTENT_IMAGE_SRCSET_WIDTHS;
 }
 
 export function getFallbackImageWidthForLayer(layer: ImageLayerLike): number {
-  if (isSmallBrandImageLayer(layer)) return 160;
-  return isPriorityImageLayer(layer) ? 1280 : 960;
+  if (isSmallBrandImageLayer(layer)) return 96;
+  if (isPriorityImageLayer(layer)) return 1280;
+  return isFramedContentImageLayer(layer) ? 640 : 768;
 }
 
 export function getImageTransformQualityForLayer(layer: ImageLayerLike): number {
   if (isPriorityImageLayer(layer)) return 74;
-  if (isSmallBrandImageLayer(layer)) return 70;
-  return 80;
+  if (isSmallBrandImageLayer(layer)) return 68;
+  if (isFramedContentImageLayer(layer)) return 72;
+  return 76;
 }

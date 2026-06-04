@@ -1,4 +1,3 @@
-import Script from 'next/script';
 import type { Breakpoint } from '@/types';
 
 export interface StudioRevealTarget {
@@ -18,9 +17,8 @@ export default function StudioRevealInitializer({ targets }: { targets: StudioRe
   if (targets.length === 0) return null;
 
   return (
-    <Script
+    <script
       id="studio-reveal-initializer"
-      strategy="afterInteractive"
       dangerouslySetInnerHTML={{
         __html: `
 (() => {
