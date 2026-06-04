@@ -12,8 +12,10 @@ import Icon from '@/components/ui/icon';
 import SettingsPanel from './SettingsPanel';
 import { useDesignSync } from '@/hooks/use-design-sync';
 import { useControlledInputs } from '@/hooks/use-controlled-input';
+import { useReadableDesignInput } from '@/hooks/use-readable-design-input';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { extractMeasurementValue } from '@/lib/measurement-utils';
+import { formatDesignValueHint } from '@/lib/design-value-labels';
 import { removeSpaces } from '@/lib/utils';
 import type { Layer } from '@/types';
 
@@ -84,6 +86,51 @@ const TransformControls = memo(function TransformControls({ layer, onLayerUpdate
   const inputs = useControlledInputs({
     scale, rotate, translateX, translateY, skewX, skewY,
   }, extractMeasurementValue);
+  const scaleControl = useReadableDesignInput({
+    rawValue: scale,
+    inputValue: inputs.scale[0],
+    setInputValue: inputs.scale[1],
+    transformRawValue: extractMeasurementValue,
+  });
+  const rotateControl = useReadableDesignInput({
+    rawValue: rotate,
+    inputValue: inputs.rotate[0],
+    setInputValue: inputs.rotate[1],
+    transformRawValue: extractMeasurementValue,
+  });
+  const translateXControl = useReadableDesignInput({
+    rawValue: translateX,
+    inputValue: inputs.translateX[0],
+    setInputValue: inputs.translateX[1],
+    transformRawValue: extractMeasurementValue,
+  });
+  const translateYControl = useReadableDesignInput({
+    rawValue: translateY,
+    inputValue: inputs.translateY[0],
+    setInputValue: inputs.translateY[1],
+    transformRawValue: extractMeasurementValue,
+  });
+  const skewXControl = useReadableDesignInput({
+    rawValue: skewX,
+    inputValue: inputs.skewX[0],
+    setInputValue: inputs.skewX[1],
+    transformRawValue: extractMeasurementValue,
+  });
+  const skewYControl = useReadableDesignInput({
+    rawValue: skewY,
+    inputValue: inputs.skewY[0],
+    setInputValue: inputs.skewY[1],
+    transformRawValue: extractMeasurementValue,
+  });
+  const readableInputs = {
+    scale: scaleControl,
+    rotate: rotateControl,
+    translateX: translateXControl,
+    translateY: translateYControl,
+    skewX: skewXControl,
+    skewY: skewYControl,
+  };
+  const rawTransformValues = { scale, rotate, translateX, translateY, skewX, skewY };
 
   const createHandler = useCallback(
     (property: string, setter: (v: string) => void) => (value: string) => {
@@ -233,7 +280,10 @@ const TransformControls = memo(function TransformControls({ layer, onLayerUpdate
             <div className="grid grid-cols-2 items-center gap-2 flex-1 min-w-0">
               <Input
                 type="text"
-                value={inputs.scale[0]}
+                value={scaleControl.value}
+                title={formatDesignValueHint(scale) || scale || undefined}
+                onFocus={scaleControl.onFocus}
+                onBlur={scaleControl.onBlur}
                 onChange={(e) => handlers.scale(e.target.value)}
                 placeholder="1"
               />
@@ -258,7 +308,10 @@ const TransformControls = memo(function TransformControls({ layer, onLayerUpdate
           <div className="col-span-2 flex items-center gap-2">
             <InputGroup className="flex-1 min-w-0">
               <InputGroupInput
-                value={inputs.rotate[0]}
+                value={rotateControl.value}
+                title={formatDesignValueHint(rotate) || rotate || undefined}
+                onFocus={rotateControl.onFocus}
+                onBlur={rotateControl.onBlur}
                 onChange={(e) => handlers.rotate(e.target.value)}
                 placeholder="0"
               />
@@ -280,7 +333,10 @@ const TransformControls = memo(function TransformControls({ layer, onLayerUpdate
                 {field.keys.map((key) => (
                   <Input
                     key={key}
-                    value={inputs[key as keyof typeof inputs][0]}
+                    value={readableInputs[key as keyof typeof readableInputs].value}
+                    title={formatDesignValueHint(rawTransformValues[key as keyof typeof rawTransformValues]) || rawTransformValues[key as keyof typeof rawTransformValues] || undefined}
+                    onFocus={readableInputs[key as keyof typeof readableInputs].onFocus}
+                    onBlur={readableInputs[key as keyof typeof readableInputs].onBlur}
                     onChange={(e) => handlers[key](e.target.value)}
                     placeholder="0"
                   />

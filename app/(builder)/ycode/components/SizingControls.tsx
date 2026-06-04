@@ -18,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import SettingsPanel from './SettingsPanel';
 import { useDesignSync } from '@/hooks/use-design-sync';
 import { useControlledInputs } from '@/hooks/use-controlled-input';
+import { useReadableDesignInput } from '@/hooks/use-readable-design-input';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { usePagesStore } from '@/stores/usePagesStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
@@ -86,6 +87,42 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
   const [minHeightInput, setMinHeightInput] = inputs.minHeight;
   const [maxWidthInput, setMaxWidthInput] = inputs.maxWidth;
   const [maxHeightInput, setMaxHeightInput] = inputs.maxHeight;
+  const widthControl = useReadableDesignInput({
+    rawValue: width,
+    inputValue: widthInput,
+    setInputValue: setWidthInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const heightControl = useReadableDesignInput({
+    rawValue: height,
+    inputValue: heightInput,
+    setInputValue: setHeightInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const minWidthControl = useReadableDesignInput({
+    rawValue: minWidth,
+    inputValue: minWidthInput,
+    setInputValue: setMinWidthInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const minHeightControl = useReadableDesignInput({
+    rawValue: minHeight,
+    inputValue: minHeightInput,
+    setInputValue: setMinHeightInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const maxWidthControl = useReadableDesignInput({
+    rawValue: maxWidth,
+    inputValue: maxWidthInput,
+    setInputValue: setMaxWidthInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const maxHeightControl = useReadableDesignInput({
+    rawValue: maxHeight,
+    inputValue: maxHeightInput,
+    setInputValue: setMaxHeightInput,
+    transformRawValue: extractMeasurementValue,
+  });
 
   // Aspect ratio uses custom extraction to remove brackets
   const [aspectRatioInput, setAspectRatioInput] = useState(extractAspectRatioValue(aspectRatio));
@@ -430,7 +467,10 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
           <ButtonGroup>
             <Input
               title={widthHint || width || undefined}
-              value={widthInput} onChange={(e) => handleWidthChange(e.target.value)}
+              value={widthControl.value}
+              onFocus={widthControl.onFocus}
+              onBlur={widthControl.onBlur}
+              onChange={(e) => handleWidthChange(e.target.value)}
             />
             <ButtonGroupSeparator />
             <Select value={getWidthPresetValue()} onValueChange={handleWidthPresetChange}>
@@ -464,8 +504,11 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
                     </div>
                   </InputGroupAddon>
                   <InputGroupInput
-                    placeholder="Min" value={minWidthInput}
+                    placeholder="Min"
+                    value={minWidthControl.value}
                     title={minWidthHint || minWidth || undefined}
+                    onFocus={minWidthControl.onFocus}
+                    onBlur={minWidthControl.onBlur}
                     onChange={(e) => handleMinWidthChange(e.target.value)}
                   />
                 </InputGroup>
@@ -499,8 +542,11 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
                     </div>
                   </InputGroupAddon>
                   <InputGroupInput
-                    placeholder="Max" value={maxWidthInput}
+                    placeholder="Max"
+                    value={maxWidthControl.value}
                     title={maxWidthHint || maxWidth || undefined}
+                    onFocus={maxWidthControl.onFocus}
+                    onBlur={maxWidthControl.onBlur}
                     onChange={(e) => handleMaxWidthChange(e.target.value)}
                   />
                 </InputGroup>
@@ -528,7 +574,10 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
           <ButtonGroup>
             <Input
               title={heightHint || height || undefined}
-              value={heightInput} onChange={(e) => handleHeightChange(e.target.value)}
+              value={heightControl.value}
+              onFocus={heightControl.onFocus}
+              onBlur={heightControl.onBlur}
+              onChange={(e) => handleHeightChange(e.target.value)}
             />
             <ButtonGroupSeparator />
             <Select value={getHeightPresetValue()} onValueChange={handleHeightPresetChange}>
@@ -561,8 +610,11 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
                     </div>
                   </InputGroupAddon>
                   <InputGroupInput
-                    placeholder="Min" value={minHeightInput}
+                    placeholder="Min"
+                    value={minHeightControl.value}
                     title={minHeightHint || minHeight || undefined}
+                    onFocus={minHeightControl.onFocus}
+                    onBlur={minHeightControl.onBlur}
                     onChange={(e) => handleMinHeightChange(e.target.value)}
                   />
                 </InputGroup>
@@ -595,8 +647,11 @@ const SizingControls = memo(function SizingControls({ layer, onLayerUpdate }: Si
                     </div>
                   </InputGroupAddon>
                   <InputGroupInput
-                    placeholder="Max" value={maxHeightInput}
+                    placeholder="Max"
+                    value={maxHeightControl.value}
                     title={maxHeightHint || maxHeight || undefined}
+                    onFocus={maxHeightControl.onFocus}
+                    onBlur={maxHeightControl.onBlur}
                     onChange={(e) => handleMaxHeightChange(e.target.value)}
                   />
                 </InputGroup>

@@ -164,10 +164,36 @@ function splitStyleDeclarations(style: string): string[] {
   return declarations;
 }
 
+function splitClassesPreservingBrackets(classes: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let bracketDepth = 0;
+
+  for (const char of classes) {
+    if (char === '[') bracketDepth += 1;
+    if (char === ']' && bracketDepth > 0) bracketDepth -= 1;
+
+    if (/\s/.test(char) && bracketDepth === 0) {
+      if (current) result.push(current);
+      current = '';
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current) result.push(current);
+  return result;
+}
+
 function normalizeClassList(classes: Layer['classes'] | undefined): string[] {
-  if (Array.isArray(classes)) return classes.filter(Boolean);
-  if (typeof classes !== 'string') return [];
-  return classes.split(/\s+/).filter(Boolean);
+  const list = Array.isArray(classes)
+    ? classes.filter(Boolean)
+    : typeof classes === 'string'
+      ? splitClassesPreservingBrackets(classes).filter(Boolean)
+      : [];
+
+  return Array.from(new Set(list));
 }
 
 function repairLegacyInvalidImportClasses(layer: Layer): { classes: string; changed: boolean; addedCount: number } {
@@ -196,10 +222,16 @@ function repairLegacyInvalidImportClasses(layer: Layer): { classes: string; chan
     if (typeof value !== 'string' || !value) return;
     const cls = propertyToClass(category, property, value);
     if (!cls) return;
-    const before = repaired.length;
-    repaired = replaceConflictingClasses(repaired, property, cls);
-    if (repaired.length > before || !repaired.includes(cls)) addedCount += 1;
-    changed = true;
+    const before = repaired;
+    if (before.includes(cls)) return;
+
+    const next = replaceConflictingClasses(before, property, cls);
+    const classWasAdded = next.includes(cls);
+    const classesChanged = next.join(' ') !== before.join(' ');
+
+    if (classWasAdded) addedCount += 1;
+    if (classesChanged) changed = true;
+    repaired = next;
   };
 
   addDesignClass('typography', 'fontSize', layer.design?.typography?.fontSize);

@@ -3,6 +3,8 @@
 import React, { useCallback, useRef, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Input } from '@/components/ui/input';
+import { useReadableDesignInput } from '@/hooks/use-readable-design-input';
+import { formatDesignValueHint } from '@/lib/design-value-labels';
 import { cn } from '@/lib/utils';
 
 interface SpacingValues {
@@ -196,6 +198,11 @@ function SpacingInput({
   className?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const readable = useReadableDesignInput({
+    rawValue: value,
+    inputValue: value,
+  });
+  const valueHint = formatDesignValueHint(value);
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     onChange(e.target.value);
@@ -204,7 +211,10 @@ function SpacingInput({
   return (
     <Input
       ref={inputRef}
-      value={value}
+      value={readable.value}
+      title={valueHint || value || undefined}
+      onFocus={readable.onFocus}
+      onBlur={readable.onBlur}
       onChange={handleChange}
       placeholder="0"
       className="text-center bg-transparent border-transparent px-0"

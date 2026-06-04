@@ -13,6 +13,7 @@ import Icon from '@/components/ui/icon';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useDesignSync } from '@/hooks/use-design-sync';
 import { useControlledInput } from '@/hooks/use-controlled-input';
+import { useReadableDesignInput } from '@/hooks/use-readable-design-input';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { useFontsStore } from '@/stores/useFontsStore';
 import { extractMeasurementValue } from '@/lib/measurement-utils';
@@ -20,7 +21,7 @@ import { removeSpaces } from '@/lib/utils';
 import { getFontAvailableWeights, FONT_WEIGHTS } from '@/lib/font-utils';
 import { buildBgImgVarName } from '@/lib/tailwind-class-mapper';
 import { isTextContentLayer } from '@/lib/layer-utils';
-import { formatDesignControlValue, formatDesignValueHint } from '@/lib/design-value-labels';
+import { formatDesignValueHint } from '@/lib/design-value-labels';
 import type { Collection, CollectionField, Layer } from '@/types';
 import type { FieldGroup } from '@/lib/collection-field-utils';
 import ColorPropertyField from './ColorPropertyField';
@@ -68,7 +69,6 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
   const fontSizeHint = formatDesignValueHint(fontSize);
   const letterSpacingHint = formatDesignValueHint(letterSpacing);
   const lineHeightHint = formatDesignValueHint(lineHeight);
-  const fontSizeDisplayValue = formatDesignControlValue(fontSize);
 
   // Get available weights for the selected font
   const selectedFont = getFontByFamily(fontFamily);
@@ -107,7 +107,35 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
   const [decorationThicknessInput, setDecorationThicknessInput] = useControlledInput(textDecorationThickness, extractMeasurementValue);
   const [underlineOffsetInput, setUnderlineOffsetInput] = useControlledInput(underlineOffset, extractMeasurementValue);
   const [lineClampInput, setLineClampInput] = useControlledInput(lineClamp);
-  const [isFontSizeFocused, setIsFontSizeFocused] = useState(false);
+  const fontSizeControl = useReadableDesignInput({
+    rawValue: fontSize,
+    inputValue: fontSizeInput,
+    setInputValue: setFontSizeInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const letterSpacingControl = useReadableDesignInput({
+    rawValue: letterSpacing,
+    inputValue: letterSpacingInput,
+    setInputValue: setLetterSpacingInput,
+    transformRawValue: extractLetterSpacingValue,
+  });
+  const lineHeightControl = useReadableDesignInput({
+    rawValue: lineHeight,
+    inputValue: lineHeightInput,
+    setInputValue: setLineHeightInput,
+  });
+  const underlineOffsetControl = useReadableDesignInput({
+    rawValue: underlineOffset,
+    inputValue: underlineOffsetInput,
+    setInputValue: setUnderlineOffsetInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const decorationThicknessControl = useReadableDesignInput({
+    rawValue: textDecorationThickness,
+    inputValue: decorationThicknessInput,
+    setInputValue: setDecorationThicknessInput,
+    transformRawValue: extractMeasurementValue,
+  });
 
   // Map numeric font weights to named values
   const fontWeightMap: Record<string, string> = {
@@ -413,12 +441,9 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
                 <InputGroup>
                   <InputGroupInput
                     title={fontSizeHint || fontSize || undefined}
-                    value={!isFontSizeFocused && fontSizeDisplayValue ? fontSizeDisplayValue : fontSizeInput}
-                    onFocus={() => {
-                      setIsFontSizeFocused(true);
-                      setFontSizeInput(extractMeasurementValue(fontSize));
-                    }}
-                    onBlur={() => setIsFontSizeFocused(false)}
+                    value={fontSizeControl.value}
+                    onFocus={fontSizeControl.onFocus}
+                    onBlur={fontSizeControl.onBlur}
                     onChange={(e) => handleFontSizeChange(e.target.value)}
                     stepper
                     min="0"
@@ -533,7 +558,9 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
                 <InputGroupInput
                   className="pr-0!"
                   title={letterSpacingHint || letterSpacing || undefined}
-                  value={letterSpacingInput}
+                  value={letterSpacingControl.value}
+                  onFocus={letterSpacingControl.onFocus}
+                  onBlur={letterSpacingControl.onBlur}
                   onChange={(e) => handleLetterSpacingChange(e.target.value)}
                   onStepperChange={handleLetterSpacingStepper}
                   stepper
@@ -557,7 +584,9 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
                 <InputGroupInput
                   className="pr-0!"
                   title={lineHeightHint || lineHeight || undefined}
-                  value={lineHeightInput}
+                  value={lineHeightControl.value}
+                  onFocus={lineHeightControl.onFocus}
+                  onBlur={lineHeightControl.onBlur}
                   onChange={(e) => handleLineHeightChange(e.target.value)}
                   onStepperChange={handleLineHeightStepper}
                   stepper
@@ -596,7 +625,10 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
                           stepper
                           min="0"
                           step="1"
-                          value={underlineOffsetInput}
+                          value={underlineOffsetControl.value}
+                          title={formatDesignValueHint(underlineOffset) || underlineOffset || undefined}
+                          onFocus={underlineOffsetControl.onFocus}
+                          onBlur={underlineOffsetControl.onBlur}
                           onChange={(e) => handleUnderlineOffsetChange(e.target.value)}
                           placeholder="2"
                         />
@@ -610,7 +642,10 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
                           stepper
                           min="0"
                           step="1"
-                          value={decorationThicknessInput}
+                          value={decorationThicknessControl.value}
+                          title={formatDesignValueHint(textDecorationThickness) || textDecorationThickness || undefined}
+                          onFocus={decorationThicknessControl.onFocus}
+                          onBlur={decorationThicknessControl.onBlur}
                           onChange={(e) => handleDecorationThicknessChange(e.target.value)}
                           placeholder="1"
                         />

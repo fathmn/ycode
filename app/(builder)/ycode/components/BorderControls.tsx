@@ -18,10 +18,12 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useDesignSync } from '@/hooks/use-design-sync';
 import { useControlledInputs } from '@/hooks/use-controlled-input';
+import { useReadableDesignInput } from '@/hooks/use-readable-design-input';
 import { useModeToggle } from '@/hooks/use-mode-toggle';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { useColorVariablesStore } from '@/stores/useColorVariablesStore';
 import { extractMeasurementValue } from '@/lib/measurement-utils';
+import { formatDesignValueHint } from '@/lib/design-value-labels';
 import { cn, removeSpaces } from '@/lib/utils';
 import ColorPropertyField from './ColorPropertyField';
 import type { Collection, CollectionField, Layer } from '@/types';
@@ -142,6 +144,90 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
   const [divideYInput, setDivideYInput] = inputs.divideY;
   const [outlineWidthInput, setOutlineWidthInput] = inputs.outlineWidth;
   const [outlineOffsetInput, setOutlineOffsetInput] = inputs.outlineOffset;
+  const borderRadiusControl = useReadableDesignInput({
+    rawValue: borderRadius,
+    inputValue: borderRadiusInput,
+    setInputValue: setBorderRadiusInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const borderTopLeftRadiusControl = useReadableDesignInput({
+    rawValue: borderTopLeftRadius,
+    inputValue: borderTopLeftRadiusInput,
+    setInputValue: setBorderTopLeftRadiusInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const borderTopRightRadiusControl = useReadableDesignInput({
+    rawValue: borderTopRightRadius,
+    inputValue: borderTopRightRadiusInput,
+    setInputValue: setBorderTopRightRadiusInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const borderBottomLeftRadiusControl = useReadableDesignInput({
+    rawValue: borderBottomLeftRadius,
+    inputValue: borderBottomLeftRadiusInput,
+    setInputValue: setBorderBottomLeftRadiusInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const borderBottomRightRadiusControl = useReadableDesignInput({
+    rawValue: borderBottomRightRadius,
+    inputValue: borderBottomRightRadiusInput,
+    setInputValue: setBorderBottomRightRadiusInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const borderWidthControl = useReadableDesignInput({
+    rawValue: borderWidth,
+    inputValue: borderWidthInput,
+    setInputValue: setBorderWidthInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const borderTopWidthControl = useReadableDesignInput({
+    rawValue: borderTopWidth,
+    inputValue: borderTopWidthInput,
+    setInputValue: setBorderTopWidthInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const borderRightWidthControl = useReadableDesignInput({
+    rawValue: borderRightWidth,
+    inputValue: borderRightWidthInput,
+    setInputValue: setBorderRightWidthInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const borderBottomWidthControl = useReadableDesignInput({
+    rawValue: borderBottomWidth,
+    inputValue: borderBottomWidthInput,
+    setInputValue: setBorderBottomWidthInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const borderLeftWidthControl = useReadableDesignInput({
+    rawValue: borderLeftWidth,
+    inputValue: borderLeftWidthInput,
+    setInputValue: setBorderLeftWidthInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const divideYControl = useReadableDesignInput({
+    rawValue: divideY,
+    inputValue: divideYInput,
+    setInputValue: setDivideYInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const divideXControl = useReadableDesignInput({
+    rawValue: divideX,
+    inputValue: divideXInput,
+    setInputValue: setDivideXInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const outlineWidthControl = useReadableDesignInput({
+    rawValue: outlineWidth,
+    inputValue: outlineWidthInput,
+    setInputValue: setOutlineWidthInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const outlineOffsetControl = useReadableDesignInput({
+    rawValue: outlineOffset,
+    inputValue: outlineOffsetInput,
+    setInputValue: setOutlineOffsetInput,
+    transformRawValue: extractMeasurementValue,
+  });
 
   // Use mode toggle hooks for radius and width
   const radiusModeToggle = useModeToggle({
@@ -205,21 +291,25 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
   };
 
   const handleTopWidthChange = (value: string) => {
+    setBorderTopWidthInput(value);
     const sanitized = removeSpaces(value);
     debouncedUpdateDesignProperty('borders', 'borderTopWidth', sanitized || null);
   };
 
   const handleRightWidthChange = (value: string) => {
+    setBorderRightWidthInput(value);
     const sanitized = removeSpaces(value);
     debouncedUpdateDesignProperty('borders', 'borderRightWidth', sanitized || null);
   };
 
   const handleBottomWidthChange = (value: string) => {
+    setBorderBottomWidthInput(value);
     const sanitized = removeSpaces(value);
     debouncedUpdateDesignProperty('borders', 'borderBottomWidth', sanitized || null);
   };
 
   const handleLeftWidthChange = (value: string) => {
+    setBorderLeftWidthInput(value);
     const sanitized = removeSpaces(value);
     debouncedUpdateDesignProperty('borders', 'borderLeftWidth', sanitized || null);
   };
@@ -382,7 +472,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                 step="1"
                 className="flex-1"
                 disabled={radiusModeToggle.mode === 'individual'}
-                value={borderRadiusInput}
+                value={borderRadiusControl.value}
+                title={formatDesignValueHint(borderRadius) || borderRadius || undefined}
+                onFocus={borderRadiusControl.onFocus}
+                onBlur={borderRadiusControl.onBlur}
                 onChange={(e) => handleRadiusChange(e.target.value)}
                 placeholder="0"
               />
@@ -404,7 +497,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                     stepper
                     min="0"
                     step="1"
-                    value={borderTopLeftRadiusInput}
+                    value={borderTopLeftRadiusControl.value}
+                    title={formatDesignValueHint(borderTopLeftRadius) || borderTopLeftRadius || undefined}
+                    onFocus={borderTopLeftRadiusControl.onFocus}
+                    onBlur={borderTopLeftRadiusControl.onBlur}
                     onChange={(e) => handleTopLeftRadiusChange(e.target.value)}
                     placeholder="0"
                   />
@@ -417,7 +513,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                     stepper
                     min="0"
                     step="1"
-                    value={borderTopRightRadiusInput}
+                    value={borderTopRightRadiusControl.value}
+                    title={formatDesignValueHint(borderTopRightRadius) || borderTopRightRadius || undefined}
+                    onFocus={borderTopRightRadiusControl.onFocus}
+                    onBlur={borderTopRightRadiusControl.onBlur}
                     onChange={(e) => handleTopRightRadiusChange(e.target.value)}
                     placeholder="0"
                   />
@@ -430,7 +529,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                     stepper
                     min="0"
                     step="1"
-                    value={borderBottomLeftRadiusInput}
+                    value={borderBottomLeftRadiusControl.value}
+                    title={formatDesignValueHint(borderBottomLeftRadius) || borderBottomLeftRadius || undefined}
+                    onFocus={borderBottomLeftRadiusControl.onFocus}
+                    onBlur={borderBottomLeftRadiusControl.onBlur}
                     onChange={(e) => handleBottomLeftRadiusChange(e.target.value)}
                     placeholder="0"
                   />
@@ -443,7 +545,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                     stepper
                     min="0"
                     step="1"
-                    value={borderBottomRightRadiusInput}
+                    value={borderBottomRightRadiusControl.value}
+                    title={formatDesignValueHint(borderBottomRightRadius) || borderBottomRightRadius || undefined}
+                    onFocus={borderBottomRightRadiusControl.onFocus}
+                    onBlur={borderBottomRightRadiusControl.onBlur}
                     onChange={(e) => handleBottomRightRadiusChange(e.target.value)}
                     placeholder="0"
                   />
@@ -510,7 +615,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                           step="1"
                           className="flex-1"
                           disabled={widthModeToggle.mode === 'individual'}
-                          value={borderWidthInput}
+                          value={borderWidthControl.value}
+                          title={formatDesignValueHint(borderWidth) || borderWidth || undefined}
+                          onFocus={borderWidthControl.onFocus}
+                          onBlur={borderWidthControl.onBlur}
                           onChange={(e) => handleBorderWidthChange(e.target.value)}
                           placeholder="1"
                         />
@@ -529,7 +637,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                                 stepper
                                 min="0"
                                 step="1"
-                                value={borderTopWidthInput}
+                                value={borderTopWidthControl.value}
+                                title={formatDesignValueHint(borderTopWidth) || borderTopWidth || undefined}
+                                onFocus={borderTopWidthControl.onFocus}
+                                onBlur={borderTopWidthControl.onBlur}
                                 onChange={(e) => handleTopWidthChange(e.target.value)}
                                 placeholder="1"
                               />
@@ -540,7 +651,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                                 stepper
                                 min="0"
                                 step="1"
-                                value={borderRightWidthInput}
+                                value={borderRightWidthControl.value}
+                                title={formatDesignValueHint(borderRightWidth) || borderRightWidth || undefined}
+                                onFocus={borderRightWidthControl.onFocus}
+                                onBlur={borderRightWidthControl.onBlur}
                                 onChange={(e) => handleRightWidthChange(e.target.value)}
                                 placeholder="1"
                               />
@@ -551,7 +665,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                                 stepper
                                 min="0"
                                 step="1"
-                                value={borderBottomWidthInput}
+                                value={borderBottomWidthControl.value}
+                                title={formatDesignValueHint(borderBottomWidth) || borderBottomWidth || undefined}
+                                onFocus={borderBottomWidthControl.onFocus}
+                                onBlur={borderBottomWidthControl.onBlur}
                                 onChange={(e) => handleBottomWidthChange(e.target.value)}
                                 placeholder="1"
                               />
@@ -562,7 +679,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                                 stepper
                                 min="0"
                                 step="1"
-                                value={borderLeftWidthInput}
+                                value={borderLeftWidthControl.value}
+                                title={formatDesignValueHint(borderLeftWidth) || borderLeftWidth || undefined}
+                                onFocus={borderLeftWidthControl.onFocus}
+                                onBlur={borderLeftWidthControl.onBlur}
                                 onChange={(e) => handleLeftWidthChange(e.target.value)}
                                 placeholder="1"
                               />
@@ -653,7 +773,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                             stepper
                             min="0"
                             step="1"
-                            value={divideYInput}
+                            value={divideYControl.value}
+                            title={formatDesignValueHint(divideY) || divideY || undefined}
+                            onFocus={divideYControl.onFocus}
+                            onBlur={divideYControl.onBlur}
                             onChange={(e) => handleDivideYChange(e.target.value)}
                             placeholder="0"
                           />
@@ -675,7 +798,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                             stepper
                             min="0"
                             step="1"
-                            value={divideXInput}
+                            value={divideXControl.value}
+                            title={formatDesignValueHint(divideX) || divideX || undefined}
+                            onFocus={divideXControl.onFocus}
+                            onBlur={divideXControl.onBlur}
                             onChange={(e) => handleDivideXChange(e.target.value)}
                             placeholder="0"
                           />
@@ -761,7 +887,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                           stepper
                           min="0"
                           step="1"
-                          value={outlineWidthInput}
+                          value={outlineWidthControl.value}
+                          title={formatDesignValueHint(outlineWidth) || outlineWidth || undefined}
+                          onFocus={outlineWidthControl.onFocus}
+                          onBlur={outlineWidthControl.onBlur}
                           onChange={(e) => handleOutlineWidthChange(e.target.value)}
                           placeholder="1"
                         />
@@ -790,7 +919,10 @@ const BorderControls = memo(function BorderControls({ layer, onLayerUpdate, acti
                         <Input
                           stepper
                           step="1"
-                          value={outlineOffsetInput}
+                          value={outlineOffsetControl.value}
+                          title={formatDesignValueHint(outlineOffset) || outlineOffset || undefined}
+                          onFocus={outlineOffsetControl.onFocus}
+                          onBlur={outlineOffsetControl.onBlur}
                           onChange={(e) => handleOutlineOffsetChange(e.target.value)}
                           placeholder="0"
                         />

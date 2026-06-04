@@ -332,9 +332,9 @@ export function styleToClasses(style: string): string[] {
     if (mapped) { classes.push(mapped); continue; }
 
     switch (prop) {
-      case 'gap': classes.push(`gap-[${val}]`); break;
-      case 'row-gap': classes.push(`gap-y-[${val}]`); break;
-      case 'column-gap': classes.push(`gap-x-[${val}]`); break;
+      case 'gap': classes.push(`gap-[${val.replace(/\s+/g, '_')}]`); break;
+      case 'row-gap': classes.push(`gap-y-[${val.replace(/\s+/g, '_')}]`); break;
+      case 'column-gap': classes.push(`gap-x-[${val.replace(/\s+/g, '_')}]`); break;
       case 'padding':
         classes.push(...parseSpacingShorthand(val, 'p', ['pt', 'pr', 'pb', 'pl']));
         break;
@@ -364,7 +364,7 @@ export function styleToClasses(style: string): string[] {
       case 'font-family':
         classes.push(`font-[${val.replace(/,\s*/g, ',').replace(/\s+/g, '_')}]`);
         break;
-      case 'color': classes.push(`text-[${val}]`); break;
+      case 'color': classes.push(val.startsWith('var(') ? `text-[color:${val}]` : `text-[${val}]`); break;
       case 'line-height': classes.push(`leading-[${val}]`); break;
       case 'letter-spacing': classes.push(`tracking-[${val}]`); break;
       case 'background-color': classes.push(`bg-[${val}]`); break;

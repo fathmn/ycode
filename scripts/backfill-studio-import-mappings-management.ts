@@ -144,10 +144,36 @@ function addSourceStyleRepairStats(target: SourceStyleRepairStats, source: Sourc
   target.classesAdded += source.classesAdded;
 }
 
+function splitClassesPreservingBrackets(classes: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let bracketDepth = 0;
+
+  for (const char of classes) {
+    if (char === '[') bracketDepth += 1;
+    if (char === ']' && bracketDepth > 0) bracketDepth -= 1;
+
+    if (/\s/.test(char) && bracketDepth === 0) {
+      if (current) result.push(current);
+      current = '';
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current) result.push(current);
+  return result;
+}
+
 function normalizeClassList(classes: Layer['classes'] | undefined): string[] {
-  if (Array.isArray(classes)) return classes.filter(Boolean);
-  if (typeof classes !== 'string') return [];
-  return classes.split(/\s+/).filter(Boolean);
+  const list = Array.isArray(classes)
+    ? classes.filter(Boolean)
+    : typeof classes === 'string'
+      ? splitClassesPreservingBrackets(classes).filter(Boolean)
+      : [];
+
+  return Array.from(new Set(list));
 }
 
 function mergeMissingClasses(existing: string[], additions: string[]): { classes: string[]; addedCount: number } {
@@ -169,6 +195,17 @@ function isEmptyDesignValue(value: unknown): boolean {
   return value === undefined || value === null || value === '';
 }
 
+function isColorLikeDesignValue(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+
+  return /^color:var\(--/i.test(normalized)
+    || /^var\(\s*--(?:color-|.*(?:color|ink|foreground|background|bg|text|muted|border|accent|primary|secondary|surface))/i.test(normalized)
+    || /^#?[0-9A-Fa-f]{3}(?:[0-9A-Fa-f]{3})?(?:[0-9A-Fa-f]{2})?$/.test(normalized)
+    || /^rgba?\s*\(/i.test(normalized)
+    || /^hsla?\s*\(/i.test(normalized);
+}
+
 function shouldRepairDesignProperty(
   category: keyof DesignProperties,
   property: string,
@@ -177,6 +214,14 @@ function shouldRepairDesignProperty(
 ): boolean {
   if (isEmptyDesignValue(sourceValue)) return false;
   if (isEmptyDesignValue(currentValue)) return true;
+
+  if (category === 'typography' && property === 'fontSize') {
+    return isColorLikeDesignValue(currentValue) && !isColorLikeDesignValue(sourceValue);
+  }
+
+  if (category === 'typography' && property === 'color') {
+    return isColorLikeDesignValue(sourceValue) && !isColorLikeDesignValue(currentValue);
+  }
 
   if (category === 'typography' && property === 'fontFamily' && typeof sourceValue === 'string') {
     const sourceIsDisplayToken = sourceValue.includes('var(--font-display') || sourceValue.includes('var(--font-spectral');

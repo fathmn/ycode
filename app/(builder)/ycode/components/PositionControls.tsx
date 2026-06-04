@@ -10,8 +10,10 @@ import Icon from '@/components/ui/icon';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useDesignSync } from '@/hooks/use-design-sync';
 import { useControlledInputs } from '@/hooks/use-controlled-input';
+import { useReadableDesignInput } from '@/hooks/use-readable-design-input';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { extractMeasurementValue } from '@/lib/measurement-utils';
+import { formatDesignValueHint } from '@/lib/design-value-labels';
 import { removeSpaces } from '@/lib/utils';
 import type { Layer } from '@/types';
 
@@ -54,6 +56,34 @@ const PositionControls = memo(function PositionControls({ layer, onLayerUpdate }
   const [bottomInput, setBottomInput] = inputs.bottom;
   const [leftInput, setLeftInput] = inputs.left;
   const [zIndexInput, setZIndexInput] = inputs.zIndex;
+  const leftHint = formatDesignValueHint(left);
+  const topHint = formatDesignValueHint(top);
+  const rightHint = formatDesignValueHint(right);
+  const bottomHint = formatDesignValueHint(bottom);
+  const leftControl = useReadableDesignInput({
+    rawValue: left,
+    inputValue: leftInput,
+    setInputValue: setLeftInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const topControl = useReadableDesignInput({
+    rawValue: top,
+    inputValue: topInput,
+    setInputValue: setTopInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const rightControl = useReadableDesignInput({
+    rawValue: right,
+    inputValue: rightInput,
+    setInputValue: setRightInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const bottomControl = useReadableDesignInput({
+    rawValue: bottom,
+    inputValue: bottomInput,
+    setInputValue: setBottomInput,
+    transformRawValue: extractMeasurementValue,
+  });
 
   // Handle position change (immediate - dropdown selection)
   const handlePositionChange = (value: string) => {
@@ -170,7 +200,10 @@ const PositionControls = memo(function PositionControls({ layer, onLayerUpdate }
                     </InputGroupAddon>
                     <InputGroupInput
                       className="!pr-0"
-                      value={leftInput}
+                      value={leftControl.value}
+                      title={leftHint || left || undefined}
+                      onFocus={leftControl.onFocus}
+                      onBlur={leftControl.onBlur}
                       onChange={(e) => handleLeftChange(e.target.value)}
                     />
                   </InputGroup>
@@ -189,7 +222,10 @@ const PositionControls = memo(function PositionControls({ layer, onLayerUpdate }
                     </InputGroupAddon>
                     <InputGroupInput
                       className="!pr-0"
-                      value={topInput}
+                      value={topControl.value}
+                      title={topHint || top || undefined}
+                      onFocus={topControl.onFocus}
+                      onBlur={topControl.onBlur}
                       onChange={(e) => handleTopChange(e.target.value)}
                     />
                   </InputGroup>
@@ -208,7 +244,10 @@ const PositionControls = memo(function PositionControls({ layer, onLayerUpdate }
                     </InputGroupAddon>
                     <InputGroupInput
                       className="!pr-0"
-                      value={rightInput}
+                      value={rightControl.value}
+                      title={rightHint || right || undefined}
+                      onFocus={rightControl.onFocus}
+                      onBlur={rightControl.onBlur}
                       onChange={(e) => handleRightChange(e.target.value)}
                     />
                   </InputGroup>
@@ -227,7 +266,10 @@ const PositionControls = memo(function PositionControls({ layer, onLayerUpdate }
                     </InputGroupAddon>
                     <InputGroupInput
                       className="!pr-0"
-                      value={bottomInput}
+                      value={bottomControl.value}
+                      title={bottomHint || bottom || undefined}
+                      onFocus={bottomControl.onFocus}
+                      onBlur={bottomControl.onBlur}
                       onChange={(e) => handleBottomChange(e.target.value)}
                     />
                   </InputGroup>

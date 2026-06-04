@@ -11,6 +11,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useDesignSync } from '@/hooks/use-design-sync';
 import { useControlledInputs } from '@/hooks/use-controlled-input';
+import { useReadableDesignInput } from '@/hooks/use-readable-design-input';
 import { useModeToggle } from '@/hooks/use-mode-toggle';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { extractMeasurementValue } from '@/lib/measurement-utils';
@@ -87,6 +88,24 @@ const LayoutControls = memo(function LayoutControls({ layer, onLayerUpdate }: La
   const [gapInput, setGapInput] = inputs.gap;
   const [columnGapInput, setColumnGapInput] = inputs.columnGap;
   const [rowGapInput, setRowGapInput] = inputs.rowGap;
+  const gapControl = useReadableDesignInput({
+    rawValue: gap,
+    inputValue: gapInput,
+    setInputValue: setGapInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const columnGapControl = useReadableDesignInput({
+    rawValue: columnGap,
+    inputValue: columnGapInput,
+    setInputValue: setColumnGapInput,
+    transformRawValue: extractMeasurementValue,
+  });
+  const rowGapControl = useReadableDesignInput({
+    rawValue: rowGap,
+    inputValue: rowGapInput,
+    setInputValue: setRowGapInput,
+    transformRawValue: extractMeasurementValue,
+  });
 
   // Use mode toggle hook for gap
   const gapModeToggle = useModeToggle({
@@ -360,7 +379,9 @@ const LayoutControls = memo(function LayoutControls({ layer, onLayerUpdate }: La
                                 step="1"
                                 title={gapHint || gap || undefined}
                                 disabled={gapModeToggle.mode === 'individual'}
-                                value={gapInput}
+                                value={gapControl.value}
+                                onFocus={gapControl.onFocus}
+                                onBlur={gapControl.onBlur}
                                 onChange={(e) => handleGapChange(e.target.value)}
                               />
                           </InputGroup>
@@ -395,7 +416,9 @@ const LayoutControls = memo(function LayoutControls({ layer, onLayerUpdate }: La
                                  min="0"
                                  step="1"
                                  title={columnGapHint || columnGap || undefined}
-                                 value={columnGapInput}
+                                 value={columnGapControl.value}
+                                 onFocus={columnGapControl.onFocus}
+                                 onBlur={columnGapControl.onBlur}
                                  onChange={(e) => handleColumnGapChange(e.target.value)}
                                />
                            </InputGroup>
@@ -417,7 +440,9 @@ const LayoutControls = memo(function LayoutControls({ layer, onLayerUpdate }: La
                                  min="0"
                                  step="1"
                                  title={rowGapHint || rowGap || undefined}
-                                 value={rowGapInput}
+                                 value={rowGapControl.value}
+                                 onFocus={rowGapControl.onFocus}
+                                 onBlur={rowGapControl.onBlur}
                                  onChange={(e) => handleRowGapChange(e.target.value)}
                                />
                            </InputGroup>

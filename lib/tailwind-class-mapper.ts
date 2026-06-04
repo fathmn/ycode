@@ -106,22 +106,30 @@ function splitClassesPreservingBrackets(cls: string): string[] {
  * Used to distinguish between text-[color] and text-[size] arbitrary values
  */
 function isColorValue(value: string): boolean {
+  const normalizedValue = value.trim();
+
   // Check for CSS custom property color references: color:var(--...)
-  if (/^color:var\(--/.test(value)) return true;
+  if (/^color:var\(--/.test(normalizedValue)) return true;
+
+  // Imported sites often expose semantic color tokens without Tailwind's
+  // explicit color: hint, e.g. text-[var(--color-ink)].
+  if (/^var\(\s*--(?:color-|.*(?:color|ink|foreground|background|bg|text|muted|border|accent|primary|secondary|surface))/i.test(normalizedValue)) {
+    return true;
+  }
 
   // Check for hex colors (with or without #)
   // Supports: #RGB, RGB, #RRGGBB, RRGGBB, #RRGGBBAA, RRGGBBAA
-  if (/^#?[0-9A-Fa-f]{3}$/.test(value)) return true; // #RGB or RGB
-  if (/^#?[0-9A-Fa-f]{6}$/.test(value)) return true; // #RRGGBB or RRGGBB
-  if (/^#?[0-9A-Fa-f]{8}$/.test(value)) return true; // #RRGGBBAA or RRGGBBAA
+  if (/^#?[0-9A-Fa-f]{3}$/.test(normalizedValue)) return true; // #RGB or RGB
+  if (/^#?[0-9A-Fa-f]{6}$/.test(normalizedValue)) return true; // #RRGGBB or RRGGBB
+  if (/^#?[0-9A-Fa-f]{8}$/.test(normalizedValue)) return true; // #RRGGBBAA or RRGGBBAA
 
   // Check for rgb/rgba functions
   // Supports: rgb(r,g,b), rgba(r,g,b,a), with or without spaces
-  if (/^rgba?\s*\(/i.test(value)) return true;
+  if (/^rgba?\s*\(/i.test(normalizedValue)) return true;
 
   // Check for hsl/hsla functions
   // Supports: hsl(h,s,l), hsla(h,s,l,a), with or without spaces
-  if (/^hsla?\s*\(/i.test(value)) return true;
+  if (/^hsla?\s*\(/i.test(normalizedValue)) return true;
 
   // Check for CSS color keywords (common ones)
   const colorKeywords = [
@@ -130,17 +138,17 @@ function isColorValue(value: string): boolean {
     'yellow', 'purple', 'pink', 'gray', 'grey', 'orange', 'cyan', 'magenta',
     'indigo', 'violet', 'brown', 'lime', 'teal', 'navy', 'maroon', 'olive'
   ];
-  if (colorKeywords.includes(value.toLowerCase())) return true;
+  if (colorKeywords.includes(normalizedValue.toLowerCase())) return true;
 
   // If it has a size unit, it's definitely NOT a color
   // Units: px, rem, em, %, vh, vw, vmin, vmax, ch, ex, cm, mm, in, pt, pc
-  if (/^-?\d*\.?\d+(px|rem|em|%|vh|vw|vmin|vmax|ch|ex|cm|mm|in|pt|pc)$/i.test(value)) {
+  if (/^-?\d*\.?\d+(px|rem|em|%|vh|vw|vmin|vmax|ch|ex|cm|mm|in|pt|pc)$/i.test(normalizedValue)) {
     return false;
   }
 
   // If it's just a number (with optional decimal), it's a size, not a color
   // Examples: 10, 1.5, 100, 0.5
-  if (/^-?\d*\.?\d+$/.test(value)) {
+  if (/^-?\d*\.?\d+$/.test(normalizedValue)) {
     return false;
   }
 
