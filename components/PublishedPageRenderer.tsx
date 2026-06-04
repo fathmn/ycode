@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { preload } from 'react-dom';
 import CustomCodeInjector from '@/components/CustomCodeInjector';
 import LightboxInitializer from '@/components/LightboxInitializer';
@@ -84,6 +85,10 @@ function scriptJson(value: unknown): string {
 
 function escapeStyleBoundary(css: string): string {
   return css.replace(/<\/style/gi, '<\\/style');
+}
+
+function fontStylesheetLoaderScript(url: string): string {
+  return `(function(){var href=${scriptJson(url)};if(document.querySelector('link[data-ycode-font-href="'+href.replace(/"/g,'\\"')+'"]'))return;var l=document.createElement('link');l.rel='stylesheet';l.href=href;l.dataset.ycodeFontHref=href;document.head.appendChild(l);})()`;
 }
 
 function safeGaMeasurementId(value?: string | null): string | null {
@@ -684,10 +689,18 @@ export default async function PublishedPageRenderer({
         </>
       )}
       {googleFontLinkUrls.map((url, i) => (
-        <link
-          key={`gfont-${i}`} rel="stylesheet"
-          href={url} data-ycode-font-href={url}
-        />
+        <Fragment key={`gfont-${i}`}>
+          <link
+            rel="preload" as="style"
+            href={url}
+          />
+          <script dangerouslySetInnerHTML={{ __html: fontStylesheetLoaderScript(url) }} />
+          <noscript
+            dangerouslySetInnerHTML={{
+              __html: `<link rel="stylesheet" href="${url.replace(/"/g, '&quot;')}">`,
+            }}
+          />
+        </Fragment>
       ))}
 
       {fontsCss && <style id="ycode-fonts" dangerouslySetInnerHTML={{ __html: escapeStyleBoundary(fontsCss) }} />}

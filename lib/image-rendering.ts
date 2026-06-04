@@ -59,7 +59,7 @@ export function getFallbackImageWidthForLayer(layer: ImageLayerLike): number {
 }
 
 export function getImageTransformQualityForLayer(layer: ImageLayerLike): number {
-  if (isPriorityImageLayer(layer)) return 82;
-  if (isSmallBrandImageLayer(layer)) return 80;
+  if (isPriorityImageLayer(layer)) return 74;
+  if (isSmallBrandImageLayer(layer)) return 70;
   return 80;
 }
