@@ -93,11 +93,11 @@ export default function EmailSettingsPage() {
             savedModeRef.current = mode;
           }
         } else if (response.status !== 404) {
-          throw new Error('Failed to load email settings');
+          throw new Error('E-Mail-Einstellungen konnten nicht geladen werden');
         }
       } catch (err) {
         console.error('Error loading email settings:', err);
-        setError('Failed to load email settings');
+        setError('E-Mail-Einstellungen konnten nicht geladen werden');
       } finally {
         setIsLoading(false);
       }
@@ -155,7 +155,7 @@ export default function EmailSettingsPage() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to save email settings');
+        throw new Error('E-Mail-Einstellungen konnten nicht gespeichert werden');
       }
 
       savedSettingsRef.current = { ...savePayload };
@@ -164,7 +164,7 @@ export default function EmailSettingsPage() {
       setHasChanges(false);
     } catch (err) {
       console.error('Error saving email settings:', err);
-      setError('Failed to save email settings');
+      setError('E-Mail-Einstellungen konnten nicht gespeichert werden');
     } finally {
       setIsSaving(false);
     }
@@ -185,13 +185,13 @@ export default function EmailSettingsPage() {
       const result = await response.json();
 
       if (response.ok) {
-        setTestResult({ success: true, message: 'Connection successful!' });
+        setTestResult({ success: true, message: 'Verbindung erfolgreich.' });
       } else {
-        setTestResult({ success: false, message: result.error || 'Connection failed' });
+        setTestResult({ success: false, message: result.error || 'Verbindung fehlgeschlagen' });
       }
     } catch (err) {
       console.error('Error testing connection:', err);
-      setTestResult({ success: false, message: 'Failed to test connection' });
+      setTestResult({ success: false, message: 'Verbindungstest fehlgeschlagen' });
     } finally {
       setIsTesting(false);
     }
@@ -237,11 +237,11 @@ export default function EmailSettingsPage() {
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-muted-foreground">Studio</span>
                 <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                  Only available on Cloud
+                  Nur in der Cloud verfügbar
                 </span>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Managed email delivery powered by Studio — no configuration required
+                Verwalteter E-Mail-Versand über Studio, keine Konfiguration erforderlich.
               </p>
             </div>
           </div>
@@ -272,9 +272,9 @@ export default function EmailSettingsPage() {
               </div>
             </div>
             <div className="flex-1">
-              <span className="text-sm font-medium">Custom</span>
+              <span className="text-sm font-medium">Eigener SMTP-Server</span>
               <p className="text-xs text-muted-foreground mt-1">
-                Use your own SMTP server credentials to send emails
+                Eigene SMTP-Zugangsdaten für den Versand von E-Mails verwenden.
               </p>
             </div>
           </button>
@@ -283,16 +283,16 @@ export default function EmailSettingsPage() {
           {selectedMode === 'custom' && (
             <div className="flex flex-col gap-6 bg-secondary/20 p-8 rounded-lg">
               <Field>
-                <FieldLabel htmlFor="smtp-provider">Provider</FieldLabel>
+                <FieldLabel htmlFor="smtp-provider">Anbieter</FieldLabel>
                 <FieldDescription>
-                  Select your email provider for pre-configured settings
+                  E-Mail-Anbieter für vorkonfigurierte Einstellungen auswählen.
                 </FieldDescription>
                 <Select
                   value={settings.provider}
                   onValueChange={(value) => handleProviderChange(value as SmtpProvider)}
                 >
                   <SelectTrigger id="smtp-provider" className="w-full">
-                    <SelectValue placeholder="Select provider" />
+                    <SelectValue placeholder="Anbieter auswählen" />
                   </SelectTrigger>
                   <SelectContent>
                     {SMTP_PROVIDER_OPTIONS.map((option) => (
@@ -312,7 +312,7 @@ export default function EmailSettingsPage() {
               <Field>
                 <FieldLabel htmlFor="smtp-host">SMTP Host</FieldLabel>
                 <FieldDescription>
-                  The hostname of your SMTP server
+                  Hostname des SMTP-Servers.
                 </FieldDescription>
                 <Input
                   id="smtp-host"
@@ -325,7 +325,7 @@ export default function EmailSettingsPage() {
               <Field>
                 <FieldLabel htmlFor="smtp-port">SMTP Port</FieldLabel>
                 <FieldDescription>
-                  The port of your SMTP server (587 for TLS, 465 for SSL)
+                  Port des SMTP-Servers (587 für TLS, 465 für SSL).
                 </FieldDescription>
                 <Input
                   id="smtp-port"
@@ -336,9 +336,9 @@ export default function EmailSettingsPage() {
               </Field>
 
               <Field>
-                <FieldLabel htmlFor="smtp-user">SMTP Username</FieldLabel>
+                <FieldLabel htmlFor="smtp-user">SMTP-Benutzername</FieldLabel>
                 <FieldDescription>
-                  The username for SMTP authentication
+                  Benutzername für die SMTP-Authentifizierung.
                 </FieldDescription>
                 <Input
                   id="smtp-user"
@@ -349,9 +349,9 @@ export default function EmailSettingsPage() {
               </Field>
 
               <Field>
-                <FieldLabel htmlFor="smtp-password">SMTP Password</FieldLabel>
+                <FieldLabel htmlFor="smtp-password">SMTP-Passwort</FieldLabel>
                 <FieldDescription>
-                  The password or app-specific password for SMTP authentication
+                  Passwort oder app-spezifisches Passwort für die SMTP-Authentifizierung.
                 </FieldDescription>
                 <Input
                   id="smtp-password"
@@ -363,9 +363,9 @@ export default function EmailSettingsPage() {
               </Field>
 
               <Field>
-                <FieldLabel htmlFor="from-email">From Email</FieldLabel>
+                <FieldLabel htmlFor="from-email">Absender-E-Mail</FieldLabel>
                 <FieldDescription>
-                  The email address that will appear as the sender
+                  E-Mail-Adresse, die als Absender angezeigt wird.
                 </FieldDescription>
                 <Input
                   id="from-email"
@@ -377,9 +377,9 @@ export default function EmailSettingsPage() {
               </Field>
 
               <Field>
-                <FieldLabel htmlFor="from-name">From Name</FieldLabel>
+                <FieldLabel htmlFor="from-name">Absendername</FieldLabel>
                 <FieldDescription>
-                  The name that will appear as the sender
+                  Name, der als Absender angezeigt wird.
                 </FieldDescription>
                 <Input
                   id="from-name"
@@ -407,7 +407,7 @@ export default function EmailSettingsPage() {
                   onClick={handleTestConnection}
                   disabled={isTesting || !settings.smtpHost || !settings.smtpUser}
                 >
-                  {isTesting ? <Spinner className="size-4" /> : 'Test Connection'}
+                  {isTesting ? <Spinner className="size-4" /> : 'Verbindung testen'}
                 </Button>
               </div>
             </div>
@@ -416,7 +416,7 @@ export default function EmailSettingsPage() {
           {hasChanges && (
             <div className="flex justify-end">
               <Button onClick={handleSave} disabled={isSaving}>
-                {isSaving ? <Spinner className="size-4" /> : 'Save changes'}
+                {isSaving ? <Spinner className="size-4" /> : 'Änderungen speichern'}
               </Button>
             </div>
           )}

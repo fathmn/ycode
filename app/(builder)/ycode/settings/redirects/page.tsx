@@ -59,11 +59,11 @@ export default function RedirectsSettingsPage() {
           // No redirects setting yet, start with empty array
           setRedirects([]);
         } else {
-          throw new Error('Failed to load redirects');
+          throw new Error('Weiterleitungen konnten nicht geladen werden');
         }
       } catch (err) {
         console.error('Error loading redirects:', err);
-        setError('Failed to load redirects');
+        setError('Weiterleitungen konnten nicht geladen werden');
       } finally {
         setIsLoading(false);
       }
@@ -84,13 +84,13 @@ export default function RedirectsSettingsPage() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to save redirects');
+        throw new Error('Weiterleitungen konnten nicht gespeichert werden');
       }
 
       setRedirects(newRedirects);
     } catch (err) {
       console.error('Error saving redirects:', err);
-      setError('Failed to save redirects');
+      setError('Weiterleitungen konnten nicht gespeichert werden');
       throw err;
     } finally {
       setIsSaving(false);
@@ -166,16 +166,15 @@ export default function RedirectsSettingsPage() {
     <div className="p-8">
       <div className="max-w-3xl mx-auto">
         <header className="pt-8 pb-3">
-          <span className="text-base font-medium">Redirects</span>
+          <span className="text-base font-medium">Weiterleitungen</span>
         </header>
 
         <div className="flex flex-col gap-6 bg-secondary/20 p-8 rounded-lg">
           <header className="flex justify-between">
             <div>
-              <FieldLegend>Redirects</FieldLegend>
+              <FieldLegend>Weiterleitungen</FieldLegend>
               <FieldDescription>
-                Redirect site visitors and search engines from old URL to new
-                URL.
+                Besucher und Suchmaschinen von einer alten URL auf eine neue URL weiterleiten.
               </FieldDescription>
             </div>
 
@@ -186,7 +185,7 @@ export default function RedirectsSettingsPage() {
                 onClick={() => setShowAddDialog(true)}
                 disabled={isSaving}
               >
-                Add redirect
+                Weiterleitung hinzufügen
               </Button>
             </div>
           </header>
@@ -232,12 +231,12 @@ export default function RedirectsSettingsPage() {
                       <DropdownMenuItem
                         onClick={() => handleEditRedirect(redirect)}
                       >
-                        Edit
+                        Bearbeiten
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={() => handleDeleteRedirect(redirect.id)}
                       >
-                        Delete
+                        Löschen
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -246,7 +245,7 @@ export default function RedirectsSettingsPage() {
             </div>
           ) : (
             <div className="border-t pt-8 pb-4 text-center text-muted-foreground text-sm">
-              No redirects yet. Click &ldquo;Add redirect&rdquo; to create one.
+              Noch keine Weiterleitungen. Zum Erstellen auf &ldquo;Weiterleitung hinzufügen&rdquo; klicken.
             </div>
           )}
         </div>
@@ -262,14 +261,14 @@ export default function RedirectsSettingsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add redirect</DialogTitle>
+            <DialogTitle>Weiterleitung hinzufügen</DialogTitle>
           </DialogHeader>
 
           <div className="flex flex-col gap-6">
             <Field>
-              <FieldLabel htmlFor="add-old-url">Old URL</FieldLabel>
+              <FieldLabel htmlFor="add-old-url">Alte URL</FieldLabel>
               <FieldDescription>
-                The URL path to redirect from (e.g. /old-page)
+                URL-Pfad, von dem weitergeleitet werden soll (z. B. /alte-seite).
               </FieldDescription>
               <Input
                 id="add-old-url"
@@ -281,14 +280,13 @@ export default function RedirectsSettingsPage() {
             </Field>
 
             <Field>
-              <FieldLabel htmlFor="add-new-url">New URL</FieldLabel>
+              <FieldLabel htmlFor="add-new-url">Neue URL</FieldLabel>
               <FieldDescription>
-                Internal path (e.g. /new-page) or external URL (e.g.
-                https://example.com)
+                Interner Pfad (z. B. /neue-seite) oder externe URL (z. B. https://example.com).
               </FieldDescription>
               <Input
                 id="add-new-url"
-                placeholder="/new-page or https://example.com"
+                placeholder="/neue-seite oder https://example.com"
                 value={newUrl}
                 onChange={(e) => setNewUrl(e.target.value)}
               />
@@ -304,13 +302,13 @@ export default function RedirectsSettingsPage() {
               }}
               disabled={isSaving}
             >
-              Cancel
+              Abbrechen
             </Button>
             <Button
               onClick={handleAddRedirect}
               disabled={!oldUrl || !newUrl || isSaving}
             >
-              {isSaving ? <Spinner className="size-4" /> : 'Add redirect'}
+              {isSaving ? <Spinner className="size-4" /> : 'Weiterleitung hinzufügen'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -326,14 +324,14 @@ export default function RedirectsSettingsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit redirect</DialogTitle>
+            <DialogTitle>Weiterleitung bearbeiten</DialogTitle>
           </DialogHeader>
 
           <div className="flex flex-col gap-6">
             <Field>
-              <FieldLabel htmlFor="edit-old-url">Old URL</FieldLabel>
+              <FieldLabel htmlFor="edit-old-url">Alte URL</FieldLabel>
               <FieldDescription>
-                The URL path to redirect from (e.g. /old-page)
+                URL-Pfad, von dem weitergeleitet werden soll (z. B. /alte-seite).
               </FieldDescription>
               <Input
                 id="edit-old-url"
@@ -345,14 +343,13 @@ export default function RedirectsSettingsPage() {
             </Field>
 
             <Field>
-              <FieldLabel htmlFor="edit-new-url">New URL</FieldLabel>
+              <FieldLabel htmlFor="edit-new-url">Neue URL</FieldLabel>
               <FieldDescription>
-                Internal path (e.g. /new-page) or external URL (e.g.
-                https://example.com)
+                Interner Pfad (z. B. /neue-seite) oder externe URL (z. B. https://example.com).
               </FieldDescription>
               <Input
                 id="edit-new-url"
-                placeholder="/new-page or https://example.com"
+                placeholder="/neue-seite oder https://example.com"
                 value={newUrl}
                 onChange={(e) => setNewUrl(e.target.value)}
               />
@@ -369,14 +366,14 @@ export default function RedirectsSettingsPage() {
               }}
               disabled={isSaving}
             >
-              Cancel
+              Abbrechen
             </Button>
             <Button
               size="sm"
               onClick={handleSaveEdit}
               disabled={!oldUrl || !newUrl || isSaving}
             >
-              {isSaving ? <Spinner className="size-4" /> : 'Save changes'}
+              {isSaving ? <Spinner className="size-4" /> : 'Änderungen speichern'}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -99,11 +99,11 @@ interface WebhookDelivery {
 
 // Event type labels for UI
 const EVENT_TYPES: { value: WebhookEventType; label: string; description: string }[] = [
-  { value: 'form.submitted', label: 'Form Submitted', description: 'When a form submission is received' },
-  { value: 'site.published', label: 'Site Published', description: 'When the site is published' },
-  { value: 'collection_item.created', label: 'Collection Item Created', description: 'When a CMS item is created' },
-  { value: 'collection_item.updated', label: 'Collection Item Updated', description: 'When a CMS item is updated' },
-  { value: 'collection_item.deleted', label: 'Collection Item Deleted', description: 'When a CMS item is deleted' },
+  { value: 'form.submitted', label: 'Formular gesendet', description: 'Wenn eine Formular-Einsendung eingeht' },
+  { value: 'site.published', label: 'Website veröffentlicht', description: 'Wenn die Website veröffentlicht wird' },
+  { value: 'collection_item.created', label: 'CMS-Eintrag erstellt', description: 'Wenn ein CMS-Eintrag erstellt wird' },
+  { value: 'collection_item.updated', label: 'CMS-Eintrag aktualisiert', description: 'Wenn ein CMS-Eintrag aktualisiert wird' },
+  { value: 'collection_item.deleted', label: 'CMS-Eintrag gelöscht', description: 'Wenn ein CMS-Eintrag gelöscht wird' },
 ];
 
 // =============================================================================
@@ -162,7 +162,7 @@ export default function WebhooksPage() {
       }
     } catch (error) {
       console.error('Failed to fetch webhooks:', error);
-      toast.error('Failed to load webhooks');
+      toast.error('Webhooks konnten nicht geladen werden');
     } finally {
       setIsLoading(false);
     }
@@ -201,7 +201,7 @@ export default function WebhooksPage() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || `Failed to ${isEditing ? 'update' : 'create'} webhook`);
+        throw new Error(result.error || `Webhook konnte nicht ${isEditing ? 'aktualisiert' : 'erstellt'} werden`);
       }
 
       if (result.data) {
@@ -223,7 +223,7 @@ export default function WebhooksPage() {
         closeWebhookSheet();
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save webhook');
+      toast.error(error instanceof Error ? error.message : 'Webhook konnte nicht gespeichert werden');
     } finally {
       setIsSaving(false);
     }
@@ -239,13 +239,13 @@ export default function WebhooksPage() {
 
       if (!response.ok) {
         const result = await response.json();
-        throw new Error(result.error || 'Failed to delete webhook');
+        throw new Error(result.error || 'Webhook konnte nicht gelöscht werden');
       }
 
       setWebhooks((prev) => prev.filter((w) => w.id !== webhookToDelete.id));
-      toast.success('Webhook deleted');
+      toast.success('Webhook gelöscht');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to delete webhook');
+      toast.error(error instanceof Error ? error.message : 'Webhook konnte nicht gelöscht werden');
     } finally {
       setShowDeleteDialog(false);
       setWebhookToDelete(null);
@@ -263,14 +263,14 @@ export default function WebhooksPage() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to update webhook');
+        throw new Error(result.error || 'Webhook konnte nicht aktualisiert werden');
       }
 
       setWebhooks((prev) =>
         prev.map((w) => (w.id === webhook.id ? { ...w, enabled: !webhook.enabled } : w))
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update webhook');
+      toast.error(error instanceof Error ? error.message : 'Webhook konnte nicht aktualisiert werden');
     }
   };
 
@@ -292,7 +292,7 @@ export default function WebhooksPage() {
       // Refresh webhooks to update last_triggered_at
       fetchWebhooks();
     } catch (error) {
-      toast.error('Failed to send test webhook');
+      toast.error('Test-Webhook konnte nicht gesendet werden');
     } finally {
       setTestingWebhookId(null);
     }
@@ -312,7 +312,7 @@ export default function WebhooksPage() {
       }
     } catch (error) {
       console.error('Failed to fetch deliveries:', error);
-      toast.error('Failed to load delivery logs');
+      toast.error('Auslieferungs-Logs konnten nicht geladen werden');
     } finally {
       setIsLoadingDeliveries(false);
     }
@@ -391,7 +391,7 @@ export default function WebhooksPage() {
   };
 
   const formatRelativeTime = (dateString: string | null) => {
-    if (!dateString) return 'Never';
+    if (!dateString) return 'Nie';
 
     const date = new Date(dateString);
     const now = new Date();
@@ -400,12 +400,18 @@ export default function WebhooksPage() {
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
 
-    if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
+    if (diffMins < 1) return 'Gerade eben';
+    if (diffMins < 60) return `vor ${diffMins} Min.`;
+    if (diffHours < 24) return `vor ${diffHours} Std.`;
+    if (diffDays < 7) return `vor ${diffDays} T.`;
 
     return formatDate(dateString);
+  };
+
+  const formatDeliveryStatus = (status: WebhookDelivery['status']) => {
+    if (status === 'success') return 'Erfolgreich';
+    if (status === 'failed') return 'Fehlgeschlagen';
+    return 'Ausstehend';
   };
 
   return (
@@ -418,12 +424,12 @@ export default function WebhooksPage() {
             size="sm"
             onClick={openCreateSheet}
           >
-            Create webhook
+            Webhook erstellen
           </Button>
         </header>
 
         <p className="text-sm text-muted-foreground mb-6">
-          Receive real-time notifications when events occur in your Studio site.
+          Echtzeit-Benachrichtigungen empfangen, wenn Ereignisse auf dieser Studio-Website auftreten.
         </p>
 
         {isLoading ? (
@@ -443,7 +449,7 @@ export default function WebhooksPage() {
                     <Label className="font-medium">{webhook.name}</Label>
                     {webhook.failure_count > 0 && (
                       <Badge variant="destructive">
-                        {webhook.failure_count} failures
+                        {webhook.failure_count} Fehler
                       </Badge>
                     )}
                     {webhook.events.slice(0, 3).map((event) => (
@@ -457,7 +463,7 @@ export default function WebhooksPage() {
                     ))}
                     {webhook.events.length > 3 && (
                       <Badge variant="secondary" className="text-[10px]">
-                        +{webhook.events.length - 3} more
+                        +{webhook.events.length - 3} weitere
                       </Badge>
                     )}
                   </div>
@@ -478,14 +484,14 @@ export default function WebhooksPage() {
                           onClick={() => handleTestWebhook(webhook)}
                           disabled={testingWebhookId === webhook.id}
                         >
-                          {testingWebhookId === webhook.id ? 'Sending...' : 'Send test'}
+                          {testingWebhookId === webhook.id ? 'Sendet...' : 'Test senden'}
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handleViewDeliveries(webhook)}>
-                          View deliveries
+                          Auslieferungen anzeigen
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem onClick={() => openEditSheet(webhook)}>
-                          Edit
+                          Bearbeiten
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           className="text-destructive focus:text-destructive"
@@ -494,7 +500,7 @@ export default function WebhooksPage() {
                             setShowDeleteDialog(true);
                           }}
                         >
-                          Delete
+                          Löschen
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -516,14 +522,14 @@ export default function WebhooksPage() {
                       </Badge>
                     )}
                   </div>
-                  <span className="shrink-0">Last triggered: {formatRelativeTime(webhook.last_triggered_at)}</span>
+                  <span className="shrink-0">Zuletzt ausgelöst: {formatRelativeTime(webhook.last_triggered_at)}</span>
                 </div>
               </div>
             ))}
           </div>
         ) : (
           <div className="py-12 text-center text-muted-foreground text-sm border border-dashed rounded-lg">
-            No webhooks configured yet. Click &ldquo;Create webhook&rdquo; to get started.
+            Noch keine Webhooks konfiguriert. Zum Starten auf &ldquo;Webhook erstellen&rdquo; klicken.
           </div>
         )}
 
@@ -543,10 +549,10 @@ export default function WebhooksPage() {
         <SheetContent className="sm:max-w-lg overflow-y-auto">
           <SheetHeader>
             <SheetTitle className="mr-auto">
-              {editingWebhook ? 'Edit webhook' : 'Create webhook'}
+              {editingWebhook ? 'Webhook bearbeiten' : 'Webhook erstellen'}
             </SheetTitle>
             <SheetDescription className="sr-only">
-              {editingWebhook ? 'Update webhook configuration.' : 'Configure a new webhook endpoint.'}
+              {editingWebhook ? 'Webhook-Konfiguration aktualisieren.' : 'Neuen Webhook-Endpunkt konfigurieren.'}
             </SheetDescription>
           </SheetHeader>
 
@@ -555,7 +561,7 @@ export default function WebhooksPage() {
               <FieldLabel htmlFor="webhook-name">Name</FieldLabel>
               <Input
                 id="webhook-name"
-                placeholder="e.g., Form Notifications"
+                placeholder="z. B. Formular-Benachrichtigungen"
                 value={webhookName}
                 onChange={(e) => setWebhookName(e.target.value)}
               />
@@ -564,7 +570,7 @@ export default function WebhooksPage() {
             <Field>
               <FieldLabel htmlFor="webhook-url">URL</FieldLabel>
               <FieldDescription>
-                The endpoint that will receive webhook POST requests.
+                Endpunkt, der Webhook-POST-Anfragen empfängt.
               </FieldDescription>
               <Input
                 id="webhook-url"
@@ -576,9 +582,9 @@ export default function WebhooksPage() {
             </Field>
 
             <Field>
-              <FieldLabel>Event</FieldLabel>
+              <FieldLabel>Ereignis</FieldLabel>
               <FieldDescription>
-                Select which event should trigger this webhook.
+                Ereignis auswählen, das diesen Webhook auslösen soll.
               </FieldDescription>
               <Select
                 value={webhookEvent}
@@ -590,7 +596,7 @@ export default function WebhooksPage() {
                 }}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select an event" />
+                  <SelectValue placeholder="Ereignis auswählen" />
                 </SelectTrigger>
                 <SelectContent>
                   {EVENT_TYPES.map((event) => (
@@ -608,13 +614,13 @@ export default function WebhooksPage() {
             {/* Resource Filters - show based on selected event */}
             {webhookEvent === 'form.submitted' && (
               <Field>
-                <FieldLabel>Form filter</FieldLabel>
+                <FieldLabel>Formularfilter</FieldLabel>
                 <FieldDescription>
-                  Only trigger for a specific form, or leave as &ldquo;All forms&rdquo;.
+                  Nur für ein bestimmtes Formular auslösen oder bei &ldquo;Alle Formulare&rdquo; belassen.
                 </FieldDescription>
                 {isLoadingFilterData ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
-                    <Spinner /> Loading forms...
+                    <Spinner /> Formulare werden geladen...
                   </div>
                 ) : (
                   <Select
@@ -622,16 +628,16 @@ export default function WebhooksPage() {
                     onValueChange={(value) => setWebhookFilterFormId(value === '__all__' ? '' : value)}
                   >
                     <SelectTrigger className="text-xs">
-                      <SelectValue placeholder="All forms" />
+                      <SelectValue placeholder="Alle Formulare" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__all__">All forms</SelectItem>
+                      <SelectItem value="__all__">Alle Formulare</SelectItem>
                       {forms.map((form) => (
                         <SelectItem
                           key={form.form_id}
                           value={form.form_id}
                         >
-                          {form.form_id} ({form.submission_count} submissions)
+                          {form.form_id} ({form.submission_count} Einsendungen)
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -644,13 +650,13 @@ export default function WebhooksPage() {
               webhookEvent === 'collection_item.updated' ||
               webhookEvent === 'collection_item.deleted') && (
               <Field>
-                <FieldLabel>Collection filter</FieldLabel>
+                <FieldLabel>Collection-Filter</FieldLabel>
                 <FieldDescription>
-                  Only trigger for a specific collection, or leave as &ldquo;All collections&rdquo;.
+                  Nur für eine bestimmte Collection auslösen oder bei &ldquo;Alle Collections&rdquo; belassen.
                 </FieldDescription>
                 {isLoadingFilterData ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
-                    <Spinner /> Loading collections...
+                    <Spinner /> Collections werden geladen...
                   </div>
                 ) : (
                   <Select
@@ -658,10 +664,10 @@ export default function WebhooksPage() {
                     onValueChange={(value) => setWebhookFilterCollectionId(value === '__all__' ? '' : value)}
                   >
                     <SelectTrigger className="text-xs">
-                      <SelectValue placeholder="All collections" />
+                      <SelectValue placeholder="Alle Collections" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__all__">All collections</SelectItem>
+                      <SelectItem value="__all__">Alle Collections</SelectItem>
                       {collections.map((collection) => (
                         <SelectItem
                           key={collection.id}
@@ -679,23 +685,23 @@ export default function WebhooksPage() {
             {editingWebhook ? (
               <div className="flex items-center justify-between">
                 <div>
-                  <Label className="text-sm">Signing secret</Label>
+                  <Label className="text-sm">Signatur-Secret</Label>
                   <p className="text-xs text-muted-foreground">
-                    {editingWebhook.secret ? 'A signing secret is configured for this webhook.' : 'No signing secret configured.'}
+                    {editingWebhook.secret ? 'Für diesen Webhook ist ein Signatur-Secret konfiguriert.' : 'Kein Signatur-Secret konfiguriert.'}
                   </p>
                 </div>
                 <Badge variant={editingWebhook.secret ? 'default' : 'secondary'}>
-                  {editingWebhook.secret ? 'Enabled' : 'Disabled'}
+                  {editingWebhook.secret ? 'Aktiviert' : 'Deaktiviert'}
                 </Badge>
               </div>
             ) : (
               <div className="flex items-center justify-between">
                 <div>
                   <Label htmlFor="generate-secret" className="text-sm">
-                    Generate signing secret
+                    Signatur-Secret generieren
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    Recommended for security
+                    Aus Sicherheitsgründen empfohlen
                   </p>
                 </div>
                 <Switch
@@ -712,16 +718,16 @@ export default function WebhooksPage() {
                 disabled={!webhookName.trim() || !webhookUrl.trim() || !webhookEvent || isSaving}
               >
                 {isSaving
-                  ? 'Saving...'
+                  ? 'Speichert...'
                   : editingWebhook
-                    ? 'Save changes'
-                    : 'Create webhook'}
+                    ? 'Änderungen speichern'
+                    : 'Webhook erstellen'}
               </Button>
               <Button
                 variant="secondary"
                 onClick={closeWebhookSheet}
               >
-                Cancel
+                Abbrechen
               </Button>
             </div>
           </div>
@@ -741,9 +747,9 @@ export default function WebhooksPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Webhook created</DialogTitle>
+            <DialogTitle>Webhook erstellt</DialogTitle>
             <DialogDescription>
-              Copy your signing secret now. You won&apos;t be able to see it again.
+              Signatur-Secret jetzt kopieren. Es wird später nicht erneut angezeigt.
             </DialogDescription>
           </DialogHeader>
 
@@ -764,12 +770,12 @@ export default function WebhooksPage() {
                   {copied ? (
                     <>
                       <Icon name="check" className="size-3.5 mr-1" />
-                      Copied
+                      Kopiert
                     </>
                   ) : (
                     <>
                       <Icon name="copy" className="size-3.5 mr-1" />
-                      Copy
+                      Kopieren
                     </>
                   )}
                 </Button>
@@ -777,8 +783,7 @@ export default function WebhooksPage() {
             </div>
 
             <div className="text-sm text-muted-foreground">
-              <strong>Important:</strong> Store this secret securely. Use it to verify
-              webhook signatures on your server.
+              <strong>Wichtig:</strong> Dieses Secret sicher speichern. Es wird genutzt, um Webhook-Signaturen auf dem Server zu prüfen.
             </div>
           </div>
 
@@ -790,7 +795,7 @@ export default function WebhooksPage() {
                 setCopied(false);
               }}
             >
-              Done
+              Fertig
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -800,10 +805,10 @@ export default function WebhooksPage() {
       <ConfirmDialog
         open={showDeleteDialog}
         onOpenChange={setShowDeleteDialog}
-        title="Delete webhook?"
-        description={`This will permanently delete the webhook "${webhookToDelete?.name}" and all its delivery logs.`}
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
+        title="Webhook löschen?"
+        description={`Dadurch wird der Webhook "${webhookToDelete?.name}" inklusive aller Auslieferungs-Logs dauerhaft gelöscht.`}
+        confirmLabel="Löschen"
+        cancelLabel="Abbrechen"
         confirmVariant="destructive"
         onConfirm={handleDeleteWebhook}
         onCancel={() => {
@@ -816,9 +821,9 @@ export default function WebhooksPage() {
       <Sheet open={showDeliveriesSheet} onOpenChange={setShowDeliveriesSheet}>
         <SheetContent className="sm:max-w-lg overflow-y-auto">
           <SheetHeader>
-            <SheetTitle className="mr-auto">Delivery Logs</SheetTitle>
+            <SheetTitle className="mr-auto">Auslieferungs-Logs</SheetTitle>
             <SheetDescription className="sr-only">
-              Recent webhook deliveries for {selectedWebhook?.name}
+              Aktuelle Webhook-Auslieferungen für {selectedWebhook?.name}
             </SheetDescription>
           </SheetHeader>
 
@@ -829,7 +834,7 @@ export default function WebhooksPage() {
               </div>
             ) : deliveries.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground text-sm">
-                No deliveries yet
+                Noch keine Auslieferungen
               </div>
             ) : (
               <div className="space-y-3">
@@ -848,7 +853,7 @@ export default function WebhooksPage() {
                               : 'secondary'
                         }
                       >
-                        {delivery.status}
+                        {formatDeliveryStatus(delivery.status)}
                       </Badge>
                       <span className="text-xs text-muted-foreground">
                         {formatDate(delivery.created_at)}

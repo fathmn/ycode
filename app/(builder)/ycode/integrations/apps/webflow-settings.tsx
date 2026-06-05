@@ -339,7 +339,7 @@ export default function WebflowSettings({
             size="xs"
             onClick={() => setShowDisconnect(true)}
           >
-            Disconnect
+            Trennen
           </Button>
         )}
         <SheetDescription className="sr-only">
@@ -454,7 +454,7 @@ export default function WebflowSettings({
                 {isLoadingPreview && (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Spinner className="size-3" />
-                    <span>Loading collections...</span>
+                    <span>Collections werden geladen...</span>
                   </div>
                 )}
 
@@ -538,10 +538,10 @@ export default function WebflowSettings({
       <ConfirmDialog
         open={showDisconnect}
         onOpenChange={setShowDisconnect}
-        title="Disconnect Webflow?"
-        description="This removes your token and all import records. Studio collections created by past migrations will remain."
-        confirmLabel="Disconnect"
-        cancelLabel="Cancel"
+        title="Webflow trennen?"
+        description="Dadurch werden der Token und alle Import-Einträge entfernt. Studio-Collections aus früheren Migrationen bleiben erhalten."
+        confirmLabel="Trennen"
+        cancelLabel="Abbrechen"
         confirmVariant="destructive"
         onConfirm={handleDisconnect}
         onCancel={() => setShowDisconnect(false)}
@@ -551,10 +551,10 @@ export default function WebflowSettings({
       <ConfirmDialog
         open={!!importToRemove}
         onOpenChange={(open: boolean) => { if (!open) setImportToRemove(null); }}
-        title="Remove import?"
-        description={`Removes the link to "${importToRemove?.siteName}". Re-sync won't be possible, but the Studio collections themselves will stay.`}
-        confirmLabel="Remove"
-        cancelLabel="Cancel"
+        title="Import entfernen?"
+        description={`Entfernt die Verbindung zu "${importToRemove?.siteName}". Eine erneute Synchronisierung ist nicht möglich, die Studio-Collections bleiben jedoch erhalten.`}
+        confirmLabel="Entfernen"
+        cancelLabel="Abbrechen"
         confirmVariant="destructive"
         onConfirm={handleRemoveImport}
         onCancel={() => setImportToRemove(null)}
@@ -610,13 +610,13 @@ function ImportCard({
           disabled={isSyncing}
         >
           {isSyncing && <Spinner className="size-3" />}
-          Re-sync
+          Erneut synchronisieren
         </Button>
         <Button
           variant="ghost"
           size="xs"
           onClick={onRemove}
-          aria-label="Remove import"
+          aria-label="Import entfernen"
         >
           <Icon name="trash" />
         </Button>

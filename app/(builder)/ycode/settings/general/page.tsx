@@ -206,23 +206,23 @@ export default function GeneralSettingsPage() {
   // Handle asset selection from file manager with size validation
   const handleAssetSelect = useCallback((asset: Asset) => {
     const minSize = fileManagerMode === 'favicon' ? 32 : 256;
-    const label = fileManagerMode === 'favicon' ? 'Favicon' : 'Web clip';
+    const label = fileManagerMode === 'favicon' ? 'Favicon' : 'Webclip';
 
     // Validate image type
     if (!asset.mime_type?.startsWith('image/')) {
-      toast.error(`${label} must be an image file`);
+      toast.error(`${label} muss eine Bilddatei sein`);
       return false;
     }
 
     // Validate dimensions
     if (!asset.width || !asset.height) {
-      toast.error(`Unable to determine image dimensions`);
+      toast.error('Bildabmessungen konnten nicht ermittelt werden');
       return false;
     }
 
     if (asset.width < minSize || asset.height < minSize) {
-      toast.error(`${label} must be at least ${minSize}x${minSize} pixels`, {
-        description: `Selected image is ${asset.width}x${asset.height} pixels`,
+      toast.error(`${label} muss mindestens ${minSize}x${minSize} Pixel groß sein`, {
+        description: `Ausgewähltes Bild: ${asset.width}x${asset.height} Pixel`,
       });
       return false;
     }
@@ -262,13 +262,13 @@ export default function GeneralSettingsPage() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to reset project');
+        throw new Error(result.error || 'Projekt konnte nicht zurückgesetzt werden');
       }
 
       window.location.href = '/ycode';
     } catch (err) {
       console.error('Error resetting project:', err);
-      toast.error(err instanceof Error ? err.message : 'Failed to reset project');
+      toast.error(err instanceof Error ? err.message : 'Projekt konnte nicht zurückgesetzt werden');
       setIsResetting(false);
       setShowResetDialog(false);
     }
@@ -278,22 +278,22 @@ export default function GeneralSettingsPage() {
     <div className="p-8">
       <div className="max-w-3xl mx-auto">
         <header className="pt-8 pb-3">
-          <span className="text-base font-medium">General settings</span>
+          <span className="text-base font-medium">Allgemeine Einstellungen</span>
         </header>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="w-full">
             <TabsTrigger value="website">Website</TabsTrigger>
             <TabsTrigger value="seo">SEO</TabsTrigger>
-            <TabsTrigger value="custom-code">Custom code</TabsTrigger>
+            <TabsTrigger value="custom-code">Custom Code</TabsTrigger>
           </TabsList>
 
           <TabsContent value="website" className="mt-2 flex flex-col gap-4">
 
             <div className="grid grid-cols-3 gap-10 bg-secondary/20 p-8 rounded-lg">
               <div>
-                <FieldLegend>Main details</FieldLegend>
-                <FieldDescription>This information might be displayed publicly so be careful what you share.</FieldDescription>
+                <FieldLegend>Basisdaten</FieldLegend>
+                <FieldDescription>Diese Informationen können öffentlich angezeigt werden. Teilen Sie hier nur Inhalte, die auf der Website sichtbar sein dürfen.</FieldDescription>
               </div>
 
               <div className="col-span-2 grid grid-cols-2 gap-5">
@@ -301,11 +301,11 @@ export default function GeneralSettingsPage() {
                   <>
                     <Field>
                       <FieldLabel htmlFor="project-name">
-                        Project name
+                        Projektname
                       </FieldLabel>
                       <Input
                         id="project-name"
-                        placeholder="My website"
+                        placeholder="Meine Website"
                         required
                       />
                     </Field>
@@ -331,7 +331,7 @@ export default function GeneralSettingsPage() {
                       /* eslint-disable-next-line @next/next/no-img-element */
                       <img
                         src={faviconAsset.public_url}
-                        alt="Favicon preview"
+                        alt="Favicon-Vorschau"
                         className="size-8 object-contain"
                       />
                     ) : faviconAsset?.content ? (
@@ -342,7 +342,7 @@ export default function GeneralSettingsPage() {
                     ) : (
                       <Image
                         src={'/y-filled.svg'}
-                        alt="Favicon preview"
+                        alt="Favicon-Vorschau"
                         width={32}
                         height={32}
                         className="size-8"
@@ -355,7 +355,7 @@ export default function GeneralSettingsPage() {
                       Favicon
                     </FieldLabel>
                     <FieldDescription>
-                      32 x 32 pixels minimum. ICO, PNG, GIF, SVG, or JPG.
+                      Mindestens 32 x 32 Pixel. ICO, PNG, GIF, SVG oder JPG.
                     </FieldDescription>
                     <div className="flex gap-2">
                       <Button
@@ -364,7 +364,7 @@ export default function GeneralSettingsPage() {
                         className="w-fit"
                         onClick={() => handleOpenFileManager('favicon')}
                       >
-                        {faviconAssetId ? 'Change' : 'Select'}
+                        {faviconAssetId ? 'Ändern' : 'Auswählen'}
                       </Button>
                       {faviconAssetId && (
                         <Button
@@ -373,7 +373,7 @@ export default function GeneralSettingsPage() {
                           className="w-fit"
                           onClick={() => handleRemoveAsset('favicon')}
                         >
-                          Remove
+                          Entfernen
                         </Button>
                       )}
                     </div>
@@ -386,13 +386,13 @@ export default function GeneralSettingsPage() {
                       /* eslint-disable-next-line @next/next/no-img-element */
                       <img
                         src={webClipAsset.public_url}
-                        alt="Web clip preview"
+                        alt="Webclip-Vorschau"
                         className="size-16 rounded-[10px] object-cover"
                       />
                     ) : (
                       <Image
                         src={'/ycode-webclip.png'}
-                        alt="Web clip preview"
+                        alt="Webclip-Vorschau"
                         width={64}
                         height={64}
                         className="size-16 rounded-[10px]"
@@ -402,10 +402,10 @@ export default function GeneralSettingsPage() {
 
                   <div className="flex flex-col gap-2">
                     <FieldLabel>
-                      Web clip
+                      Webclip
                     </FieldLabel>
                     <FieldDescription>
-                      256 x 256 pixels minimum. Shown when web URLs are saved to a phone&apos;s home screen or browser bookmarks.
+                      Mindestens 256 x 256 Pixel. Wird angezeigt, wenn URLs auf dem Homescreen eines Smartphones oder in Browser-Lesezeichen gespeichert werden.
                     </FieldDescription>
                     <div className="flex gap-2">
                       <Button
@@ -414,7 +414,7 @@ export default function GeneralSettingsPage() {
                         className="w-fit"
                         onClick={() => handleOpenFileManager('webclip')}
                       >
-                        {webClipAssetId ? 'Change' : 'Select'}
+                        {webClipAssetId ? 'Ändern' : 'Auswählen'}
                       </Button>
                       {webClipAssetId && (
                         <Button
@@ -423,7 +423,7 @@ export default function GeneralSettingsPage() {
                           className="w-fit"
                           onClick={() => handleRemoveAsset('webclip')}
                         >
-                          Remove
+                          Entfernen
                         </Button>
                       )}
                     </div>
@@ -434,7 +434,7 @@ export default function GeneralSettingsPage() {
 
                 <Field className="col-span-2">
                   <FieldLabel htmlFor="timezone">
-                    Timezone
+                    Zeitzone
                   </FieldLabel>
                   <ButtonGroup className="w-full">
                     <Button
@@ -443,7 +443,7 @@ export default function GeneralSettingsPage() {
                       variant="secondary"
                       className="shrink-0 rounded-lg"
                       onClick={handleDetectTimezone}
-                      aria-label="Detect timezone automatically"
+                      aria-label="Zeitzone automatisch erkennen"
                     >
                       <Icon name="map" className="size-3.5" />
                     </Button>
@@ -452,7 +452,7 @@ export default function GeneralSettingsPage() {
 
                     <Select value={timezone || undefined} onValueChange={setTimezone}>
                       <SelectTrigger id="timezone" className="flex-1">
-                        <SelectValue placeholder="Select timezone" />
+                        <SelectValue placeholder="Zeitzone auswählen" />
                       </SelectTrigger>
                       <SelectContent>
                         {timezoneOptions.map((opt) => (
@@ -472,7 +472,7 @@ export default function GeneralSettingsPage() {
                     <FieldLabel htmlFor="badge">Studio Badge anzeigen</FieldLabel>
                     <FieldDescription>
                       {isCloudVersion()
-                        ? 'Upgrade to a project plan in order to disable the badge.'
+                        ? 'Für das Ausblenden des Badges ist ein Projekttarif erforderlich.'
                         : 'Optionales Studio Badge auf der Website anzeigen.'}
                     </FieldDescription>
                   </FieldContent>
@@ -491,7 +491,7 @@ export default function GeneralSettingsPage() {
                     onClick={saveWebsiteSettings}
                     disabled={isSavingWebsite}
                   >
-                    {isSavingWebsite ? 'Saving...' : 'Save changes'}
+                    {isSavingWebsite ? 'Speichert...' : 'Änderungen speichern'}
                   </Button>
                 </div>
               </div>
@@ -499,7 +499,7 @@ export default function GeneralSettingsPage() {
 
             <div className="grid grid-cols-3 gap-10 bg-secondary/20 p-8 rounded-lg">
               <div>
-                <FieldLegend>Danger zone</FieldLegend>
+                <FieldLegend>Gefahrenbereich</FieldLegend>
               </div>
 
               <div className="col-span-2 grid grid-cols-2 gap-5">
@@ -508,10 +508,10 @@ export default function GeneralSettingsPage() {
 
                   <div className="flex flex-col gap-2">
                     <FieldLabel>
-                      Reset project
+                      Projekt zurücksetzen
                     </FieldLabel>
                     <FieldDescription>
-                      Reset your project to a blank canvas. This will permanently delete all pages, CMS collections, assets, and settings.
+                      Setzt das Projekt auf eine leere Website zurück. Seiten, CMS-Collections, Assets und Einstellungen werden dauerhaft gelöscht.
                     </FieldDescription>
                     <div className="flex gap-2">
                       <Button
@@ -519,7 +519,7 @@ export default function GeneralSettingsPage() {
                         variant="destructive"
                         onClick={() => setShowResetDialog(true)}
                       >
-                        Reset project
+                        Projekt zurücksetzen
                       </Button>
                     </div>
                   </div>
@@ -533,8 +533,8 @@ export default function GeneralSettingsPage() {
           <TabsContent value="seo" className="mt-2">
             <div className="grid grid-cols-3 gap-10 bg-secondary/20 p-8 rounded-lg">
               <div>
-                <FieldLegend>SEO settings</FieldLegend>
-                <FieldDescription>These are global project SEO settings. You can individually adjust meta titles, descriptions and open graph info per collection item or via page settings.</FieldDescription>
+                <FieldLegend>SEO-Einstellungen</FieldLegend>
+                <FieldDescription>Globale SEO-Einstellungen für dieses Projekt. Meta-Titel, Beschreibungen und Open-Graph-Daten können zusätzlich pro Seite oder CMS-Eintrag angepasst werden.</FieldDescription>
               </div>
 
               <div className="col-span-2 grid grid-cols-2 gap-8">
@@ -543,7 +543,7 @@ export default function GeneralSettingsPage() {
                     Google Analytics Measurement ID
                   </FieldLabel>
                   <FieldDescription>
-                    Seamlessly integrate Google Analytics into your Studio site. As the site owner, you are responsible for ensuring your site complies with privacy regulations, such as GDPR, and handles data appropriately.
+                    Google Analytics in diese Website einbinden. Als Website-Betreiber sind Sie dafür verantwortlich, Datenschutzvorgaben wie die DSGVO einzuhalten.
                   </FieldDescription>
                   <Input
                     id="google-analytics-measurement-id"
@@ -558,7 +558,7 @@ export default function GeneralSettingsPage() {
                     Google Site Verification
                   </FieldLabel>
                   <FieldDescription>
-                    Verifying your site with Google will give you access to your website&apos;s private Google Search data. You will also be able to affect how Google Search crawls your site.
+                    Die Google-Verifizierung ermöglicht Zugriff auf private Google-Search-Daten dieser Website und hilft dabei, das Crawling zu steuern.
                   </FieldDescription>
                   <Input
                     id="google-site-verification"
@@ -570,10 +570,10 @@ export default function GeneralSettingsPage() {
 
                 <Field className="col-span-2">
                   <FieldLabel htmlFor="global-canonical-url">
-                    Global Canonical Tag URL
+                    Globale Canonical-URL
                   </FieldLabel>
                   <FieldDescription>
-                    Set the global URL to use in the canonical tag for this site so search engines know the proper URL to index and don&apos;t serve duplicate content.
+                    Legt die globale URL für den Canonical-Tag fest, damit Suchmaschinen die korrekte URL indexieren und doppelte Inhalte vermeiden.
                   </FieldDescription>
                   <Input
                     id="global-canonical-url"
@@ -585,10 +585,10 @@ export default function GeneralSettingsPage() {
 
                 <Field className="col-span-2">
                   <FieldLabel htmlFor="robots">
-                    Contents of &ldquo;robots.txt&rdquo;
+                    Inhalt von &ldquo;robots.txt&rdquo;
                   </FieldLabel>
                   <FieldDescription>
-                    If populated, will replace the content of the default /robots.txt file. Learn more about this file at robotstxt.org.
+                    Falls befüllt, ersetzt dieser Inhalt die Standarddatei /robots.txt.
                   </FieldDescription>
                   <Textarea
                     id="robots"
@@ -600,10 +600,10 @@ export default function GeneralSettingsPage() {
 
                 <Field className="col-span-2">
                   <FieldLabel htmlFor="llms">
-                    Contents of &ldquo;llms.txt&rdquo;
+                    Inhalt von &ldquo;llms.txt&rdquo;
                   </FieldLabel>
                   <FieldDescription>
-                    If populated, will replace the content of the default /llms.txt file. Learn more about this file at llmstxt.org.
+                    Falls befüllt, ersetzt dieser Inhalt die Standarddatei /llms.txt.
                   </FieldDescription>
                   <Textarea
                     id="llms"
@@ -619,33 +619,33 @@ export default function GeneralSettingsPage() {
                     Sitemap
                   </FieldLabel>
                   <FieldDescription>
-                    The sitemap.xml file improves your site&apos;s SEO by providing search engines with a detailed list of its pages. You can choose whether the file should be included or not and how its content should be configured.
+                    Die sitemap.xml unterstützt Suchmaschinen mit einer strukturierten Liste der Seiten. Hier kann festgelegt werden, ob und wie sie generiert wird.
                   </FieldDescription>
 
                   <Tabs value={activeSeoTab} onValueChange={handleSitemapTabChange}>
                     <TabsList className="w-full">
-                      <TabsTrigger value="no-sitemap">No sitemap</TabsTrigger>
-                      <TabsTrigger value="ycode-sitemap">Studio generated</TabsTrigger>
-                      <TabsTrigger value="custom-sitemap">Custom XML</TabsTrigger>
+                      <TabsTrigger value="no-sitemap">Keine Sitemap</TabsTrigger>
+                      <TabsTrigger value="ycode-sitemap">Von Studio generiert</TabsTrigger>
+                      <TabsTrigger value="custom-sitemap">Eigenes XML</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="no-sitemap" className="mt-4">
                       <p className="text-sm text-muted-foreground">
-                        No sitemap.xml file will be generated for your website.
+                        Für diese Website wird keine sitemap.xml generiert.
                       </p>
                     </TabsContent>
 
                     <TabsContent value="ycode-sitemap" className="mt-4 space-y-6">
                       <p className="text-sm text-muted-foreground">
-                        The sitemap automatically includes localized URLs with hreflang alternates and excludes pages marked with noindex.
+                        Die Sitemap enthält automatisch lokalisierte URLs mit hreflang-Alternativen und schließt Seiten aus, die auf noindex gesetzt sind.
                       </p>
 
                       <Field>
                         <FieldLabel htmlFor="sitemap-changefreq">
-                          Change frequency
+                          Änderungsfrequenz
                         </FieldLabel>
                         <FieldDescription>
-                          How frequently pages are likely to change (hint to search engines).
+                          Wie häufig Seiten voraussichtlich geändert werden. Dies ist ein Hinweis für Suchmaschinen.
                         </FieldDescription>
                         <Select
                           value={sitemapSettings.defaultChangeFrequency || 'weekly'}
@@ -655,13 +655,13 @@ export default function GeneralSettingsPage() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="always">Always</SelectItem>
-                            <SelectItem value="hourly">Hourly</SelectItem>
-                            <SelectItem value="daily">Daily</SelectItem>
-                            <SelectItem value="weekly">Weekly</SelectItem>
-                            <SelectItem value="monthly">Monthly</SelectItem>
-                            <SelectItem value="yearly">Yearly</SelectItem>
-                            <SelectItem value="never">Never</SelectItem>
+                            <SelectItem value="always">Immer</SelectItem>
+                            <SelectItem value="hourly">Stündlich</SelectItem>
+                            <SelectItem value="daily">Täglich</SelectItem>
+                            <SelectItem value="weekly">Wöchentlich</SelectItem>
+                            <SelectItem value="monthly">Monatlich</SelectItem>
+                            <SelectItem value="yearly">Jährlich</SelectItem>
+                            <SelectItem value="never">Nie</SelectItem>
                           </SelectContent>
                         </Select>
                       </Field>
@@ -670,10 +670,10 @@ export default function GeneralSettingsPage() {
                     <TabsContent value="custom-sitemap" className="mt-4">
                       <Field>
                         <FieldLabel htmlFor="custom-sitemap-xml">
-                          Custom sitemap XML
+                          Eigenes Sitemap-XML
                         </FieldLabel>
                         <FieldDescription>
-                          Paste your custom sitemap XML content below. This will completely replace the auto-generated sitemap.
+                          Eigenen Sitemap-XML-Inhalt einfügen. Dieser ersetzt die automatisch generierte Sitemap vollständig.
                         </FieldDescription>
                         <Textarea
                           id="custom-sitemap-xml"
@@ -703,7 +703,7 @@ export default function GeneralSettingsPage() {
                     onClick={saveSeoSettings}
                     disabled={isSaving}
                   >
-                    {isSaving ? 'Saving...' : 'Save changes'}
+                    {isSaving ? 'Speichert...' : 'Änderungen speichern'}
                   </Button>
                 </div>
               </div>
@@ -713,8 +713,8 @@ export default function GeneralSettingsPage() {
           <TabsContent value="custom-code" className="mt-2">
             <div className="grid grid-cols-3 gap-10 bg-secondary/20 p-8 rounded-lg">
               <div>
-                <FieldLegend>Custom code</FieldLegend>
-                <FieldDescription>Set up custom codes that should be added on your website.</FieldDescription>
+                <FieldLegend>Custom Code</FieldLegend>
+                <FieldDescription>Code hinterlegen, der auf dieser Website eingebunden werden soll.</FieldDescription>
               </div>
 
               <div className="col-span-2 grid grid-cols-2 gap-8">
@@ -723,7 +723,7 @@ export default function GeneralSettingsPage() {
                     Header
                   </FieldLabel>
                   <FieldDescription>
-                    Enter code that will be injected into the &lt;head&gt; tag on every page of your site.
+                    Code, der auf jeder Seite in den &lt;head&gt;-Bereich eingefügt wird.
                   </FieldDescription>
                   <Textarea
                     id="global-code-head"
@@ -739,7 +739,7 @@ export default function GeneralSettingsPage() {
                     Body
                   </FieldLabel>
                   <FieldDescription>
-                    Enter code that will be injected before the &lt;/body&gt; tag on every page of your site.
+                    Code, der auf jeder Seite vor dem schließenden &lt;/body&gt;-Tag eingefügt wird.
                   </FieldDescription>
                   <Textarea
                     id="global-code-body"
@@ -758,7 +758,7 @@ export default function GeneralSettingsPage() {
                     onClick={saveCustomCodeSettings}
                     disabled={isSavingCustomCode}
                   >
-                    {isSavingCustomCode ? 'Saving...' : 'Save changes'}
+                    {isSavingCustomCode ? 'Speichert...' : 'Änderungen speichern'}
                   </Button>
                 </div>
               </div>
@@ -780,9 +780,9 @@ export default function GeneralSettingsPage() {
       <Dialog open={showResetDialog} onOpenChange={setShowResetDialog}>
         <DialogContent showCloseButton={false} className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-base">Reset project</DialogTitle>
+            <DialogTitle className="text-base">Projekt zurücksetzen</DialogTitle>
             <DialogDescription>
-              This will permanently delete all project data including pages, CMS collections, assets, and settings. Your project will be reset to a blank canvas. This action cannot be undone.
+              Dadurch werden alle Projektdaten dauerhaft gelöscht, einschließlich Seiten, CMS-Collections, Assets und Einstellungen. Das Projekt wird auf eine leere Website zurückgesetzt. Diese Aktion kann nicht rückgängig gemacht werden.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -792,7 +792,7 @@ export default function GeneralSettingsPage() {
               onClick={() => setShowResetDialog(false)}
               disabled={isResetting}
             >
-              Cancel
+              Abbrechen
             </Button>
             <Button
               size="sm"
@@ -803,10 +803,10 @@ export default function GeneralSettingsPage() {
               {isResetting ? (
                 <>
                   <Spinner />
-                  Resetting...
+                  Wird zurückgesetzt...
                 </>
               ) : (
-                'Reset project'
+                'Projekt zurücksetzen'
               )}
             </Button>
           </DialogFooter>

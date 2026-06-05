@@ -590,7 +590,7 @@ export default function AirtableSettings({
             size="xs"
             onClick={() => setShowDisconnect(true)}
           >
-            Disconnect
+            Trennen
           </Button>
         )}
         <SheetDescription className="sr-only">
@@ -833,7 +833,7 @@ export default function AirtableSettings({
                           size="xs"
                           onClick={handleCancelAdd}
                         >
-                          Cancel
+                          Abbrechen
                         </Button>
                         <Button
                           size="xs"
@@ -844,7 +844,7 @@ export default function AirtableSettings({
                           }
                         >
                           {isSavingConnection && <Spinner className="size-3" />}
-                          Create connection
+                          Verbindung erstellen
                         </Button>
                       </div>
                     </>
@@ -860,10 +860,10 @@ export default function AirtableSettings({
       <ConfirmDialog
         open={showDisconnect}
         onOpenChange={setShowDisconnect}
-        title="Disconnect Airtable?"
-        description="This will remove your token and all sync connections. CMS data already synced will remain."
-        confirmLabel="Disconnect"
-        cancelLabel="Cancel"
+        title="Airtable trennen?"
+        description="Dadurch werden der Token und alle Sync-Verbindungen entfernt. Bereits synchronisierte CMS-Daten bleiben erhalten."
+        confirmLabel="Trennen"
+        cancelLabel="Abbrechen"
         confirmVariant="destructive"
         onConfirm={handleDisconnect}
         onCancel={() => setShowDisconnect(false)}
@@ -873,10 +873,10 @@ export default function AirtableSettings({
       <ConfirmDialog
         open={!!connectionToDelete}
         onOpenChange={(open: boolean) => { if (!open) setConnectionToDelete(null); }}
-        title="Delete connection?"
-        description={`This will stop syncing "${connectionToDelete?.tableName}" → "${connectionToDelete?.collectionName}". Existing CMS data will remain.`}
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
+        title="Verbindung löschen?"
+        description={`Dadurch wird die Synchronisierung von "${connectionToDelete?.tableName}" zu "${connectionToDelete?.collectionName}" beendet. Bestehende CMS-Daten bleiben erhalten.`}
+        confirmLabel="Löschen"
+        cancelLabel="Abbrechen"
         confirmVariant="destructive"
         onConfirm={handleDeleteConnection}
         onCancel={() => setConnectionToDelete(null)}
@@ -1052,21 +1052,21 @@ function ConnectionCard({
 }: ConnectionCardProps) {
   const statusBadge = () => {
     if (isSyncing || connection.syncStatus === 'syncing') {
-      return <Badge variant="secondary" className="text-[10px]">Syncing...</Badge>;
+      return <Badge variant="secondary" className="text-[10px]">Wird synchronisiert...</Badge>;
     }
     if (connection.syncStatus === 'error') {
-      return <Badge variant="destructive" className="text-[10px]">Errored</Badge>;
+      return <Badge variant="destructive" className="text-[10px]">Fehler</Badge>;
     }
     return connection.lastSyncedAt
-      ? <Badge variant="secondary" className="text-[10px]">Synced {formatRelativeTime(connection.lastSyncedAt, false)}</Badge>
-      : <Badge variant="secondary" className="text-[10px]">Never synced</Badge>;
+      ? <Badge variant="secondary" className="text-[10px]">Synchronisiert {formatRelativeTime(connection.lastSyncedAt, false)}</Badge>
+      : <Badge variant="secondary" className="text-[10px]">Noch nie synchronisiert</Badge>;
   };
 
   const webhookLabel = connection.webhookId
-    ? 'Auto-syncing with Webhook'
+    ? 'Automatische Synchronisierung via Webhook'
     : connection.webhookExpiredAt
-      ? `Webhook expired ${formatRelativeTime(connection.webhookExpiredAt, false)}`
-      : 'Manual sync';
+      ? `Webhook abgelaufen ${formatRelativeTime(connection.webhookExpiredAt, false)}`
+      : 'Manuelle Synchronisierung';
 
   return (
     <div className="border rounded-lg bg-secondary/30">
@@ -1154,7 +1154,7 @@ function ConnectionCard({
               size="xs"
               onClick={onCancelEdit}
             >
-              Cancel
+              Abbrechen
             </Button>
             <Button
               size="xs"
@@ -1162,7 +1162,7 @@ function ConnectionCard({
               disabled={isSavingEdit}
             >
               {isSavingEdit && <Spinner className="size-3" />}
-              Save changes
+              Änderungen speichern
             </Button>
           </div>
         </div>
