@@ -758,14 +758,9 @@ export default async function PageRenderer({
         />
       )}
 
-      {/* Load Google Fonts after first paint; direct stylesheets block mobile FCP/LCP. */}
+      {/* Load Google Fonts without render-blocking stylesheets. */}
       {googleFontLinkUrls.map((url, i) => (
         <Fragment key={`gfont-${i}`}>
-          <link
-            rel="preload"
-            as="style"
-            href={url}
-          />
           <script
             dangerouslySetInnerHTML={{ __html: fontStylesheetLoaderScript(url) }}
           />

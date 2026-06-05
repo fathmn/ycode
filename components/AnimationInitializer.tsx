@@ -114,6 +114,25 @@ function formatCounterValue(value: number, prefix: string, suffix: string): stri
   return `${prefix}${Math.round(value).toLocaleString('de-DE')}${suffix}`;
 }
 
+function readCounterTextFallback(element: HTMLElement): { target: number; prefix: string; suffix: string } | null {
+  const text = element.textContent?.trim() || '';
+  const match = text.match(/^([^0-9+-]*)([-+]?\d[\d.,]*)(.*)$/);
+  if (!match) return null;
+
+  const rawNumber = match[2];
+  const normalizedNumber = rawNumber.includes(',')
+    ? rawNumber.replace(/\./g, '').replace(',', '.')
+    : rawNumber.replace(/,/g, '');
+  const target = Number(normalizedNumber);
+  if (!Number.isFinite(target)) return null;
+
+  return {
+    target,
+    prefix: match[1] || '',
+    suffix: match[3] || '',
+  };
+}
+
 // Studio Mobile Drawer initializer.
 //
 // Imported headers from the Studio importer carry [data-studio-mobile-drawer]
@@ -719,20 +738,21 @@ function initializeStudioCounters(): Array<() => void> {
   const cleanups: Array<() => void> = [];
 
   for (const element of elements) {
-    const target = Number(element.dataset.studioCounterTo || '0');
-    const prefix = element.dataset.studioCounterPrefix || '';
-    const suffix = element.dataset.studioCounterSuffix || '';
+    const fallback = readCounterTextFallback(element);
+    const explicitTarget = element.dataset.studioCounterTo;
+    const parsedTarget = explicitTarget ? Number(explicitTarget) : fallback?.target;
+    const prefix = element.dataset.studioCounterPrefix ?? fallback?.prefix ?? '';
+    const suffix = element.dataset.studioCounterSuffix ?? fallback?.suffix ?? '';
     const duration = Number(element.dataset.studioCounterDuration || '1800');
     const delay = Number(element.dataset.studioCounterDelay || '0');
 
-    if (!Number.isFinite(target)) continue;
+    if (!Number.isFinite(parsedTarget)) continue;
+    const target = parsedTarget as number;
 
     if (prefersReducedMotion) {
       element.textContent = formatCounterValue(target, prefix, suffix);
       continue;
     }
-
-    element.textContent = formatCounterValue(0, prefix, suffix);
 
     let timeoutId: number | null = null;
     let rafId: number | null = null;
@@ -742,6 +762,7 @@ function initializeStudioCounters(): Array<() => void> {
     const animate = () => {
       if (started) return;
       started = true;
+      element.textContent = formatCounterValue(0, prefix, suffix);
 
       timeoutId = window.setTimeout(() => {
         const start = performance.now();

@@ -708,10 +708,6 @@ export default async function PublishedPageRenderer({
       )}
       {googleFontLinkUrls.map((url, i) => (
         <Fragment key={`gfont-${i}`}>
-          <link
-            rel="preload" as="style"
-            href={url}
-          />
           <script dangerouslySetInnerHTML={{ __html: fontStylesheetLoaderScript(url) }} />
           <noscript
             dangerouslySetInnerHTML={{

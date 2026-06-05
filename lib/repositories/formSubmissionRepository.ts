@@ -89,9 +89,11 @@ export async function getFormSubmissionById(
  * Get all unique forms with submission counts
  */
 function collectFormIdsFromLayers(layers: Layer[] | unknown, formIds: Set<string>): void {
-  if (!Array.isArray(layers)) return;
+  const layerList = Array.isArray(layers)
+    ? layers
+    : (layers && typeof layers === 'object' ? [layers] : []);
 
-  for (const layer of layers as Layer[]) {
+  for (const layer of layerList as Layer[]) {
     if (!layer || typeof layer !== 'object') continue;
     const formId = resolveFormLayerId(layer);
     if (formId) formIds.add(formId);
@@ -103,9 +105,11 @@ function findFormEmailNotification(
   layers: Layer[] | unknown,
   formId: string
 ): FormSettings['email_notification'] | null {
-  if (!Array.isArray(layers)) return null;
+  const layerList = Array.isArray(layers)
+    ? layers
+    : (layers && typeof layers === 'object' ? [layers] : []);
 
-  for (const layer of layers as Layer[]) {
+  for (const layer of layerList as Layer[]) {
     if (!layer || typeof layer !== 'object') continue;
     if (resolveFormLayerId(layer) === formId) {
       return layer.settings?.form?.email_notification || null;
