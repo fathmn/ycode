@@ -24,7 +24,7 @@ export async function GET(
 
     if (!key) {
       return noCache(
-        { error: 'API key not found' },
+        { error: 'API-Schlüssel nicht gefunden.' },
         404
       );
     }
@@ -35,7 +35,7 @@ export async function GET(
   } catch (error) {
     console.error('Error fetching API key:', error);
     return noCache(
-      { error: error instanceof Error ? error.message : 'Failed to fetch API key' },
+      { error: error instanceof Error ? error.message : 'API-Schlüssel konnte nicht geladen werden.' },
       500
     );
   }
@@ -58,7 +58,7 @@ export async function DELETE(
     const existing = await getApiKeyById(id, roleCheck.context.project.id);
     if (!existing) {
       return noCache(
-        { error: 'API key not found' },
+        { error: 'API-Schlüssel nicht gefunden.' },
         404
       );
     }
@@ -71,7 +71,7 @@ export async function DELETE(
   } catch (error) {
     console.error('Error deleting API key:', error);
     return noCache(
-      { error: error instanceof Error ? error.message : 'Failed to delete API key' },
+      { error: error instanceof Error ? error.message : 'API-Schlüssel konnte nicht gelöscht werden.' },
       500
     );
   }

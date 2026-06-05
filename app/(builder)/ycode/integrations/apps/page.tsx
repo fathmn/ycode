@@ -102,10 +102,10 @@ const TOKEN_APP_CONFIGS: Record<string, TokenAppConfig> = {
     settingKey: 'mapbox_access_token',
     tokenKey: 'access_token',
     placeholder: 'pk.eyJ1Ijo...',
-    description: 'Required for Map elements using Mapbox.',
+    description: 'Erforderlich für Karten-Elemente, die Mapbox verwenden.',
     dashboardUrl: 'https://account.mapbox.com/access-tokens/',
-    dashboardLabel: 'Mapbox dashboard',
-    disconnectMessage: 'This will remove your access token. Map elements using Mapbox will stop rendering until a new token is configured.',
+    dashboardLabel: 'Mapbox-Dashboard',
+    disconnectMessage: 'Der Access Token wird entfernt. Karten-Elemente mit Mapbox werden erst wieder dargestellt, wenn ein neuer Token konfiguriert ist.',
   },
   'google-maps-embed': {
     appId: 'google-maps-embed',
@@ -115,26 +115,26 @@ const TOKEN_APP_CONFIGS: Record<string, TokenAppConfig> = {
     placeholder: 'AIzaSy...',
     description: (
       <>
-        Required for Map elements using Google Embedded Map. Make sure to enable the{' '}
+        Erforderlich für Karten-Elemente, die Google Embedded Map verwenden. Aktivieren Sie im Google-Projekt die{' '}
         <a
           href="https://console.cloud.google.com/apis/library/maps-embed-backend.googleapis.com"
           target="_blank"
           rel="noopener noreferrer"
           className="text-foreground underline"
         >Maps Embed API</a>
-        {' '}and{' '}
+        {' '}und die{' '}
         <a
           href="https://console.cloud.google.com/apis/library/places.googleapis.com"
           target="_blank"
           rel="noopener noreferrer"
           className="text-foreground underline"
         >Places API</a>
-        {' '}on your project.
+        .
       </>
     ),
     dashboardUrl: 'https://console.cloud.google.com/apis/credentials',
     dashboardLabel: 'Google Cloud Console',
-    disconnectMessage: 'This will remove your API key. Map elements using Google Embedded Map will stop rendering until a new key is configured.',
+    disconnectMessage: 'Der API-Schlüssel wird entfernt. Karten-Elemente mit Google Embedded Map werden erst wieder dargestellt, wenn ein neuer Schlüssel konfiguriert ist.',
   },
 };
 
@@ -145,6 +145,28 @@ const DEFAULT_TOKEN_APP_STATE: TokenAppState = {
   isConnected: false,
   isLoading: false,
   showDisconnect: false,
+};
+
+const CATEGORY_LABELS: Record<AppCategory, string> = {
+  popular: 'Beliebt',
+  'cms-data': 'CMS-Daten',
+  marketing: 'Marketing',
+  automation: 'Automatisierung',
+  analytics: 'Analytics',
+  email: 'E-Mail',
+  maps: 'Karten',
+  other: 'Weitere',
+};
+
+const APP_DESCRIPTION_LABELS: Record<string, string> = {
+  airtable: 'Einseitige Synchronisierung von Airtable-Tabellen in Studio-Collections, inklusive Webhook-Unterstützung.',
+  webflow: 'Webflow-CMS-Sites mit einem Klick in Studio-Collections migrieren, inklusive Assets und Referenzen.',
+  mailerlite: 'Formular-Einsendungen mit Feldzuordnung an MailerLite-Abonnentengruppen senden.',
+  mailchimp: 'Formular-Einsendungen mit Mailchimp-Zielgruppen synchronisieren und E-Mail-Kampagnen verwalten.',
+  zapier: 'Diese Website über automatisierte Workflows mit 5.000+ Apps verbinden.',
+  make: 'Leistungsfähige Automatisierungen mit einem visuellen Workflow-Builder erstellen.',
+  mapbox: 'Interaktive Karten mit eigenen Styles und Markern über die Mapbox API einfügen.',
+  'google-maps-embed': 'Interaktive Karten mit der Google Maps Embed API in Seiten einfügen.',
 };
 
 // =============================================================================
@@ -185,17 +207,17 @@ function AppCard({ app, onOpenSettings }: AppCardProps) {
           <span className="font-medium text-sm">{app.name}</span>
           {app.connected && (
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-              Connected
+              Verbunden
             </Badge>
           )}
           {!app.implemented && (
             <Badge variant="outline" className="text-[10px]">
-              Coming soon
+              Bald verfügbar
             </Badge>
           )}
         </div>
         <p className="text-xs text-muted-foreground line-clamp-2">
-          {app.description}
+          {APP_DESCRIPTION_LABELS[app.id] || app.description}
         </p>
       </div>
     </div>
@@ -403,12 +425,12 @@ export default function AppsPage() {
       const result = await response.json();
 
       if (result.data?.valid) {
-        toast.success('API key is valid');
+        toast.success('API-Schlüssel ist gültig');
       } else {
-        toast.error(result.data?.error || 'Invalid API key');
+        toast.error(result.data?.error || 'API-Schlüssel ist ungültig');
       }
     } catch (error) {
-      toast.error('Failed to test API key');
+      toast.error('API-Schlüssel konnte nicht geprüft werden');
     } finally {
       setIsTesting(false);
     }
@@ -430,13 +452,13 @@ export default function AppsPage() {
       if (result.data) {
         setSavedApiKey(apiKey.trim());
         setIsConnected(true);
-        toast.success('API key saved');
+        toast.success('API-Schlüssel gespeichert');
         updateAppStatus('mailerlite', true);
       } else {
-        toast.error(result.error || 'Failed to save API key');
+        toast.error(result.error || 'API-Schlüssel konnte nicht gespeichert werden');
       }
     } catch (error) {
-      toast.error('Failed to save API key');
+      toast.error('API-Schlüssel konnte nicht gespeichert werden');
     } finally {
       setIsSavingKey(false);
     }
@@ -453,10 +475,10 @@ export default function AppsPage() {
       setIsConnected(false);
       setConnections([]);
       setShowDisconnectDialog(false);
-      toast.success('MailerLite disconnected');
+      toast.success('MailerLite getrennt');
       updateAppStatus('mailerlite', false);
     } catch (error) {
-      toast.error('Failed to disconnect');
+      toast.error('Verbindung konnte nicht getrennt werden');
     }
   };
 
@@ -515,10 +537,10 @@ export default function AppsPage() {
         updateAppStatus(appId, true);
         updateSetting(config.settingKey, state.token.trim());
       } else {
-        toast.error('Failed to save token');
+        toast.error('Token konnte nicht gespeichert werden');
       }
     } catch {
-      toast.error('Failed to save token');
+      toast.error('Token konnte nicht gespeichert werden');
     } finally {
       updateTokenAppState(appId, { isSaving: false });
     }
@@ -539,7 +561,7 @@ export default function AppsPage() {
       updateAppStatus(appId, false);
       updateSetting(config.settingKey, null);
     } catch {
-      toast.error('Failed to disconnect');
+      toast.error('Verbindung konnte nicht getrennt werden');
     }
   };
 
@@ -568,7 +590,7 @@ export default function AppsPage() {
       }
     } catch (error) {
       console.error('Failed to load groups/forms:', error);
-      toast.error('Failed to load data for connection setup');
+      toast.error('Daten für die Verbindung konnten nicht geladen werden');
     } finally {
       setIsLoadingGroups(false);
       setIsLoadingForms(false);
@@ -610,13 +632,13 @@ export default function AppsPage() {
 
   const handleSaveConnection = async () => {
     if (!connectionFormId || !connectionGroupId) {
-      toast.error('Please select a form and a group');
+      toast.error('Bitte wählen Sie ein Formular und eine Gruppe aus');
       return;
     }
 
     const emailMapping = connectionFieldMappings.find((m) => m.mailerliteField === 'email');
     if (!emailMapping || !emailMapping.formField) {
-      toast.error('Email field mapping is required');
+      toast.error('Die Zuordnung des E-Mail-Felds ist erforderlich');
       return;
     }
 
@@ -657,12 +679,12 @@ export default function AppsPage() {
         setConnections(updatedConnections);
         setExpandedConnectionId(null);
         resetConnectionForm();
-        toast.success(editingConnectionId ? 'Connection updated' : 'Connection added');
+        toast.success(editingConnectionId ? 'Verbindung aktualisiert' : 'Verbindung hinzugefügt');
       } else {
-        toast.error(result.error || 'Failed to save connection');
+        toast.error(result.error || 'Verbindung konnte nicht gespeichert werden');
       }
     } catch (error) {
-      toast.error('Failed to save connection');
+      toast.error('Verbindung konnte nicht gespeichert werden');
     } finally {
       setIsSavingConnections(false);
     }
@@ -682,7 +704,7 @@ export default function AppsPage() {
 
       setConnections(updatedConnections);
     } catch (error) {
-      toast.error('Failed to update connection');
+      toast.error('Verbindung konnte nicht aktualisiert werden');
     }
   };
 
@@ -702,9 +724,9 @@ export default function AppsPage() {
 
       setConnections(updatedConnections);
       setConnectionToDelete(null);
-      toast.success('Connection deleted');
+      toast.success('Verbindung gelöscht');
     } catch (error) {
-      toast.error('Failed to delete connection');
+      toast.error('Verbindung konnte nicht gelöscht werden');
     }
   };
 
@@ -749,11 +771,11 @@ export default function AppsPage() {
         <FieldLabel>Studio Formular</FieldLabel>
         {isLoadingForms ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
-            <Spinner /> Loading forms...
+            <Spinner /> Formulare werden geladen...
           </div>
         ) : forms.length === 0 ? (
           <p className="text-xs text-muted-foreground py-1">
-            No forms found. Submit a form first.
+            Keine Formulare gefunden. Senden Sie zuerst ein Formular ab.
           </p>
         ) : (
           <Select
@@ -761,7 +783,7 @@ export default function AppsPage() {
             onValueChange={setConnectionFormId}
           >
             <SelectTrigger className="text-xs">
-              <SelectValue placeholder="Select a form" />
+              <SelectValue placeholder="Formular wählen" />
             </SelectTrigger>
             <SelectContent>
               {forms.map((form) => (
@@ -769,7 +791,7 @@ export default function AppsPage() {
                   key={form.form_id}
                   value={form.form_id}
                 >
-                  {form.form_id} ({form.submission_count} submissions)
+                  {form.form_id} ({form.submission_count} Einsendungen)
                 </SelectItem>
               ))}
             </SelectContent>
@@ -782,11 +804,11 @@ export default function AppsPage() {
         <FieldLabel>MailerLite Group</FieldLabel>
         {isLoadingGroups ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
-            <Spinner /> Loading groups...
+            <Spinner /> Gruppen werden geladen...
           </div>
         ) : groups.length === 0 ? (
           <p className="text-xs text-muted-foreground py-1">
-            No groups found. Create a group in MailerLite first.
+            Keine Gruppen gefunden. Erstellen Sie zuerst eine Gruppe in MailerLite.
           </p>
         ) : (
           <Select
@@ -798,7 +820,7 @@ export default function AppsPage() {
             }}
           >
             <SelectTrigger className="text-xs">
-              <SelectValue placeholder="Select a group" />
+              <SelectValue placeholder="Gruppe wählen" />
             </SelectTrigger>
             <SelectContent>
               {groups.map((group) => (
@@ -806,7 +828,7 @@ export default function AppsPage() {
                   key={group.id}
                   value={group.id}
                 >
-                  {group.name} ({group.active_count} subscribers)
+                  {group.name} ({group.active_count} Abonnenten)
                 </SelectItem>
               ))}
             </SelectContent>
@@ -817,7 +839,7 @@ export default function AppsPage() {
       {/* Field Mappings */}
       <Field>
         <div className="flex items-center justify-between">
-          <FieldLabel>Field Mappings</FieldLabel>
+          <FieldLabel>Feldzuordnungen</FieldLabel>
           <Button
             variant="ghost"
             size="xs"
@@ -825,18 +847,18 @@ export default function AppsPage() {
             disabled={connectionFieldMappings.length >= MAILERLITE_SUBSCRIBER_FIELDS.length}
           >
             <Icon name="plus" className="size-3 mr-1" />
-            Add field
+            Feld hinzufügen
           </Button>
         </div>
         <FieldDescription>
-          Map form fields to MailerLite fields. Email is required.
+          Ordnen Sie Formularfelder den MailerLite-Feldern zu. E-Mail ist erforderlich.
         </FieldDescription>
 
         <div className="space-y-2 mt-2">
           <div className="grid grid-cols-[1fr_auto_1fr_auto] gap-2 items-center text-[11px] text-muted-foreground px-1">
-            <span>Form field</span>
+            <span>Formularfeld</span>
             <span />
-            <span>MailerLite field</span>
+            <span>MailerLite-Feld</span>
             <span className="w-7" />
           </div>
 
@@ -849,7 +871,7 @@ export default function AppsPage() {
                 className="grid grid-cols-[1fr_auto_1fr_auto] gap-2 items-center"
               >
                 <Input
-                  placeholder="e.g., email"
+                  placeholder="z. B. email"
                   value={mapping.formField}
                   onChange={(e) =>
                     updateFieldMapping(index, 'formField', e.target.value)
@@ -869,7 +891,7 @@ export default function AppsPage() {
                   }
                 >
                   <SelectTrigger className="text-xs">
-                    <SelectValue placeholder="Select field" />
+                    <SelectValue placeholder="Feld wählen" />
                   </SelectTrigger>
                   <SelectContent>
                     {MAILERLITE_SUBSCRIBER_FIELDS.map((field) => (
@@ -927,18 +949,18 @@ export default function AppsPage() {
       <div className="max-w-3xl mx-auto">
 
         <header className="pt-8 pb-3">
-          <span className="text-base font-medium">Apps</span>
+          <span className="text-base font-medium">Integrationen</span>
         </header>
 
         <p className="text-sm text-muted-foreground mb-6">
-          Connect third-party apps and services to extend your website&apos;s functionality.
+          Verbinden Sie externe Apps und Dienste, um die Funktionen dieser Website zu erweitern.
         </p>
 
         {/* Connected Apps Section */}
         {connectedApps.length > 0 && (
           <div className="mb-8">
             <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-3">
-              Connected
+              Verbunden
             </h3>
             <div className="grid grid-cols-2 gap-3">
               {connectedApps.map((app) => (
@@ -956,7 +978,7 @@ export default function AppsPage() {
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-              All Apps
+              Alle Apps
             </h3>
             <Select
               value={selectedCategory}
@@ -971,7 +993,7 @@ export default function AppsPage() {
                     key={cat.value}
                     value={cat.value}
                   >
-                    {cat.label}
+                    {CATEGORY_LABELS[cat.value] || cat.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -980,7 +1002,7 @@ export default function AppsPage() {
 
           {filteredApps.length === 0 ? (
             <div className="py-12 text-center text-muted-foreground text-sm border border-dashed rounded-lg">
-              There are no other apps in this category.
+              In dieser Kategorie gibt es keine weiteren Apps.
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-3">
@@ -1020,11 +1042,11 @@ export default function AppsPage() {
                         size="xs"
                         onClick={() => updateTokenAppState(selectedAppId, { showDisconnect: true })}
                       >
-                        Disconnect
+                        Trennen
                       </Button>
                     )}
                     <SheetDescription className="sr-only">
-                      {config.label} integration settings
+                      {config.label} Integrationseinstellungen
                     </SheetDescription>
                   </SheetHeader>
 
@@ -1038,7 +1060,7 @@ export default function AppsPage() {
                         <FieldDescription className="flex flex-col gap-2">
                           <span>{config.description}</span>
                           <span>
-                            Get your key from the{' '}
+                            Den Schlüssel erhalten Sie im{' '}
                             <a
                               href={config.dashboardUrl}
                               target="_blank"
@@ -1051,13 +1073,13 @@ export default function AppsPage() {
                         </FieldDescription>
 
                         <Field>
-                          <FieldLabel htmlFor={`${selectedAppId}-token`}>API Key</FieldLabel>
+                          <FieldLabel htmlFor={`${selectedAppId}-token`}>API-Schlüssel</FieldLabel>
                           <Input
                             id={`${selectedAppId}-token`}
                             type="password"
                             placeholder={
                               !state.savedToken && getSettingByKey(config.settingKey)
-                                ? 'The default API key is already provided by this server.'
+                                ? 'Der Standard-API-Schlüssel wird bereits vom Server bereitgestellt.'
                                 : config.placeholder
                             }
                             value={state.token}
@@ -1070,7 +1092,7 @@ export default function AppsPage() {
                               onClick={() => handleSaveTokenApp(selectedAppId)}
                               disabled={!state.token.trim() || state.token === state.savedToken || state.isSaving}
                             >
-                              {state.isSaving ? 'Saving...' : 'Save'}
+                              {state.isSaving ? 'Speichert...' : 'Speichern'}
                             </Button>
                           </div>
                         </Field>
@@ -1117,11 +1139,11 @@ export default function AppsPage() {
                       size="xs"
                       onClick={() => setShowDisconnectDialog(true)}
                     >
-                      Disconnect
+                      Trennen
                     </Button>
                   )}
                   <SheetDescription className="sr-only">
-                    MailerLite integration settings
+                    MailerLite Integrationseinstellungen
                   </SheetDescription>
                 </SheetHeader>
 
@@ -1135,16 +1157,16 @@ export default function AppsPage() {
                     {/* API Key Section */}
                     <div className="space-y-4">
                       <FieldDescription>
-                        Enter your MailerLite API key. Find it in{' '}
+                        Geben Sie Ihren MailerLite API-Schlüssel ein. Sie finden ihn unter{' '}
                         <span className="text-foreground">MailerLite &rarr; Integrations &rarr; API</span>.
                       </FieldDescription>
 
                       <Field>
-                        <FieldLabel htmlFor="api-key">API Key</FieldLabel>
+                        <FieldLabel htmlFor="api-key">API-Schlüssel</FieldLabel>
                         <Input
                           id="api-key"
                           type="password"
-                          placeholder="Enter your MailerLite API key"
+                          placeholder="MailerLite API-Schlüssel eingeben"
                           value={apiKey}
                           onChange={(e) => setApiKey(e.target.value)}
                           className="font-mono text-xs"
@@ -1156,14 +1178,14 @@ export default function AppsPage() {
                             onClick={handleTestApiKey}
                             disabled={!apiKey.trim() || isTesting}
                           >
-                            {isTesting ? 'Testing...' : 'Test connection'}
+                            {isTesting ? 'Prüft...' : 'Verbindung testen'}
                           </Button>
                           <Button
                             size="sm"
                             onClick={handleSaveApiKey}
                             disabled={!apiKey.trim() || apiKey === savedApiKey || isSavingKey}
                           >
-                            {isSavingKey ? 'Saving...' : 'Save'}
+                            {isSavingKey ? 'Speichert...' : 'Speichern'}
                           </Button>
                         </div>
                       </Field>
@@ -1173,18 +1195,18 @@ export default function AppsPage() {
                     {isConnected && (
                       <div className="space-y-4 border-t pt-6">
                         <div className="flex items-center justify-between">
-                          <FieldLegend>Connections</FieldLegend>
+                          <FieldLegend>Verbindungen</FieldLegend>
                           <Button
                             variant="secondary"
                             size="xs"
                             onClick={addNewConnection}
                           >
                             <Icon name="plus" className="size-3 mr-1" />
-                            Add
+                            Hinzufügen
                           </Button>
                         </div>
                         <FieldDescription>
-                          Map form submissions to MailerLite subscriber groups.
+                          Ordnen Sie Formular-Einsendungen MailerLite-Abonnentengruppen zu.
                         </FieldDescription>
 
                         {connections.length > 0 ? (
@@ -1220,7 +1242,7 @@ export default function AppsPage() {
                                           </span>
                                         </div>
                                         <div className="text-[11px] text-muted-foreground">
-                                          {connection.fieldMappings.length} field{connection.fieldMappings.length !== 1 ? 's' : ''} mapped
+                                          {connection.fieldMappings.length} Feld{connection.fieldMappings.length !== 1 ? 'er' : ''} zugeordnet
                                         </div>
                                       </div>
 
@@ -1250,7 +1272,7 @@ export default function AppsPage() {
                                           className="text-destructive hover:text-destructive"
                                           onClick={() => setConnectionToDelete(connection)}
                                         >
-                                          Delete connection
+                                          Verbindung löschen
                                         </Button>
                                         <Button
                                           size="sm"
@@ -1264,7 +1286,7 @@ export default function AppsPage() {
                                             isSavingConnections
                                           }
                                         >
-                                          {isSavingConnections ? 'Saving...' : 'Save changes'}
+                                          {isSavingConnections ? 'Speichert...' : 'Änderungen speichern'}
                                         </Button>
                                       </div>
                                     </div>
@@ -1275,7 +1297,7 @@ export default function AppsPage() {
                           </div>
                         ) : expandedConnectionId ? null : (
                           <div className="py-6 text-center text-muted-foreground text-xs border border-dashed rounded-lg">
-                            No connections yet. Add one to start sending form data to MailerLite.
+                            Noch keine Verbindungen. Legen Sie eine Verbindung an, um Formulardaten an MailerLite zu senden.
                           </div>
                         )}
 
@@ -1283,7 +1305,7 @@ export default function AppsPage() {
                         {expandedConnectionId?.startsWith('new-') && (
                           <div className="border rounded-lg overflow-hidden">
                             <div className="p-3 bg-secondary/20">
-                              <Label className="font-medium text-xs">New connection</Label>
+                              <Label className="font-medium text-xs">Neue Verbindung</Label>
                             </div>
                             <div className="border-t px-3 pb-3 pt-3 space-y-4">
                               {renderConnectionForm()}
@@ -1297,7 +1319,7 @@ export default function AppsPage() {
                                     resetConnectionForm();
                                   }}
                                 >
-                                  Cancel
+                                  Abbrechen
                                 </Button>
                                 <Button
                                   size="sm"
@@ -1311,7 +1333,7 @@ export default function AppsPage() {
                                     isSavingConnections
                                   }
                                 >
-                                  {isSavingConnections ? 'Saving...' : 'Add connection'}
+                                  {isSavingConnections ? 'Speichert...' : 'Verbindung hinzufügen'}
                                 </Button>
                               </div>
                             </div>
@@ -1331,10 +1353,10 @@ export default function AppsPage() {
       <ConfirmDialog
         open={showDisconnectDialog}
         onOpenChange={setShowDisconnectDialog}
-        title="Disconnect MailerLite?"
-        description="This will remove your API key and all connections. Form submissions will no longer be sent to MailerLite."
-        confirmLabel="Disconnect"
-        cancelLabel="Cancel"
+        title="MailerLite trennen?"
+        description="Der API-Schlüssel und alle Verbindungen werden entfernt. Formular-Einsendungen werden danach nicht mehr an MailerLite gesendet."
+        confirmLabel="Trennen"
+        cancelLabel="Abbrechen"
         confirmVariant="destructive"
         onConfirm={handleDisconnect}
         onCancel={() => setShowDisconnectDialog(false)}
@@ -1350,10 +1372,10 @@ export default function AppsPage() {
             onOpenChange={(open: boolean) =>
               updateTokenAppState(appId, { showDisconnect: open })
             }
-            title={`Disconnect ${config.label}?`}
+            title={`${config.label} trennen?`}
             description={config.disconnectMessage}
-            confirmLabel="Disconnect"
-            cancelLabel="Cancel"
+            confirmLabel="Trennen"
+            cancelLabel="Abbrechen"
             confirmVariant="destructive"
             onConfirm={() => handleDisconnectTokenApp(appId)}
             onCancel={() => updateTokenAppState(appId, { showDisconnect: false })}
@@ -1367,10 +1389,10 @@ export default function AppsPage() {
         onOpenChange={(open: boolean) => {
           if (!open) setConnectionToDelete(null);
         }}
-        title="Delete connection?"
-        description={`This will remove the connection between form "${connectionToDelete?.formId}" and MailerLite group "${connectionToDelete?.groupName}".`}
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
+        title="Verbindung löschen?"
+        description={`Die Verbindung zwischen Formular "${connectionToDelete?.formId}" und MailerLite-Gruppe "${connectionToDelete?.groupName}" wird entfernt.`}
+        confirmLabel="Löschen"
+        cancelLabel="Abbrechen"
         confirmVariant="destructive"
         onConfirm={handleDeleteConnection}
         onCancel={() => setConnectionToDelete(null)}

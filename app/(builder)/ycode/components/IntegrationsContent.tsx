@@ -67,7 +67,7 @@ export default function IntegrationsContent({ children }: IntegrationsContentPro
       {/* Left Sidebar */}
       <div className="w-60 border-r flex flex-col px-4">
         <header className="py-5 flex justify-between">
-          <span className="font-medium">Integrations</span>
+          <span className="font-medium">Integrationen</span>
         </header>
 
         <div className="flex-1 overflow-y-auto">

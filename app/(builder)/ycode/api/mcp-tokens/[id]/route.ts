@@ -29,14 +29,14 @@ export async function GET(
     const token = await getTokenById(id, projectId);
 
     if (!token) {
-      return noCache({ error: 'MCP token not found' }, 404);
+      return noCache({ error: 'MCP-Verbindung nicht gefunden.' }, 404);
     }
 
     return noCache({ data: token });
   } catch (error) {
     console.error('Error fetching MCP token:', error);
     return noCache(
-      { error: error instanceof Error ? error.message : 'Failed to fetch MCP token' },
+      { error: error instanceof Error ? error.message : 'MCP-Verbindung konnte nicht geladen werden.' },
       500,
     );
   }
@@ -59,7 +59,7 @@ export async function DELETE(
 
     const existing = await getTokenById(id, projectId);
     if (!existing) {
-      return noCache({ error: 'MCP token not found' }, 404);
+      return noCache({ error: 'MCP-Verbindung nicht gefunden.' }, 404);
     }
 
     await deleteToken(id, projectId);
@@ -68,7 +68,7 @@ export async function DELETE(
   } catch (error) {
     console.error('Error deleting MCP token:', error);
     return noCache(
-      { error: error instanceof Error ? error.message : 'Failed to delete MCP token' },
+      { error: error instanceof Error ? error.message : 'MCP-Verbindung konnte nicht gelöscht werden.' },
       500,
     );
   }

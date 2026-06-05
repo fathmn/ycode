@@ -86,7 +86,7 @@ export default function UsersSettingsPage() {
     // Basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(inviteEmail)) {
-      setInviteError('Please enter a valid email address');
+      setInviteError('Bitte geben Sie eine gültige E-Mail-Adresse ein.');
       return;
     }
 
@@ -107,12 +107,12 @@ export default function UsersSettingsPage() {
       const result = await response.json();
 
       if (!response.ok || result.error) {
-        setInviteError(result.error || 'Failed to send invitation');
+        setInviteError(result.error || 'Einladung konnte nicht gesendet werden.');
         return;
       }
 
       const invitedEmail = inviteEmail.trim();
-      setInviteSuccess(`Invitation sent to ${invitedEmail}`);
+      setInviteSuccess(`Einladung an ${invitedEmail} gesendet.`);
       setInviteEmail('');
 
       // Add to pending invites list immediately
@@ -131,7 +131,7 @@ export default function UsersSettingsPage() {
       setTimeout(() => setInviteSuccess(null), 3000);
     } catch (error) {
       console.error('Failed to send invite:', error);
-      setInviteError('Failed to send invitation. Please try again.');
+      setInviteError('Einladung konnte nicht gesendet werden. Bitte versuchen Sie es erneut.');
     } finally {
       setIsInviting(false);
     }
@@ -174,7 +174,7 @@ export default function UsersSettingsPage() {
       const result = await response.json();
 
       if (response.ok && !result.error) {
-        setInviteSuccess(`Invitation resent to ${email}`);
+        setInviteSuccess(`Einladung an ${email} erneut gesendet.`);
         setTimeout(() => setInviteSuccess(null), 3000);
       }
     } catch (error) {
@@ -183,7 +183,7 @@ export default function UsersSettingsPage() {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return new Date(dateString).toLocaleDateString('de-DE', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
@@ -191,7 +191,7 @@ export default function UsersSettingsPage() {
   };
 
   const formatLastSeen = (dateString: string | null) => {
-    if (!dateString) return 'Never';
+    if (!dateString) return 'Nie';
     return formatDate(dateString);
   };
 
@@ -201,15 +201,15 @@ export default function UsersSettingsPage() {
 
         {/* Page Header */}
         <header className="pt-8 pb-3">
-          <span className="text-base font-medium">Users</span>
+          <span className="text-base font-medium">Nutzer</span>
         </header>
 
         {/* Invite User Section */}
         <div className="flex flex-col gap-6 bg-secondary/20 p-8 rounded-lg">
           <header>
-            <FieldLegend>Invite user</FieldLegend>
+            <FieldLegend>Nutzer einladen</FieldLegend>
             <FieldDescription>
-              Send an invitation email to add a new user to this project.
+              Senden Sie eine Einladung, um einen neuen Nutzer zu diesem Projekt hinzuzufügen.
             </FieldDescription>
           </header>
 
@@ -234,7 +234,7 @@ export default function UsersSettingsPage() {
               onClick={handleInvite}
               disabled={isInviting || !inviteEmail.trim()}
             >
-              {isInviting ? <Spinner /> : 'Send invite'}
+              {isInviting ? <Spinner /> : 'Einladung senden'}
             </Button>
           </div>
 
@@ -249,20 +249,20 @@ export default function UsersSettingsPage() {
 
         {/* Active Users Section */}
         <header className="pt-10 pb-3">
-          <span className="text-base font-medium">Active users</span>
+          <span className="text-base font-medium">Aktive Nutzer</span>
         </header>
 
         <div className="flex flex-col gap-6 bg-secondary/20 p-8 rounded-lg">
           <header>
-            <FieldLegend>Users</FieldLegend>
+            <FieldLegend>Nutzer</FieldLegend>
             <FieldDescription>
-              Users who have access to this project.
+              Nutzer mit Zugriff auf dieses Projekt.
             </FieldDescription>
           </header>
 
           {isLoading ? (
             <div className="border-t pt-8 pb-4 text-center text-muted-foreground text-sm">
-              Loading...
+              Lädt...
             </div>
           ) : activeUsers.length > 0 ? (
             <div className="border-t -mb-4 divide-y">
@@ -298,14 +298,14 @@ export default function UsersSettingsPage() {
                     <div className="flex items-center gap-2 mb-1">
                       <Label className="font-medium">{user.display_name || user.email}</Label>
                       {currentUser?.id === user.id && (
-                        <span className="text-xs text-muted-foreground">You</span>
+                        <span className="text-xs text-muted-foreground">Sie</span>
                       )}
                       {user.display_name && (
                         <span className="text-xs text-muted-foreground">{user.email}</span>
                       )}
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      Joined {formatDate(user.created_at)} · Last seen: {formatLastSeen(user.last_sign_in_at)}
+                      Beigetreten am {formatDate(user.created_at)} · Zuletzt gesehen: {formatLastSeen(user.last_sign_in_at)}
                     </div>
                   </div>
 
@@ -320,7 +320,7 @@ export default function UsersSettingsPage() {
                         <DropdownMenuItem
                           onClick={() => router.push(studioProjectRoutePathFromSlug(projectPathSlug, '/ycode/profile'))}
                         >
-                          My profile
+                          Mein Profil
                         </DropdownMenuItem>
                       ) : (
                         <DropdownMenuItem
@@ -330,7 +330,7 @@ export default function UsersSettingsPage() {
                             setShowDeleteDialog(true);
                           }}
                         >
-                          Remove user
+                          Nutzer entfernen
                         </DropdownMenuItem>
                       )}
                     </DropdownMenuContent>
@@ -340,27 +340,27 @@ export default function UsersSettingsPage() {
             </div>
           ) : (
             <div className="border-t pt-8 pb-4 text-center text-muted-foreground text-sm">
-              No active users yet.
+              Noch keine aktiven Nutzer.
             </div>
           )}
         </div>
 
         {/* Pending Invites Section */}
         <header className="pt-10 pb-3">
-          <span className="text-base font-medium">Pending invites</span>
+          <span className="text-base font-medium">Ausstehende Einladungen</span>
         </header>
 
         <div className="flex flex-col gap-6 bg-secondary/20 p-8 rounded-lg">
           <header>
-            <FieldLegend>Invitations</FieldLegend>
+            <FieldLegend>Einladungen</FieldLegend>
             <FieldDescription>
-              Users who have been invited but haven&apos;t accepted yet.
+              Nutzer, die eingeladen wurden, die Einladung aber noch nicht angenommen haben.
             </FieldDescription>
           </header>
 
           {isLoading ? (
             <div className="border-t pt-8 pb-4 text-center text-muted-foreground text-sm">
-              Loading...
+              Lädt...
             </div>
           ) : pendingInvites.length > 0 ? (
             <div className="border-t -mb-4 divide-y">
@@ -378,11 +378,11 @@ export default function UsersSettingsPage() {
                     <div className="flex items-center gap-3 mb-1">
                       <Label className="font-medium">{invite.email}</Label>
                       <span className="text-xs text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">
-                        Pending
+                        Ausstehend
                       </span>
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      Invited {formatDate(invite.invited_at)}
+                      Eingeladen am {formatDate(invite.invited_at)}
                     </div>
                   </div>
 
@@ -396,7 +396,7 @@ export default function UsersSettingsPage() {
                       <DropdownMenuItem
                         onClick={() => handleResendInvite(invite.email)}
                       >
-                        Resend invite
+                        Einladung erneut senden
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
@@ -405,7 +405,7 @@ export default function UsersSettingsPage() {
                           setShowDeleteDialog(true);
                         }}
                       >
-                        Cancel invite
+                        Einladung abbrechen
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -414,7 +414,7 @@ export default function UsersSettingsPage() {
             </div>
           ) : (
             <div className="border-t pt-8 pb-4 text-center text-muted-foreground text-xs">
-              No pending invites.
+              Keine ausstehenden Einladungen.
             </div>
           )}
         </div>
@@ -425,14 +425,14 @@ export default function UsersSettingsPage() {
       <ConfirmDialog
         open={showDeleteDialog}
         onOpenChange={setShowDeleteDialog}
-        title={userToDelete?.type === 'user' ? 'Remove user?' : 'Cancel invite?'}
+        title={userToDelete?.type === 'user' ? 'Nutzer entfernen?' : 'Einladung abbrechen?'}
         description={
           userToDelete?.type === 'user'
-            ? `This will remove "${userToDelete?.email}" from this project. They will no longer have access.`
-            : `This will cancel the invitation for "${userToDelete?.email}".`
+            ? `"${userToDelete?.email}" wird aus diesem Projekt entfernt und hat danach keinen Zugriff mehr.`
+            : `Die Einladung für "${userToDelete?.email}" wird abgebrochen.`
         }
-        confirmLabel={userToDelete?.type === 'user' ? 'Remove user' : 'Cancel invite'}
-        cancelLabel="Keep"
+        confirmLabel={userToDelete?.type === 'user' ? 'Nutzer entfernen' : 'Einladung abbrechen'}
+        cancelLabel="Behalten"
         confirmVariant="destructive"
         onConfirm={handleDelete}
         onCancel={() => {

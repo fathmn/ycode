@@ -85,7 +85,7 @@ function DialogContent({
           >
             <Button variant="ghost" size="sm">
               <Icon name="x" />
-              <span className="sr-only">Close</span>
+              <span className="sr-only">Schließen</span>
             </Button>
           </DialogPrimitive.Close>
         )}

@@ -121,7 +121,7 @@ export default function ApiPage() {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return new Date(dateString).toLocaleDateString('de-DE', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
@@ -129,7 +129,7 @@ export default function ApiPage() {
   };
 
   const formatLastUsed = (dateString: string | null) => {
-    if (!dateString) return 'Never';
+    if (!dateString) return 'Nie';
     return formatDate(dateString);
   };
 
@@ -144,17 +144,17 @@ export default function ApiPage() {
             size="sm"
             onClick={() => setShowGenerateDialog(true)}
           >
-            Generate API key
+            API-Schlüssel erstellen
           </Button>
         </header>
 
         <p className="text-sm text-muted-foreground mb-6">
-          Manage API keys for accessing your site&apos;s public API.
+          Verwalten Sie API-Schlüssel für den Zugriff auf die öffentliche API dieser Website.
         </p>
 
         {isLoading ? (
           <div className="py-12 text-center text-muted-foreground text-sm">
-            Loading...
+            Lädt...
           </div>
         ) : apiKeys.length > 0 ? (
           <div className="flex flex-col gap-3">
@@ -171,7 +171,7 @@ export default function ApiPage() {
                     </code>
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    Created {formatDate(key.created_at)} · Last used: {formatLastUsed(key.last_used_at)}
+                    Erstellt am {formatDate(key.created_at)} · Zuletzt genutzt: {formatLastUsed(key.last_used_at)}
                   </div>
                 </div>
 
@@ -192,7 +192,7 @@ export default function ApiPage() {
                         setShowDeleteDialog(true);
                       }}
                     >
-                      Delete
+                      Löschen
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -201,21 +201,21 @@ export default function ApiPage() {
           </div>
         ) : (
           <div className="py-12 text-center text-muted-foreground text-sm border border-dashed rounded-lg">
-            No API keys yet. Click &ldquo;Generate API key&rdquo; to create one.
+            Noch keine API-Schlüssel. Klicken Sie auf &bdquo;API-Schlüssel erstellen&ldquo;, um einen Schlüssel anzulegen.
           </div>
         )}
 
         <header className="pt-10 pb-3">
-          <span className="text-base font-medium">API Documentation</span>
+          <span className="text-base font-medium">API-Dokumentation</span>
         </header>
 
         <div className="flex flex-col gap-8 bg-secondary/20 p-8 rounded-lg text-sm">
 
           {/* Authentication */}
           <section>
-            <h3 className="font-medium mb-2">Authentication</h3>
+            <h3 className="font-medium mb-2">Authentifizierung</h3>
             <p className="text-muted-foreground mb-3">
-              All API requests require a valid API key passed in the <code className="text-xs bg-secondary px-1 py-0.5 rounded">Authorization</code> header:
+              Alle API-Anfragen benötigen einen gültigen API-Schlüssel im <code className="text-xs bg-secondary px-1 py-0.5 rounded">Authorization</code>-Header:
             </p>
             <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`Authorization: Bearer YOUR_API_KEY`}
@@ -236,7 +236,7 @@ export default function ApiPage() {
               </div>
 
               <div>
-                <h4 className="text-muted-foreground mb-1">Collection Items</h4>
+                <h4 className="text-muted-foreground mb-1">Collection-Einträge</h4>
                 <div className="bg-secondary p-3 rounded-lg space-y-1 text-xs font-mono">
                   <div><span className="text-green-500">GET</span> /api/v1/collections/{'{collection_id}'}/items</div>
                   <div><span className="text-blue-500">POST</span> /api/v1/collections/{'{collection_id}'}/items</div>
@@ -256,7 +256,7 @@ export default function ApiPage() {
               </div>
 
               <div>
-                <h4 className="text-muted-foreground mb-1">Form Submissions</h4>
+                <h4 className="text-muted-foreground mb-1">Formular-Einsendungen</h4>
                 <div className="bg-secondary p-3 rounded-lg space-y-1 text-xs font-mono">
                   <div><span className="text-green-500">GET</span> /api/v1/forms/{'{form_id}'}/submissions</div>
                   <div><span className="text-blue-500">POST</span> /api/v1/forms/{'{form_id}'}/submissions</div>
@@ -272,14 +272,14 @@ export default function ApiPage() {
           <section>
             <h3 className="font-medium mb-2">Collections API</h3>
             <p className="text-muted-foreground mb-3">
-              Items are returned with their field values. Reference fields include linked item data.
+              Einträge werden mit ihren Feldwerten zurückgegeben. Referenzfelder enthalten die verknüpften Eintragsdaten.
             </p>
 
             <div className="space-y-4">
               <div>
-                <div className="font-medium text-xs mb-2">List Items</div>
+                <div className="font-medium text-xs mb-2">Einträge auflisten</div>
                 <p className="text-muted-foreground text-xs mb-2">
-                  Supports pagination with <code className="bg-secondary px-1 py-0.5 rounded">page</code> and <code className="bg-secondary px-1 py-0.5 rounded">per_page</code> (max 100).
+                  Unterstützt Paginierung mit <code className="bg-secondary px-1 py-0.5 rounded">page</code> und <code className="bg-secondary px-1 py-0.5 rounded">per_page</code> (max. 100).
                 </p>
                 <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`GET /api/v1/collections/{collection_id}/items?page=1&per_page=50`}
@@ -287,9 +287,9 @@ export default function ApiPage() {
               </div>
 
               <div>
-                <div className="font-medium text-xs mb-2">Create Item</div>
+                <div className="font-medium text-xs mb-2">Eintrag erstellen</div>
                 <p className="text-muted-foreground text-xs mb-2">
-                  Pass field values using <strong>field names</strong> as keys. For reference fields, pass the referenced item&apos;s <code className="bg-secondary px-1 py-0.5 rounded">_id</code> (UUID).
+                  Übergeben Sie Feldwerte mit den <strong>Feldnamen</strong> als Schlüssel. Bei Referenzfeldern wird die <code className="bg-secondary px-1 py-0.5 rounded">_id</code> (UUID) des referenzierten Eintrags übergeben.
                 </p>
                 <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`POST /api/v1/collections/{collection_id}/items
@@ -304,9 +304,9 @@ Content-Type: application/json
               </div>
 
               <div>
-                <div className="font-medium text-xs mb-2">Update Item</div>
+                <div className="font-medium text-xs mb-2">Eintrag aktualisieren</div>
                 <p className="text-muted-foreground text-xs mb-2">
-                  Use <code className="bg-secondary px-1 py-0.5 rounded">PUT</code> for full replacement or <code className="bg-secondary px-1 py-0.5 rounded">PATCH</code> for partial updates.
+                  Nutzen Sie <code className="bg-secondary px-1 py-0.5 rounded">PUT</code> für vollständige Ersetzungen oder <code className="bg-secondary px-1 py-0.5 rounded">PATCH</code> für teilweise Aktualisierungen.
                 </p>
                 <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`PATCH /api/v1/collections/{collection_id}/items/{item_id}
@@ -322,9 +322,9 @@ Content-Type: application/json
 
           {/* Response Format */}
           <section>
-            <h3 className="font-medium mb-2">Response Format</h3>
+            <h3 className="font-medium mb-2">Antwortformat</h3>
             <p className="text-muted-foreground mb-3">
-              Items include system fields (<code className="text-xs bg-secondary px-1 py-0.5 rounded">_id</code>, <code className="text-xs bg-secondary px-1 py-0.5 rounded">ID</code>, <code className="text-xs bg-secondary px-1 py-0.5 rounded">Created Date</code>, <code className="text-xs bg-secondary px-1 py-0.5 rounded">Updated Date</code>) plus all collection field values:
+              Einträge enthalten Systemfelder (<code className="text-xs bg-secondary px-1 py-0.5 rounded">_id</code>, <code className="text-xs bg-secondary px-1 py-0.5 rounded">ID</code>, <code className="text-xs bg-secondary px-1 py-0.5 rounded">Created Date</code>, <code className="text-xs bg-secondary px-1 py-0.5 rounded">Updated Date</code>) sowie alle Feldwerte der Collection:
             </p>
             <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`{
@@ -341,14 +341,14 @@ Content-Type: application/json
 
           {/* Protected Fields */}
           <section>
-            <h3 className="font-medium mb-2">Protected Fields</h3>
+            <h3 className="font-medium mb-2">Geschützte Felder</h3>
             <p className="text-muted-foreground mb-3">
-              These auto-generated fields cannot be set or modified via the API:
+              Diese automatisch erzeugten Felder können über die API nicht gesetzt oder geändert werden:
             </p>
             <div className="bg-secondary p-3 rounded-lg text-xs space-y-2">
-              <div><code className="text-blue-400">ID</code> - Auto-incrementing number, assigned on creation</div>
-              <div><code className="text-blue-400">Created Date</code> - Set automatically when item is created</div>
-              <div><code className="text-blue-400">Updated Date</code> - Updated automatically on every change</div>
+              <div><code className="text-blue-400">ID</code> - Fortlaufende Nummer, wird beim Erstellen vergeben</div>
+              <div><code className="text-blue-400">Created Date</code> - Wird beim Erstellen automatisch gesetzt</div>
+              <div><code className="text-blue-400">Updated Date</code> - Wird bei jeder Änderung automatisch aktualisiert</div>
             </div>
           </section>
 
@@ -356,12 +356,12 @@ Content-Type: application/json
           <section>
             <h3 className="font-medium mb-2">Forms API</h3>
             <p className="text-muted-foreground mb-3">
-              Access form submissions programmatically. Forms are identified by their <code className="text-xs bg-secondary px-1 py-0.5 rounded">form_id</code> (set in the form element settings).
+              Greifen Sie programmatisch auf Formular-Einsendungen zu. Formulare werden über ihre <code className="text-xs bg-secondary px-1 py-0.5 rounded">form_id</code> identifiziert. Diese ID wird in den Einstellungen des Formular-Elements gesetzt.
             </p>
 
             <div className="space-y-4">
               <div>
-                <div className="font-medium text-xs mb-2">List All Forms</div>
+                <div className="font-medium text-xs mb-2">Alle Formulare auflisten</div>
                 <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`GET /api/v1/forms
 
@@ -380,7 +380,7 @@ Content-Type: application/json
               </div>
 
               <div>
-                <div className="font-medium text-xs mb-2">Get Form Details</div>
+                <div className="font-medium text-xs mb-2">Formulardetails abrufen</div>
                 <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`GET /api/v1/forms/{form_id}
 
@@ -400,9 +400,9 @@ Content-Type: application/json
               </div>
 
               <div>
-                <div className="font-medium text-xs mb-2">List Submissions</div>
+                <div className="font-medium text-xs mb-2">Einsendungen auflisten</div>
                 <p className="text-muted-foreground text-xs mb-2">
-                  Supports pagination and status filtering.
+                  Unterstützt Paginierung und Filterung nach Status.
                 </p>
                 <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`GET /api/v1/forms/{form_id}/submissions?page=1&per_page=50&status=new
@@ -425,9 +425,9 @@ Content-Type: application/json
               </div>
 
               <div>
-                <div className="font-medium text-xs mb-2">Create Submission</div>
+                <div className="font-medium text-xs mb-2">Einsendung erstellen</div>
                 <p className="text-muted-foreground text-xs mb-2">
-                  Submit form data programmatically (e.g., from external frontends or integrations).
+                  Senden Sie Formulardaten programmatisch, zum Beispiel aus externen Frontends oder Integrationen.
                 </p>
                 <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`POST /api/v1/forms/{form_id}/submissions
@@ -447,7 +447,7 @@ Content-Type: application/json
               </div>
 
               <div>
-                <div className="font-medium text-xs mb-2">Update Submission Status</div>
+                <div className="font-medium text-xs mb-2">Einsendungsstatus aktualisieren</div>
                 <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`PATCH /api/v1/forms/{form_id}/submissions/{submission_id}
 Content-Type: application/json
@@ -459,7 +459,7 @@ Content-Type: application/json
               </div>
 
               <div>
-                <div className="font-medium text-xs mb-2">Delete Submission</div>
+                <div className="font-medium text-xs mb-2">Einsendung löschen</div>
                 <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`DELETE /api/v1/forms/{form_id}/submissions/{submission_id}
 
@@ -471,9 +471,9 @@ Content-Type: application/json
 
           {/* Error Responses */}
           <section>
-            <h3 className="font-medium mb-2">Error Responses</h3>
+            <h3 className="font-medium mb-2">Fehlerantworten</h3>
             <p className="text-muted-foreground mb-3">
-              Errors return a JSON object with <code className="text-xs bg-secondary px-1 py-0.5 rounded">error</code> and <code className="text-xs bg-secondary px-1 py-0.5 rounded">code</code> fields:
+              Fehler geben ein JSON-Objekt mit den Feldern <code className="text-xs bg-secondary px-1 py-0.5 rounded">error</code> und <code className="text-xs bg-secondary px-1 py-0.5 rounded">code</code> zurück:
             </p>
             <pre className="bg-secondary p-3 rounded-lg text-xs overflow-x-auto">
 {`{
@@ -482,10 +482,10 @@ Content-Type: application/json
 }`}
             </pre>
             <div className="mt-3 text-xs text-muted-foreground space-y-1">
-              <div><code className="text-yellow-400">401</code> - Invalid or missing API key</div>
-              <div><code className="text-yellow-400">404</code> - Collection or item not found</div>
-              <div><code className="text-yellow-400">400</code> - Invalid request body</div>
-              <div><code className="text-yellow-400">500</code> - Internal server error</div>
+              <div><code className="text-yellow-400">401</code> - API-Schlüssel fehlt oder ist ungültig</div>
+              <div><code className="text-yellow-400">404</code> - Collection oder Eintrag nicht gefunden</div>
+              <div><code className="text-yellow-400">400</code> - Ungültiger Request Body</div>
+              <div><code className="text-yellow-400">500</code> - Interner Serverfehler</div>
             </div>
           </section>
 
@@ -497,9 +497,9 @@ Content-Type: application/json
       <Dialog open={showGenerateDialog} onOpenChange={setShowGenerateDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Generate API key</DialogTitle>
+            <DialogTitle>API-Schlüssel erstellen</DialogTitle>
             <DialogDescription>
-              Create a new API key for accessing your site&apos;s public API.
+              Erstellen Sie einen neuen API-Schlüssel für den Zugriff auf die öffentliche API dieser Website.
             </DialogDescription>
           </DialogHeader>
 
@@ -507,11 +507,11 @@ Content-Type: application/json
             <Field>
               <FieldLabel htmlFor="key-name">Name</FieldLabel>
               <FieldDescription>
-                A descriptive name to identify this key (e.g., &ldquo;Production&rdquo;, &ldquo;CI/CD&rdquo;)
+                Ein beschreibender Name, damit Sie diesen Schlüssel später wiedererkennen, zum Beispiel &bdquo;Production&ldquo; oder &bdquo;CI/CD&ldquo;.
               </FieldDescription>
               <Input
                 id="key-name"
-                placeholder="My API Key"
+                placeholder="Mein API-Schlüssel"
                 value={newKeyName}
                 onChange={(e) => setNewKeyName(e.target.value)}
                 autoFocus
@@ -532,13 +532,13 @@ Content-Type: application/json
                 setNewKeyName('');
               }}
             >
-              Cancel
+              Abbrechen
             </Button>
             <Button
               onClick={handleGenerateKey}
               disabled={!newKeyName.trim() || isGenerating}
             >
-              {isGenerating ? 'Generating...' : 'Generate key'}
+              {isGenerating ? 'Wird erstellt...' : 'Schlüssel erstellen'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -556,9 +556,9 @@ Content-Type: application/json
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>API key generated</DialogTitle>
+            <DialogTitle>API-Schlüssel erstellt</DialogTitle>
             <DialogDescription>
-              Copy your API key now. You won&apos;t be able to see it again.
+              Kopieren Sie den API-Schlüssel jetzt. Er wird später nicht erneut vollständig angezeigt.
             </DialogDescription>
           </DialogHeader>
 
@@ -576,12 +576,12 @@ Content-Type: application/json
                   {copied ? (
                     <>
                       <Icon name="check" className="size-3.5 mr-1" />
-                      Copied
+                      Kopiert
                     </>
                   ) : (
                     <>
                       <Icon name="copy" className="size-3.5 mr-1" />
-                      Copy
+                      Kopieren
                     </>
                   )}
                 </Button>
@@ -589,7 +589,7 @@ Content-Type: application/json
             </div>
 
             <div className="text-sm text-muted-foreground">
-              <strong>Important:</strong> Store this key securely. For security reasons, we can&apos;t show it again.
+              <strong>Wichtig:</strong> Speichern Sie diesen Schlüssel sicher. Aus Sicherheitsgründen kann er später nicht erneut angezeigt werden.
             </div>
           </div>
 
@@ -601,7 +601,7 @@ Content-Type: application/json
                 setCopied(false);
               }}
             >
-              Done
+              Fertig
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -611,10 +611,10 @@ Content-Type: application/json
       <ConfirmDialog
         open={showDeleteDialog}
         onOpenChange={setShowDeleteDialog}
-        title="Delete API key?"
-        description={`This will permanently delete the API key "${keyToDelete?.name}". Any applications using this key will no longer be able to access your API.`}
-        confirmLabel="Delete key"
-        cancelLabel="Cancel"
+        title="API-Schlüssel löschen?"
+        description={`Der API-Schlüssel "${keyToDelete?.name}" wird dauerhaft gelöscht. Anwendungen, die diesen Schlüssel verwenden, können danach nicht mehr auf die API zugreifen.`}
+        confirmLabel="Schlüssel löschen"
+        cancelLabel="Abbrechen"
         confirmVariant="destructive"
         onConfirm={handleDeleteKey}
         onCancel={() => {

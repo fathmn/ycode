@@ -31,7 +31,11 @@ import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useLocalisationStore } from '@/stores/useLocalisationStore';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page-utils';
 import { canManageStudioIntegrations, isStudioOperatorRole } from '@/lib/studio-roles';
-import { studioProjectRoutePathFromSlug, ycodePathnameFromStudioProjectPath } from '@/lib/studio-project-path';
+import {
+  studioProjectPathSlugFromPathname,
+  studioProjectRoutePathFromSlug,
+  ycodePathnameFromStudioProjectPath,
+} from '@/lib/studio-project-path';
 
 // 5. Types
 import type { Page } from '@/types';
@@ -117,7 +121,7 @@ export default function HeaderBar({
   const { navigateToLayers, navigateToCollection, navigateToCollections, updateQueryParams, routeType } = useEditorUrl();
 
   // Optimistic nav button state - set immediately on click, cleared when URL catches up
-  type NavButton = 'design' | 'cms' | 'forms';
+  type NavButton = 'design' | 'cms' | 'forms' | 'integrations';
   const [optimisticNav, setOptimisticNav] = useState<NavButton | null>(null);
   const [isEnteringPreview, setIsEnteringPreview] = useState(false);
 
@@ -127,11 +131,13 @@ export default function HeaderBar({
     const isDesignRoute = routeType === 'layers' || routeType === 'page' || routeType === 'component' || routeType === null;
     const isCmsRoute = routeType === 'collection' || routeType === 'collections-base';
     const isFormsRoute = routeType === 'forms';
+    const isIntegrationsRoute = routeType === 'integrations';
 
     if (
       (optimisticNav === 'design' && isDesignRoute) ||
       (optimisticNav === 'cms' && isCmsRoute) ||
-      (optimisticNav === 'forms' && isFormsRoute)
+      (optimisticNav === 'forms' && isFormsRoute) ||
+      (optimisticNav === 'integrations' && isIntegrationsRoute)
     ) {
       setOptimisticNav(null);
     }
@@ -152,6 +158,7 @@ export default function HeaderBar({
     if (optimisticNav) return optimisticNav;
     if (routeType === 'collection' || routeType === 'collections-base') return 'cms';
     if (routeType === 'forms') return 'forms';
+    if (routeType === 'integrations') return 'integrations';
     if (routeType === 'layers' || routeType === 'page' || routeType === 'component' || routeType === null) return 'design';
     return null;
   }, [optimisticNav, routeType]);
@@ -186,12 +193,17 @@ export default function HeaderBar({
     const resolveProjectBaseUrl = async () => {
       const fallbackBaseUrl = window.location.protocol + '//' + window.location.host;
       try {
+        const pathSlug = studioProjectPathSlugFromPathname(window.location.pathname);
         const selectedSlug = getSelectedStudioProjectSlug();
         const response = await studioProjectsApi.getAssigned();
         const projects = (response.data || []) as StudioProject[];
-        const selectedProject = selectedSlug
+        const pathProject = pathSlug
+          ? projects.find((project) => project.studio_path_slug === pathSlug) || null
+          : null;
+        const storedProject = selectedSlug
           ? projects.find((project) => project.slug === selectedSlug) || null
-          : projects[0] || null;
+          : null;
+        const selectedProject = pathProject || storedProject || projects[0] || null;
 
         if (isMounted) {
           setSelectedProjectBaseUrl(publicBaseUrlForProject(selectedProject, fallbackBaseUrl));
@@ -204,12 +216,14 @@ export default function HeaderBar({
         if (isMounted) {
           setSelectedProjectBaseUrl(fallbackBaseUrl);
           setSelectedProjectPrimaryDomain(null);
+          setSelectedProjectPathSlug(null);
+          setSelectedProjectRole(null);
         }
       }
     };
 
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === 'studio:selected-project-slug' || event.key === 'studio:selected-project-slug') {
+      if (event.key === 'studio:selected-project-slug') {
         resolveProjectBaseUrl();
       }
     };
@@ -534,6 +548,23 @@ export default function HeaderBar({
             <Icon name="form" />
             Formulare
           </Button>
+          {canManageIntegrations && (
+            <Button
+              variant={activeNavButton === 'integrations' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => {
+                const isDesignRoute = routeType === 'layers' || routeType === 'page' || routeType === 'component';
+                if (isDesignRoute) {
+                  setLastDesignUrl(window.location.pathname + window.location.search);
+                }
+                setOptimisticNav('integrations');
+                router.push(studioRoute('/integrations/apps'));
+              }}
+            >
+              <Icon name="code" />
+              Integrationen
+            </Button>
+          )}
         </div>
       </div>
 

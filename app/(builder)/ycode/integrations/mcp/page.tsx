@@ -117,7 +117,7 @@ export default function McpPage() {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return new Date(dateString).toLocaleDateString('de-DE', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
@@ -125,7 +125,7 @@ export default function McpPage() {
   };
 
   const formatLastUsed = (dateString: string | null) => {
-    if (!dateString) return 'Never';
+    if (!dateString) return 'Nie';
     return formatDate(dateString);
   };
 
@@ -140,18 +140,18 @@ export default function McpPage() {
             size="sm"
             onClick={() => setShowGenerateDialog(true)}
           >
-            Generate MCP URL
+            MCP-URL erstellen
           </Button>
         </header>
 
         <p className="text-sm text-muted-foreground mb-6">
-          Connect AI assistants like Claude, Cursor, or Windsurf to your Studio project.
-          Generate an MCP URL and paste it into your AI tool&apos;s connector settings.
+          Verbinden Sie KI-Assistenten wie Claude, Cursor oder Windsurf mit diesem Studio-Projekt.
+          Erstellen Sie eine MCP-URL und hinterlegen Sie sie in den Connector-Einstellungen Ihres KI-Tools.
         </p>
 
         {isLoading ? (
           <div className="py-12 text-center text-muted-foreground text-sm">
-            Loading...
+            Lädt...
           </div>
         ) : tokens.length > 0 ? (
           <div className="flex flex-col gap-3">
@@ -168,7 +168,7 @@ export default function McpPage() {
                     </code>
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    Created {formatDate(token.created_at)} · Last used: {formatLastUsed(token.last_used_at)}
+                    Erstellt am {formatDate(token.created_at)} · Zuletzt genutzt: {formatLastUsed(token.last_used_at)}
                   </div>
                 </div>
 
@@ -189,7 +189,7 @@ export default function McpPage() {
                         setShowDeleteDialog(true);
                       }}
                     >
-                      Delete
+                      Löschen
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -198,34 +198,34 @@ export default function McpPage() {
           </div>
         ) : (
           <div className="py-12 text-center text-muted-foreground text-sm border border-dashed rounded-lg">
-            No MCP connections yet. Click &ldquo;Generate MCP URL&rdquo; to create one.
+            Noch keine MCP-Verbindungen. Klicken Sie auf &bdquo;MCP-URL erstellen&ldquo;, um eine Verbindung anzulegen.
           </div>
         )}
 
         <header className="pt-10 pb-3">
-          <span className="text-base font-medium">How to connect</span>
+          <span className="text-base font-medium">So verbinden Sie ein Tool</span>
         </header>
 
         <div className="flex flex-col gap-6 bg-secondary/20 p-6 rounded-lg text-sm">
           <section>
             <h3 className="font-medium mb-2">Claude Desktop</h3>
             <p className="text-muted-foreground">
-              Settings &rarr; Connectors &rarr; Add custom connector &rarr; Paste the MCP URL
+              Einstellungen &rarr; Connectors &rarr; Add custom connector &rarr; MCP-URL einfügen
             </p>
           </section>
 
           <section>
             <h3 className="font-medium mb-2">Cursor</h3>
             <p className="text-muted-foreground">
-              Settings &rarr; MCP &rarr; Add new MCP server &rarr; Type: &ldquo;SSE&rdquo; &rarr; Paste the MCP URL
+              Einstellungen &rarr; MCP &rarr; Add new MCP server &rarr; Typ: &bdquo;SSE&ldquo; &rarr; MCP-URL einfügen
             </p>
           </section>
 
           <section>
-            <h3 className="font-medium mb-2">Other AI tools</h3>
+            <h3 className="font-medium mb-2">Weitere KI-Tools</h3>
             <p className="text-muted-foreground">
-              Any AI tool that supports the MCP Streamable HTTP transport can connect using the URL.
-              No API key is needed — the URL contains the authentication token.
+              Jedes KI-Tool mit MCP Streamable HTTP Transport kann sich über diese URL verbinden.
+              Es ist kein zusätzlicher API-Schlüssel nötig, weil die URL bereits den Authentifizierungstoken enthält.
             </p>
           </section>
         </div>
@@ -237,18 +237,18 @@ export default function McpPage() {
         >
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Generate MCP URL</DialogTitle>
+              <DialogTitle>MCP-URL erstellen</DialogTitle>
               <DialogDescription>
-                Create a unique MCP URL for connecting an AI assistant to your Studio project.
+                Erstellen Sie eine eindeutige MCP-URL, um einen KI-Assistenten mit diesem Studio-Projekt zu verbinden.
               </DialogDescription>
             </DialogHeader>
             <div className="py-4">
-              <Label htmlFor="token-name">Connection name</Label>
+              <Label htmlFor="token-name">Verbindungsname</Label>
               <Input
                 id="token-name"
                 value={newTokenName}
                 onChange={(e) => setNewTokenName(e.target.value)}
-                placeholder="e.g. Claude Desktop, Cursor"
+                placeholder="z. B. Claude Desktop, Cursor"
                 className="mt-2"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleGenerateToken();
@@ -263,13 +263,13 @@ export default function McpPage() {
                   setNewTokenName('');
                 }}
               >
-                Cancel
+                Abbrechen
               </Button>
               <Button
                 onClick={handleGenerateToken}
                 disabled={!newTokenName.trim() || isGenerating}
               >
-                {isGenerating ? 'Generating...' : 'Generate'}
+                {isGenerating ? 'Wird erstellt...' : 'Erstellen'}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -282,9 +282,9 @@ export default function McpPage() {
         >
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Your MCP URL</DialogTitle>
+              <DialogTitle>Ihre MCP-URL</DialogTitle>
               <DialogDescription>
-                Copy this URL and paste it into your AI tool. This URL will only be shown once.
+                Kopieren Sie diese URL und fügen Sie sie in Ihrem KI-Tool ein. Die URL wird nur einmal vollständig angezeigt.
               </DialogDescription>
             </DialogHeader>
             <div className="py-4">
@@ -298,12 +298,12 @@ export default function McpPage() {
                     size="sm"
                     onClick={() => copyToClipboard(generatedToken.mcp_url!)}
                   >
-                    {copied ? 'Copied!' : 'Copy'}
+                    {copied ? 'Kopiert!' : 'Kopieren'}
                   </Button>
                 </div>
               )}
               <p className="text-xs text-muted-foreground mt-3">
-                Keep this URL private. Anyone with this URL can access your Studio project through MCP.
+                Halten Sie diese URL vertraulich. Wer diese URL besitzt, kann über MCP auf dieses Studio-Projekt zugreifen.
               </p>
             </div>
             <DialogFooter>
@@ -313,7 +313,7 @@ export default function McpPage() {
                   setGeneratedToken(null);
                 }}
               >
-                Done
+                Fertig
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -323,9 +323,9 @@ export default function McpPage() {
         <ConfirmDialog
           open={showDeleteDialog}
           onOpenChange={setShowDeleteDialog}
-          title="Delete MCP connection"
-          description={`Are you sure you want to delete "${tokenToDelete?.name}"? AI tools using this URL will no longer be able to connect.`}
-          confirmLabel="Delete"
+          title="MCP-Verbindung löschen"
+          description={`Soll die Verbindung "${tokenToDelete?.name}" wirklich gelöscht werden? KI-Tools mit dieser URL können sich danach nicht mehr verbinden.`}
+          confirmLabel="Löschen"
           onConfirm={handleDeleteToken}
           confirmVariant="destructive"
         />

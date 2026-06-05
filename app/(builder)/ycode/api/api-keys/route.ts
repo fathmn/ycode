@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching API keys:', error);
     return noCache(
-      { error: error instanceof Error ? error.message : 'Failed to fetch API keys' },
+      { error: error instanceof Error ? error.message : 'API-Schlüssel konnten nicht geladen werden.' },
       500
     );
   }
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
 
     if (!name || typeof name !== 'string' || name.trim() === '') {
       return noCache(
-        { error: 'Name is required' },
+        { error: 'Name ist erforderlich.' },
         400
       );
     }
@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error creating API key:', error);
     return noCache(
-      { error: error instanceof Error ? error.message : 'Failed to create API key' },
+      { error: error instanceof Error ? error.message : 'API-Schlüssel konnte nicht erstellt werden.' },
       500
     );
   }

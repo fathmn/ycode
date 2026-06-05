@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching MCP tokens:', error);
     return noCache(
-      { error: error instanceof Error ? error.message : 'Failed to fetch MCP tokens' },
+      { error: error instanceof Error ? error.message : 'MCP-Verbindungen konnten nicht geladen werden.' },
       500,
     );
   }
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     const { name } = body;
 
     if (!name || typeof name !== 'string' || name.trim() === '') {
-      return noCache({ error: 'Name is required' }, 400);
+      return noCache({ error: 'Name ist erforderlich.' }, 400);
     }
 
     const token = await createToken(name.trim(), projectId);
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error creating MCP token:', error);
     return noCache(
-      { error: error instanceof Error ? error.message : 'Failed to create MCP token' },
+      { error: error instanceof Error ? error.message : 'MCP-Verbindung konnte nicht erstellt werden.' },
       500,
     );
   }
