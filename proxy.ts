@@ -56,7 +56,17 @@ type PublishedProjectProxyCacheEntry = {
 };
 
 const PUBLISHED_PROJECT_PROXY_CACHE_TTL_MS = 5 * 60 * 1000;
+// Bounded: keyed by the (attacker-controlled) Host header, so it must not grow without limit.
+const PUBLISHED_PROJECT_PROXY_CACHE_MAX_ENTRIES = 500;
 const publishedProjectProxyCache = new Map<string, PublishedProjectProxyCacheEntry>();
+
+function setPublishedProjectProxyCacheEntry(key: string, entry: PublishedProjectProxyCacheEntry): void {
+  if (publishedProjectProxyCache.size >= PUBLISHED_PROJECT_PROXY_CACHE_MAX_ENTRIES) {
+    const oldestKey = publishedProjectProxyCache.keys().next().value;
+    if (oldestKey !== undefined) publishedProjectProxyCache.delete(oldestKey);
+  }
+  publishedProjectProxyCache.set(key, entry);
+}
 
 const PROJECT_SCOPE_TABLES = [
   'pages',
@@ -360,10 +370,12 @@ function studioSitemapResponse(): Response {
 }
 
 function getPreviewNonceSecret(): string | null {
+  // Prefer a dedicated signing secret. The Supabase keys remain as a
+  // compatibility fallback, but the database password must never double
+  // as an HMAC key.
   return process.env.STUDIO_PREVIEW_NONCE_SECRET
     || process.env.SUPABASE_SECRET_KEY
     || process.env.SUPABASE_SERVICE_ROLE_KEY
-    || process.env.SUPABASE_DB_PASSWORD
     || null;
 }
 
@@ -639,7 +651,7 @@ async function resolvePublishedProjectForProxy(request: NextRequest): Promise<{
   });
   const project = await findProjectBySlugOrDomain(client, hostLookup);
   const resolution = { projectId: project?.id || null, unresolvedHost: !project?.id };
-  publishedProjectProxyCache.set(hostLookup, {
+  setPublishedProjectProxyCacheEntry(hostLookup, {
     ...resolution,
     expiresAt: Date.now() + PUBLISHED_PROJECT_PROXY_CACHE_TTL_MS,
   });

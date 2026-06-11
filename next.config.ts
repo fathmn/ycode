@@ -52,6 +52,31 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        // Baseline security headers for all responses
+        source: '/:path*',
+        headers: [
+          {
+            key: 'X-Content-Type-Options',
+            value: 'nosniff',
+          },
+          {
+            key: 'Referrer-Policy',
+            value: 'strict-origin-when-cross-origin',
+          },
+        ],
+      },
+      {
+        // Builder/studio surface must not be framed cross-origin
+        // (canvas/preview iframes are same-origin)
+        source: '/ycode/:path*',
+        headers: [
+          {
+            key: 'X-Frame-Options',
+            value: 'SAMEORIGIN',
+          },
+        ],
+      },
+      {
         // Asset proxy: immutable caching (content-addressed by hash)
         source: '/a/:path*',
         headers: [

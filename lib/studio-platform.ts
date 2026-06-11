@@ -1499,10 +1499,11 @@ function parsePreviewNonce(value: string): {
 }
 
 function getPreviewNonceSecret(): string | null {
+  // Must mirror getPreviewNonceSecret in proxy.ts: never use the database
+  // password as an HMAC key.
   return process.env.STUDIO_PREVIEW_NONCE_SECRET
     || process.env.SUPABASE_SECRET_KEY
     || process.env.SUPABASE_SERVICE_ROLE_KEY
-    || process.env.SUPABASE_DB_PASSWORD
     || null;
 }
 
