@@ -1,0 +1,30 @@
+name: studio-ci
+
+on:
+  push:
+    branches:
+      - 'studio/**'
+      - 'upgrade/**'
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Type check
+        run: npm run type-check
+      - name: Lint
+        run: npm run lint
+      - name: Studio fetch guard
+        run: npm run studio:fetch-guard
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      # Hinweis: "next build" braucht eine konfigurierte Umgebung und laeuft
+      # bewusst nicht in CI v1 — lokal vor jedem Release ausfuehren.
