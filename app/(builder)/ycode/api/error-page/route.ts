@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchErrorPage } from '@/lib/page-fetcher';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
+import { canRenderStudioCustomCode, requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const STUDIO_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
 
 // Force dynamic rendering - no caching
 export const dynamic = 'force-dynamic';
@@ -14,6 +23,10 @@ export const revalidate = 0;
  */
 export async function GET(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { searchParams } = new URL(request.url);
     const code = searchParams.get('code');
     const published = searchParams.get('published') === 'true';
@@ -34,7 +47,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch error page
-    const pageData = await fetchErrorPage(errorCode, published);
+    const pageData = await fetchErrorPage(errorCode, published, undefined, projectId);
 
     if (!pageData) {
       return NextResponse.json(
@@ -45,7 +58,15 @@ export async function GET(request: NextRequest) {
 
     // Load CSS based on published state
     const cssKey = published ? 'published_css' : 'draft_css';
-    const css = await getSettingByKey(cssKey);
+    const css = await getSettingByKey(cssKey, projectId);
+
+    // Strip custom code when the studio secret scan blocks rendering.
+    // The preview error boundary injects this HTML raw, so it must not
+    // bypass the same gate used by regular page rendering.
+    const allowCustomCode = await canRenderStudioCustomCode(projectId, published);
+    if (!allowCustomCode && pageData.page?.settings?.custom_code) {
+      pageData.page.settings.custom_code = { head: '', body: '' };
+    }
 
     return NextResponse.json({
       pageData,
