@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { validateCategoryMimeType } from '@/lib/asset-utils';
 import { STORAGE_BUCKET, MAX_UPLOAD_FILE_SIZE, generateStoragePath } from '@/lib/asset-constants';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 export const runtime = 'nodejs';
 
@@ -12,6 +20,9 @@ export const runtime = 'nodejs';
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
     const body = await request.json();
     const { filename, mimeType, fileSize, category } = body as {
       filename: string;

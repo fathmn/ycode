@@ -289,7 +289,7 @@ export async function getAssetsByIds(
  * Batch-find draft assets by filenames. Returns a map of filename → asset.
  * Used for CSV import dedup to avoid N+1 queries.
  */
-export async function findAssetsByFilenames(filenames: string[]): Promise<Record<string, Pick<Asset, 'id' | 'public_url'>>> {
+export async function findAssetsByFilenames(filenames: string[], projectId?: string | null): Promise<Record<string, Pick<Asset, 'id' | 'public_url'>>> {
   if (filenames.length === 0) return {};
 
   const client = await getSupabaseAdmin();
@@ -299,12 +299,14 @@ export async function findAssetsByFilenames(filenames: string[]): Promise<Record
   }
 
   const unique = [...new Set(filenames)];
-  const { data, error } = await client
+  let query = client
     .from('assets')
     .select('id, filename, public_url')
     .in('filename', unique)
     .eq('is_published', false)
     .is('deleted_at', null);
+  query = (await applyProjectScopeToQuery(query, client, 'assets', projectId)).query;
+  const { data, error } = await query;
 
   if (error || !data?.length) {
     return {};
@@ -475,7 +477,7 @@ export async function deleteAsset(id: string): Promise<void> {
  * Bulk soft-delete assets
  * If assets were never published, also deletes their physical files
  */
-export async function bulkDeleteAssets(ids: string[]): Promise<{ success: string[]; failed: string[] }> {
+export async function bulkDeleteAssets(ids: string[], projectId?: string | null): Promise<{ success: string[]; failed: string[] }> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -491,12 +493,14 @@ export async function bulkDeleteAssets(ids: string[]): Promise<{ success: string
   // Get all draft assets in batches
   for (let i = 0; i < ids.length; i += SUPABASE_WRITE_BATCH_SIZE) {
     const batchIds = ids.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
-    const { data, error: fetchDraftError } = await client
+    let query = client
       .from('assets')
       .select('*')
       .in('id', batchIds)
       .eq('is_published', false)
       .is('deleted_at', null);
+    query = (await applyProjectScopeToQuery(query, client, 'assets', projectId)).query;
+    const { data, error: fetchDraftError } = await query;
 
     if (fetchDraftError) {
       throw new Error(`Failed to fetch draft assets: ${fetchDraftError.message}`);
@@ -511,11 +515,13 @@ export async function bulkDeleteAssets(ids: string[]): Promise<{ success: string
   const publishedIds = new Set<string>();
   for (let i = 0; i < ids.length; i += SUPABASE_WRITE_BATCH_SIZE) {
     const batchIds = ids.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
-    const { data: publishedAssets, error: fetchPublishedError } = await client
+    let query = client
       .from('assets')
       .select('id')
       .in('id', batchIds)
       .eq('is_published', true);
+    query = (await applyProjectScopeToQuery(query, client, 'assets', projectId)).query;
+    const { data: publishedAssets, error: fetchPublishedError } = await query;
 
     if (fetchPublishedError) {
       throw new Error(`Failed to fetch published assets: ${fetchPublishedError.message}`);
@@ -547,12 +553,14 @@ export async function bulkDeleteAssets(ids: string[]): Promise<{ success: string
   // Soft-delete all draft records in batches
   for (let i = 0; i < ids.length; i += SUPABASE_WRITE_BATCH_SIZE) {
     const batchIds = ids.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
-    const { error: deleteError } = await client
+    let query = client
       .from('assets')
       .update({ deleted_at: new Date().toISOString() })
       .in('id', batchIds)
       .eq('is_published', false)
       .is('deleted_at', null);
+    query = (await applyProjectScopeToQuery(query, client, 'assets', projectId)).query;
+    const { error: deleteError } = await query;
 
     if (deleteError) {
       throw new Error(`Failed to delete asset records: ${deleteError.message}`);
@@ -568,7 +576,8 @@ export async function bulkDeleteAssets(ids: string[]): Promise<{ success: string
  */
 export async function bulkUpdateAssets(
   ids: string[],
-  updates: UpdateAssetData
+  updates: UpdateAssetData,
+  projectId?: string | null
 ): Promise<{ success: string[]; failed: string[] }> {
   const client = await getSupabaseAdmin();
 
@@ -587,7 +596,7 @@ export async function bulkUpdateAssets(
     const batchIds = ids.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
 
     // Apply the field updates
-    const { error } = await client
+    let updateQuery = client
       .from('assets')
       .update({
         ...updates,
@@ -596,18 +605,22 @@ export async function bulkUpdateAssets(
       .in('id', batchIds)
       .eq('is_published', false)
       .is('deleted_at', null);
+    updateQuery = (await applyProjectScopeToQuery(updateQuery, client, 'assets', projectId)).query;
+    const { error } = await updateQuery;
 
     if (error) {
       throw new Error(`Failed to update assets: ${error.message}`);
     }
 
     // Fetch updated records and recompute hashes
-    const { data: updatedAssets } = await client
+    let refetchQuery = client
       .from('assets')
       .select('*')
       .in('id', batchIds)
       .eq('is_published', false)
       .is('deleted_at', null);
+    refetchQuery = (await applyProjectScopeToQuery(refetchQuery, client, 'assets', projectId)).query;
+    const { data: updatedAssets } = await refetchQuery;
 
     if (updatedAssets && updatedAssets.length > 0) {
       const hashRecords = updatedAssets.map(a => ({

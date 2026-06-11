@@ -9,6 +9,7 @@ import { insertValuesBulk } from '@/lib/repositories/collectionItemValueReposito
 import { findStatusFieldId } from '@/lib/collection-field-utils';
 import { createAsset } from '@/lib/repositories/assetRepository';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 import { STORAGE_BUCKET, STORAGE_FOLDERS } from '@/lib/asset-constants';
 import { getSampleCollectionById } from '@/lib/sample-collections';
 import type { SampleCollectionDefinition, SampleFieldDefinition, SampleItemDefinition } from '@/lib/sample-collections';
@@ -50,7 +51,8 @@ export interface SampleCollectionResult {
  */
 export async function createSampleCollection(
   sampleId: string,
-  existingNames: string[] = []
+  existingNames: string[] = [],
+  projectId?: string | null
 ): Promise<SampleCollectionResult> {
   const sample = getSampleCollectionById(sampleId);
   if (!sample) {
@@ -61,7 +63,7 @@ export async function createSampleCollection(
   const collectionName = getUniqueName(sample.name, existingNames);
 
   // Compute next order by finding the max order among existing collections
-  const existing = await getAllCollections({ is_published: false, deleted: false });
+  const existing = await getAllCollections({ is_published: false, deleted: false }, projectId);
   const maxOrder = existing.reduce((max, c) => Math.max(max, c.order ?? 0), -1);
 
   // 1. Create collection at the end of the list
@@ -69,7 +71,7 @@ export async function createSampleCollection(
     name: collectionName,
     order: maxOrder + 1,
     is_published: false,
-  });
+  }, projectId);
 
   // 2. Create all fields with sequential ordering: start built-ins, custom, end built-ins
   const customFieldsReordered = sample.customFields.map((f, i) => ({
@@ -94,7 +96,7 @@ export async function createSampleCollection(
         is_computed: field.is_computed,
         collection_id: collection.id,
         is_published: false,
-      })
+      }, projectId)
     )
   );
 
@@ -107,7 +109,7 @@ export async function createSampleCollection(
   }
 
   // 4. Create assets for image fields in parallel
-  const { assetIdMap, assets } = await createImageAssets(sample.items, fieldKeyToId);
+  const { assetIdMap, assets } = await createImageAssets(sample.items, fieldKeyToId, projectId);
 
   // 5. Batch create items
   const now = new Date().toISOString();
@@ -116,7 +118,8 @@ export async function createSampleCollection(
       collection_id: collection.id,
       manual_order: index + 1,
       is_published: false,
-    }))
+    })),
+    projectId
   );
 
   // 6. Batch insert all values (text + image asset IDs) in one query
@@ -147,22 +150,23 @@ export async function createSampleCollection(
  * Find an existing draft asset by filename and source, or upload and create a new one.
  * Avoids duplicate storage files and DB records for the same sample image.
  */
-async function getOrUploadSampleImage(filename: string): Promise<Asset> {
+async function getOrUploadSampleImage(filename: string, projectId?: string | null): Promise<Asset> {
   const supabase = await getSupabaseAdmin();
   if (!supabase) {
     throw new Error('Supabase not configured');
   }
 
   // Check for existing draft asset with the same filename and source
-  const { data: existing } = await supabase
+  let existingQuery = supabase
     .from('assets')
     .select('*')
     .eq('filename', filename)
     .eq('source', 'sample-collection')
     .eq('is_published', false)
     .is('deleted_at', null)
-    .limit(1)
-    .single();
+    .limit(1);
+  existingQuery = (await applyProjectScopeToQuery(existingQuery, supabase, 'assets', projectId)).query;
+  const { data: existing } = await existingQuery.single();
 
   if (existing) return existing as Asset;
 
@@ -205,7 +209,7 @@ async function getOrUploadSampleImage(filename: string): Promise<Asset> {
     width,
     height,
     is_published: false,
-  });
+  }, projectId);
 }
 
 /**
@@ -215,7 +219,8 @@ async function getOrUploadSampleImage(filename: string): Promise<Asset> {
  */
 async function createImageAssets(
   sampleItems: SampleItemDefinition[],
-  fieldKeyToId: Record<string, string>
+  fieldKeyToId: Record<string, string>,
+  projectId?: string | null
 ): Promise<{ assetIdMap: Record<string, string>; assets: Asset[] }> {
   // Collect unique filenames and which entries reference them
   const entries: Array<{ key: string; filename: string }> = [];
@@ -232,7 +237,7 @@ async function createImageAssets(
 
   // Deduplicate: upload each unique filename once
   const uniqueFilenames = [...new Set(entries.map(e => e.filename))];
-  const uploadedAssets = await Promise.all(uniqueFilenames.map(getOrUploadSampleImage));
+  const uploadedAssets = await Promise.all(uniqueFilenames.map(fn => getOrUploadSampleImage(fn, projectId)));
 
   const filenameToAsset: Record<string, Asset> = {};
   uniqueFilenames.forEach((fn, i) => {

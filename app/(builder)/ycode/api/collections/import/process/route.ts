@@ -26,6 +26,14 @@ import { generateCollectionItemContentHash } from '@/lib/hash-utils';
 import { noCache } from '@/lib/api-response';
 import { randomUUID } from 'crypto';
 import type { CollectionField } from '@/types';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 interface UploadedAsset {
   id: string;
@@ -44,7 +52,7 @@ function extractFilenameFromUrl(url: string): string {
 }
 
 /** Download a file from a URL and upload it to the asset manager. */
-async function downloadAndUploadAsset(url: string): Promise<UploadedAsset | null> {
+async function downloadAndUploadAsset(url: string, projectId?: string | null): Promise<UploadedAsset | null> {
   try {
     const response = await fetch(url, {
       headers: { 'User-Agent': 'Ycode-CSV-Import/1.0' },
@@ -65,7 +73,7 @@ async function downloadAndUploadAsset(url: string): Promise<UploadedAsset | null
     }
 
     const file = new File([blob], filename, { type: contentType });
-    const asset = await uploadFile(file, 'csv-import');
+    const asset = await uploadFile(file, 'csv-import', undefined, undefined, projectId);
 
     if (!asset) {
       console.error(`Failed to upload asset from URL: ${url}`);
@@ -230,6 +238,10 @@ async function insertRowByRow(
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const body = await request.json().catch(() => ({}));
     const { importId } = body;
 
@@ -383,7 +395,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const existingAssets = await findAssetsByFilenames(filenamesToCheck);
+      const existingAssets = await findAssetsByFilenames(filenamesToCheck, projectId);
 
       // 2) Resolve URLs: reuse existing assets or mark for download
       const urlToUploadedAsset = new Map<string, UploadedAsset>();
@@ -405,7 +417,7 @@ export async function POST(request: NextRequest) {
         const batch = urlsToDownload.slice(i, i + ASSET_CONCURRENCY);
         const results = await Promise.allSettled(
           batch.map(async (url) => {
-            const uploaded = await downloadAndUploadAsset(url);
+            const uploaded = await downloadAndUploadAsset(url, projectId);
             return { url, uploaded };
           })
         );

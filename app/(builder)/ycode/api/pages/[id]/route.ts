@@ -172,6 +172,12 @@ export async function DELETE(
   } catch (error) {
     console.error('Failed to delete page:', error);
 
+    // Foreign or missing pages surface as "Page not found" from the scoped
+    // repository lookup — that is a 404, not a server error.
+    if (error instanceof Error && error.message === 'Page not found') {
+      return noCache({ error: 'Page not found' }, 404);
+    }
+
     return noCache(
       { error: error instanceof Error ? error.message : 'Failed to delete page' },
       500

@@ -1,20 +1,40 @@
 import { NextRequest } from 'next/server';
 import { noCache } from '@/lib/api-response';
 import { getFontById, updateFont, deleteFont } from '@/lib/repositories/fontRepository';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+import { recordInStudioProject } from '@/lib/project-scope';
+
+const STUDIO_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * GET /ycode/api/fonts/[id]
  * Get a single font by ID
  */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
     const font = await getFontById(id);
 
-    if (!font) {
+    if (!font || !recordInStudioProject(font, projectId)) {
       return noCache({ error: 'Font not found' }, 404);
     }
 
@@ -37,8 +57,17 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
     const body = await request.json();
+
+    const existing = await getFontById(id);
+    if (!existing || !recordInStudioProject(existing, projectId)) {
+      return noCache({ error: 'Font not found' }, 404);
+    }
 
     const font = await updateFont(id, {
       name: body.name,
@@ -63,11 +92,21 @@ export async function PUT(
  * Soft-delete a font
  */
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
+
+    const existing = await getFontById(id);
+    if (!existing || !recordInStudioProject(existing, projectId)) {
+      return noCache({ error: 'Font not found' }, 404);
+    }
+
     await deleteFont(id);
     return noCache({ data: null });
   } catch (error) {

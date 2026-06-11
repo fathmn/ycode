@@ -7,7 +7,7 @@ import { getValuesByFieldId, getValuesByItemIds, getValuesByItemId } from '@/lib
 import { generateCollectionItemContentHash } from '@/lib/hash-utils';
 import { castValue } from '../collection-utils';
 import { findStatusFieldId, buildStatusValue } from '@/lib/collection-field-utils';
-import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired, tableHasProjectScopeColumn } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired, resolveProjectScopeForWrite, tableHasProjectScopeColumn } from '@/lib/project-scope';
 
 /**
  * Collection Item Repository
@@ -797,7 +797,8 @@ export async function getMaxIdValue(
  * @param items - Array of items to create (id is auto-generated if not provided)
  */
 export async function createItemsBulk(
-  items: Array<CreateCollectionItemData & { id?: string }>
+  items: Array<CreateCollectionItemData & { id?: string }>,
+  projectId?: string | null
 ): Promise<CollectionItem[]> {
   const client = await getSupabaseAdmin();
 
@@ -807,6 +808,7 @@ export async function createItemsBulk(
 
   if (items.length === 0) return [];
 
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'collection_items', projectId);
   const now = new Date().toISOString();
   const itemsToInsert = items.map(item => ({
     id: item.id || randomUUID(),
@@ -817,6 +819,7 @@ export async function createItemsBulk(
     content_hash: item.content_hash ?? null,
     created_at: now,
     updated_at: now,
+    ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
   }));
 
   const { data, error } = await client

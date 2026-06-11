@@ -77,6 +77,32 @@ export async function getComponentById(id: string, isPublished: boolean = false)
 }
 
 /**
+ * Get a component by ID including soft deleted (for restoration)
+ */
+export async function getComponentByIdIncludingDeleted(id: string, isPublished: boolean = false): Promise<Component | null> {
+  const client = await getSupabaseAdmin();
+  if (!client) {
+    throw new Error('Failed to initialize Supabase client');
+  }
+
+  const { data, error } = await client
+    .from('components')
+    .select('*')
+    .eq('id', id)
+    .eq('is_published', isPublished)
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') {
+      return null; // Not found
+    }
+    throw new Error(`Failed to fetch component: ${error.message}`);
+  }
+
+  return data;
+}
+
+/**
  * Get multiple components by IDs (drafts by default, excludes soft deleted)
  * Returns a map of component ID to component for quick lookup
  */

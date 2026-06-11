@@ -169,3 +169,15 @@ export async function resolveSingleStudioProjectIdForUser(userId: string): Promi
   if (matchingMemberships.length !== 1) return null;
   return matchingMemberships[0].project_id || null;
 }
+
+/**
+ * Ownership check for records loaded by global ID (detail routes).
+ * Tables without a project_id column (legacy) pass; scoped tables require
+ * an exact project match — NULL-scoped rows are treated as foreign.
+ */
+export function recordInStudioProject(record: unknown, projectId: string | null | undefined): boolean {
+  if (!record || typeof record !== 'object') return false;
+  if (!('project_id' in (record as Record<string, unknown>))) return true;
+  const value = (record as Record<string, unknown>).project_id;
+  return value != null && value === projectId;
+}

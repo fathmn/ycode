@@ -3,6 +3,14 @@ import { createSampleCollection } from '@/lib/services/sampleCollectionService';
 import { getAllCollections } from '@/lib/repositories/collectionRepository';
 import { getSampleCollectionById } from '@/lib/sample-collections';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -13,6 +21,10 @@ export const revalidate = 0;
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const body = await request.json();
     const { sampleId } = body;
 
@@ -26,10 +38,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Get existing collection names to avoid duplicates
-    const existing = await getAllCollections({ is_published: false, deleted: false });
+    const existing = await getAllCollections({ is_published: false, deleted: false }, projectId);
     const existingNames = existing.map(c => c.name);
 
-    const result = await createSampleCollection(sampleId, existingNames);
+    const result = await createSampleCollection(sampleId, existingNames, projectId);
 
     return noCache({ data: result }, 201);
   } catch (error) {

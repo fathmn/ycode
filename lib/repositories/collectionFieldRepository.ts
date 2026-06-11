@@ -2,7 +2,7 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
 import type { CollectionField, CreateCollectionFieldData, UpdateCollectionFieldData } from '@/types';
 import { randomUUID } from 'crypto';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 
 /**
  * Collection Field Repository
@@ -177,7 +177,7 @@ export async function getFieldById(id: string, isPublished: boolean = false): Pr
 /**
  * Create a new field
  */
-export async function createField(fieldData: CreateCollectionFieldData): Promise<CollectionField> {
+export async function createField(fieldData: CreateCollectionFieldData, projectId?: string | null): Promise<CollectionField> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -186,6 +186,7 @@ export async function createField(fieldData: CreateCollectionFieldData): Promise
 
   const id = randomUUID();
   const isPublished = fieldData.is_published ?? false;
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'collection_fields', projectId);
 
   const { data, error } = await client
     .from('collection_fields')
@@ -200,6 +201,7 @@ export async function createField(fieldData: CreateCollectionFieldData): Promise
       is_published: isPublished,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
     })
     .select()
     .single();

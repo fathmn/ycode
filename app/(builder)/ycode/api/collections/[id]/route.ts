@@ -3,6 +3,22 @@ import { getCollectionById, updateCollection, deleteCollection } from '@/lib/rep
 import { getItemsByCollectionId } from '@/lib/repositories/collectionItemRepository';
 import { deleteTranslationsInBulk } from '@/lib/repositories/translationRepository';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+import { recordInStudioProject } from '@/lib/project-scope';
+
+const STUDIO_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -17,12 +33,16 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
 
     // Always get draft version in the builder
     const collection = await getCollectionById(id, false);
 
-    if (!collection) {
+    if (!collection || !recordInStudioProject(collection, projectId)) {
       return noCache({ error: 'Collection not found' }, 404);
     }
 
@@ -45,9 +65,18 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
 
     const body = await request.json();
+
+    const existing = await getCollectionById(id, false);
+    if (!existing || !recordInStudioProject(existing, projectId)) {
+      return noCache({ error: 'Collection not found' }, 404);
+    }
 
     // Always update draft version in the builder
     const collection = await updateCollection(id, body, false);
@@ -71,7 +100,16 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
+
+    const existing = await getCollectionById(id, false);
+    if (!existing || !recordInStudioProject(existing, projectId)) {
+      return noCache({ error: 'Collection not found' }, 404);
+    }
 
     // Get all items in this collection (draft versions)
     const { items } = await getItemsByCollectionId(id, false);

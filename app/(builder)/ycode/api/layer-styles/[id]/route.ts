@@ -1,11 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getStyleById,
+  getStyleByIdIncludingDeleted,
   updateStyle,
   softDeleteStyle,
   restoreLayerStyle,
   findEntitiesUsingLayerStyle,
 } from '@/lib/repositories/layerStyleRepository';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+import { recordInStudioProject } from '@/lib/project-scope';
+
+const STUDIO_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * GET /ycode/api/layer-styles/[id]
@@ -16,10 +33,14 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
     const style = await getStyleById(id);
 
-    if (!style) {
+    if (!style || !recordInStudioProject(style, projectId)) {
       return NextResponse.json(
         { error: 'Layer style not found' },
         { status: 404 }
@@ -45,8 +66,20 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
     const body = await request.json();
+
+    const existing = await getStyleById(id);
+    if (!existing || !recordInStudioProject(existing, projectId)) {
+      return NextResponse.json(
+        { error: 'Layer style not found' },
+        { status: 404 }
+      );
+    }
 
     const style = await updateStyle(id, {
       name: body.name,
@@ -74,7 +107,19 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
+
+    const existing = await getStyleById(id);
+    if (!existing || !recordInStudioProject(existing, projectId)) {
+      return NextResponse.json(
+        { error: 'Layer style not found' },
+        { status: 404 }
+      );
+    }
 
     // Soft delete the style and get affected entities
     const result = await softDeleteStyle(id);
@@ -104,17 +149,35 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
     const body = await request.json();
 
     // Check if this is a restore request
     if (body.action === 'restore') {
+      const existing = await getStyleByIdIncludingDeleted(id);
+      if (!existing || !recordInStudioProject(existing, projectId)) {
+        return NextResponse.json(
+          { error: 'Layer style not found' },
+          { status: 404 }
+        );
+      }
       const layerStyle = await restoreLayerStyle(id);
       return NextResponse.json({ data: layerStyle });
     }
 
     // Check if this is a preview request (get affected entities without deleting)
     if (body.action === 'preview-delete') {
+      const existing = await getStyleById(id);
+      if (!existing || !recordInStudioProject(existing, projectId)) {
+        return NextResponse.json(
+          { error: 'Layer style not found' },
+          { status: 404 }
+        );
+      }
       const affectedEntities = await findEntitiesUsingLayerStyle(id);
       return NextResponse.json({
         data: {

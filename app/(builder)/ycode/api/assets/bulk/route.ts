@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { bulkDeleteAssets, bulkUpdateAssets } from '@/lib/repositories/assetRepository';
+import { bulkDeleteAssets, bulkUpdateAssets, getAssetsByIds } from '@/lib/repositories/assetRepository';
 import { noCache } from '@/lib/api-response';
 import { cleanupAssetReferences, AffectedPageEntity, AffectedComponentEntity } from '@/lib/asset-usage-utils';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+import { recordInStudioProject } from '@/lib/project-scope';
+
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -18,6 +27,10 @@ export const revalidate = 0;
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const body = await request.json();
     const { action, ids, asset_folder_id } = body;
 
@@ -29,8 +42,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'delete') {
+      // Only operate on assets owned by the current project
+      const ownedAssets = await getAssetsByIds(ids, false, projectId);
+      const ownedIds = ids.filter((id: string) => recordInStudioProject(ownedAssets[id], projectId));
+
       // Clean up references for all assets before deletion
-      const cleanupPromises = ids.map((id: string) => cleanupAssetReferences(id));
+      const cleanupPromises = ownedIds.map((id: string) => cleanupAssetReferences(id));
       const cleanupResults = await Promise.all(cleanupPromises);
 
       // Aggregate affected entities (deduplicate by ID)
@@ -48,7 +65,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const result = await bulkDeleteAssets(ids);
+      const result = await bulkDeleteAssets(ownedIds, projectId);
 
       return noCache({
         data: {
@@ -69,7 +86,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const result = await bulkUpdateAssets(ids, { asset_folder_id });
+      const result = await bulkUpdateAssets(ids, { asset_folder_id }, projectId);
 
       return noCache({
         data: result,

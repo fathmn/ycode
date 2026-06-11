@@ -1,11 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getComponentById,
+  getComponentByIdIncludingDeleted,
   updateComponent,
   softDeleteComponent,
   restoreComponent,
   findEntitiesUsingComponent,
 } from '@/lib/repositories/componentRepository';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+import { recordInStudioProject } from '@/lib/project-scope';
+
+const STUDIO_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * GET /ycode/api/components/[id]
@@ -16,10 +33,14 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
     const component = await getComponentById(id);
 
-    if (!component) {
+    if (!component || !recordInStudioProject(component, projectId)) {
       return NextResponse.json({ error: 'Component not found' }, { status: 404 });
     }
 
@@ -42,9 +63,18 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
     const body = await request.json();
     const { name, layers, variables } = body;
+
+    const existing = await getComponentById(id);
+    if (!existing || !recordInStudioProject(existing, projectId)) {
+      return NextResponse.json({ error: 'Component not found' }, { status: 404 });
+    }
 
     const updates: any = {};
     if (name !== undefined) updates.name = name;
@@ -74,7 +104,16 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
+
+    const existing = await getComponentById(id);
+    if (!existing || !recordInStudioProject(existing, projectId)) {
+      return NextResponse.json({ error: 'Component not found' }, { status: 404 });
+    }
 
     // Soft delete the component and get affected entities
     const result = await softDeleteComponent(id);
@@ -104,17 +143,29 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { id } = await params;
     const body = await request.json();
 
     // Check if this is a restore request
     if (body.action === 'restore') {
+      const existing = await getComponentByIdIncludingDeleted(id);
+      if (!existing || !recordInStudioProject(existing, projectId)) {
+        return NextResponse.json({ error: 'Component not found' }, { status: 404 });
+      }
       const component = await restoreComponent(id);
       return NextResponse.json({ data: component });
     }
 
     // Check if this is a preview request (get affected entities without deleting)
     if (body.action === 'preview-delete') {
+      const existing = await getComponentById(id);
+      if (!existing || !recordInStudioProject(existing, projectId)) {
+        return NextResponse.json({ error: 'Component not found' }, { status: 404 });
+      }
       const affectedEntities = await findEntitiesUsingComponent(id);
       return NextResponse.json({
         data: {

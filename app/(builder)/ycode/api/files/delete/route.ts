@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { deleteAsset } from '@/lib/repositories/assetRepository';
+import { getAssetById, deleteAsset } from '@/lib/repositories/assetRepository';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+import { recordInStudioProject } from '@/lib/project-scope';
+
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * DELETE /ycode/api/files/delete
@@ -8,6 +17,10 @@ import { deleteAsset } from '@/lib/repositories/assetRepository';
  */
 export async function DELETE(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { searchParams } = new URL(request.url);
     const assetId = searchParams.get('assetId');
 
@@ -15,6 +28,14 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json(
         { error: 'Asset ID is required' },
         { status: 400 }
+      );
+    }
+
+    const asset = await getAssetById(assetId);
+    if (!asset || !recordInStudioProject(asset, projectId)) {
+      return NextResponse.json(
+        { error: 'Asset not found' },
+        { status: 404 }
       );
     }
 
