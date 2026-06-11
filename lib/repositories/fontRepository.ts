@@ -82,13 +82,14 @@ export async function getFontById(id: string): Promise<Font | null> {
 /**
  * Create a new font
  */
-export async function createFont(fontData: CreateFontData): Promise<Font> {
+export async function createFont(fontData: CreateFontData, projectId?: string | null): Promise<Font> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'fonts', projectId);
   const contentHash = generateFontContentHash(fontData);
 
   const { data, error } = await client
@@ -107,6 +108,7 @@ export async function createFont(fontData: CreateFontData): Promise<Font> {
       file_hash: fontData.file_hash ?? null,
       content_hash: contentHash,
       is_published: false,
+      ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
     })
     .select()
     .single();

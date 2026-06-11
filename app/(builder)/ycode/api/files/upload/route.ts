@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { uploadFile } from '@/lib/file-upload';
 import { validateCategoryMimeType } from '@/lib/asset-utils';
 import { MAX_UPLOAD_FILE_SIZE } from '@/lib/asset-constants';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 export const runtime = 'nodejs';
 
@@ -12,6 +20,10 @@ export const runtime = 'nodejs';
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const formData = await request.formData();
     const file = formData.get('file') as File;
     const customName = formData.get('name') as string | null;
@@ -43,7 +55,8 @@ export async function POST(request: NextRequest) {
       file,
       source,
       customName || undefined,
-      assetFolderId || undefined
+      assetFolderId || undefined,
+      projectId
     );
 
     if (!asset) {

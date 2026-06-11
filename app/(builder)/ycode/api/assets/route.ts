@@ -2,6 +2,21 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAllAssets, getAssetsPaginated, createAsset } from '@/lib/repositories/assetRepository';
 import { uploadFile, cleanSvgContent, isValidSvg } from '@/lib/file-upload';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const STUDIO_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -20,6 +35,10 @@ export const revalidate = 0;
  */
 export async function GET(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const { searchParams } = new URL(request.url);
     const folderIdParam = searchParams.get('folderId');
     const folderIdsParam = searchParams.get('folderIds');
@@ -44,6 +63,7 @@ export async function GET(request: NextRequest) {
       search,
       page,
       limit,
+      projectId,
     });
 
     return noCache({
@@ -72,6 +92,10 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const contentType = request.headers.get('content-type');
 
     // Handle JSON request for SVG creation
@@ -107,7 +131,7 @@ export async function POST(request: NextRequest) {
         mime_type: 'image/svg+xml',
         asset_folder_id: asset_folder_id || null,
         content: cleanedContent,
-      });
+      }, projectId);
 
       return noCache({
         data: asset,
@@ -135,7 +159,7 @@ export async function POST(request: NextRequest) {
 
     // Upload file to Supabase Storage and create asset record
     // This automatically extracts dimensions for images
-    const asset = await uploadFile(file, source);
+    const asset = await uploadFile(file, source, undefined, undefined, projectId);
 
     if (!asset) {
       return noCache(

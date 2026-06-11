@@ -3,6 +3,21 @@ import { noCache } from '@/lib/api-response';
 import { getAllFonts, createFont } from '@/lib/repositories/fontRepository';
 import { uploadFontFile } from '@/lib/font-upload';
 import { ALLOWED_FONT_EXTENSIONS } from '@/lib/font-utils';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const STUDIO_READ_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+  'customer_viewer',
+];
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 export const dynamic = 'force-dynamic';
 
@@ -10,9 +25,12 @@ export const dynamic = 'force-dynamic';
  * GET /ycode/api/fonts
  * List all fonts (Google + custom)
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const fonts = await getAllFonts();
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_READ_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const fonts = await getAllFonts(roleCheck.context.project.id);
     return noCache({ data: fonts });
   } catch (error) {
     console.error('Failed to fetch fonts:', error);
@@ -32,6 +50,10 @@ export async function GET() {
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const contentType = request.headers.get('content-type') || '';
 
     // Handle custom font upload via FormData
@@ -60,7 +82,7 @@ export async function POST(request: NextRequest) {
           return noCache({ error: 'Font file must be less than 10MB' }, 400);
         }
 
-        const font = await uploadFontFile(file);
+        const font = await uploadFontFile(file, undefined, projectId);
         if (font) {
           uploadedFonts.push(font);
         }
@@ -88,7 +110,7 @@ export async function POST(request: NextRequest) {
       weights: body.weights || ['400', '700'],
       category: body.category || '',
       axes: body.axes || null,
-    });
+    }, projectId);
 
     return noCache({ data: font }, 201);
   } catch (error) {

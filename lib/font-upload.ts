@@ -20,6 +20,7 @@ import type { Font } from '@/types';
 export async function uploadFontFile(
   file: File,
   fontName?: string,
+  projectId?: string | null,
 ): Promise<Font | null> {
   try {
     const supabase = await getSupabaseAdmin();
@@ -83,7 +84,7 @@ export async function uploadFontFile(
       url: urlData.publicUrl,
       storage_path: data.path,
       file_hash: fileHash,
-    });
+    }, projectId);
 
     return font;
   } catch (error) {

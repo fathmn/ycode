@@ -124,12 +124,15 @@ export async function getStyleByIdIncludingDeleted(id: string, isPublished: bool
  * Create a new layer style (draft by default)
  */
 export async function createStyle(
-  styleData: CreateLayerStyleData
+  styleData: CreateLayerStyleData,
+  projectId?: string | null
 ): Promise<LayerStyle> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
+
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'layer_styles', projectId);
 
   // Calculate content hash
   const contentHash = generateLayerStyleContentHash({
@@ -147,6 +150,7 @@ export async function createStyle(
       group: styleData.group,
       content_hash: contentHash,
       is_published: false,
+      ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
     })
     .select()
     .single();

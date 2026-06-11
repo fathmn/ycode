@@ -117,12 +117,15 @@ export async function getComponentsByIds(
  * Create a new component (draft by default)
  */
 export async function createComponent(
-  componentData: CreateComponentData
+  componentData: CreateComponentData,
+  projectId?: string | null
 ): Promise<Component> {
   const client = await getSupabaseAdmin();
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
+
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'components', projectId);
 
   // Calculate content hash
   const contentHash = generateComponentContentHash({
@@ -136,6 +139,7 @@ export async function createComponent(
     layers: componentData.layers,
     content_hash: contentHash,
     is_published: false,
+    ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
   };
   
   // Include variables if provided

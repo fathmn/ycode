@@ -172,7 +172,8 @@ export async function uploadFile(
   file: File,
   source: string,
   customName?: string,
-  assetFolderId?: string | null
+  assetFolderId?: string | null,
+  projectId?: string | null
 ): Promise<Asset | null> {
   try {
     const filename = getDisplayName(file.name, customName);
@@ -210,7 +211,7 @@ export async function uploadFile(
         source,
         asset_folder_id: assetFolderId,
         content: cleanedContent,
-      });
+      }, projectId);
 
       return asset;
     }
@@ -283,7 +284,7 @@ export async function uploadFile(
       height: dimensions?.height,
       source,
       asset_folder_id: assetFolderId,
-    });
+    }, projectId);
 
     return asset;
   } catch (error) {

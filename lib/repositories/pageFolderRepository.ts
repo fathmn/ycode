@@ -570,7 +570,7 @@ export async function deletePageFolder(id: string, projectId?: string | null): P
 /**
  * Restore a soft-deleted page folder
  */
-export async function restorePageFolder(id: string): Promise<void> {
+export async function restorePageFolder(id: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -578,12 +578,14 @@ export async function restorePageFolder(id: string): Promise<void> {
   }
 
   // Restore draft folder (publishing service will handle published version)
-  const { error } = await client
+  let query = client
     .from('page_folders')
     .update({ deleted_at: null })
     .eq('id', id)
     .eq('is_published', false)
     .not('deleted_at', 'is', null); // Only restore if deleted
+  query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to restore page folder: ${error.message}`);
@@ -594,17 +596,19 @@ export async function restorePageFolder(id: string): Promise<void> {
  * Force delete a page folder (permanent deletion)
  * Use with caution!
  */
-export async function forceDeletePageFolder(id: string): Promise<void> {
+export async function forceDeletePageFolder(id: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { error } = await client
+  let query = client
     .from('page_folders')
     .delete()
     .eq('id', id);
+  query = (await applyProjectScopeToQuery(query, client, 'page_folders', projectId)).query;
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to force delete page folder: ${error.message}`);

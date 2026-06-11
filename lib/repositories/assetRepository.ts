@@ -34,6 +34,7 @@ export interface GetAssetsOptions {
   search?: string; // Search by filename
   page?: number; // Page number (1-based)
   limit?: number; // Items per page
+  projectId?: string | null; // Studio project scope
 }
 
 /**
@@ -52,6 +53,7 @@ export async function getAssetsPaginated(options: GetAssetsOptions = {}): Promis
     search,
     page = 1,
     limit = 50,
+    projectId,
   } = options;
 
   const offset = (page - 1) * limit;
@@ -62,6 +64,8 @@ export async function getAssetsPaginated(options: GetAssetsOptions = {}): Promis
     .select('*', { count: 'exact' })
     .eq('is_published', false)
     .is('deleted_at', null);
+
+  query = (await applyProjectScopeToQuery(query, client, 'assets', projectId)).query;
 
   // Filter by folder(s)
   if (folderIds && folderIds.length > 0) {
@@ -318,13 +322,14 @@ export async function findAssetsByFilenames(filenames: string[]): Promise<Record
 /**
  * Create asset record (always creates as draft)
  */
-export async function createAsset(assetData: CreateAssetData): Promise<Asset> {
+export async function createAsset(assetData: CreateAssetData, projectId?: string | null): Promise<Asset> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'assets', projectId);
   const now = new Date().toISOString();
   const content_hash = generateAssetContentHash({
     filename: assetData.filename,
@@ -343,6 +348,7 @@ export async function createAsset(assetData: CreateAssetData): Promise<Asset> {
     .from('assets')
     .insert({
       ...assetData,
+      ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
       content_hash,
       is_published: false,
       updated_at: now,

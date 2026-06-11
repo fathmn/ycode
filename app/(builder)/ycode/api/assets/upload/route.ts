@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { uploadFile as uploadFileToStorage } from '@/lib/file-upload';
 import { isAssetOfType, ASSET_CATEGORIES } from '@/lib/asset-utils';
 import { noCache } from '@/lib/api-response';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
+
+const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * POST /ycode/api/assets/upload
@@ -10,6 +18,10 @@ import { noCache } from '@/lib/api-response';
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, STUDIO_WRITE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+    const projectId = roleCheck.context.project.id;
+
     const formData = await request.formData();
     const file = formData.get('file') as File;
     const source = formData.get('source') as string | null;
@@ -47,7 +59,7 @@ export async function POST(request: NextRequest) {
 
     // Upload file to Supabase Storage and create asset record
     // This automatically extracts dimensions for images using sharp
-    const asset = await uploadFileToStorage(file, source);
+    const asset = await uploadFileToStorage(file, source, undefined, undefined, projectId);
 
     if (!asset) {
       return noCache(

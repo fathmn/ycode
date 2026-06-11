@@ -719,7 +719,7 @@ export async function deletePage(id: string, projectId?: string | null): Promise
 /**
  * Restore a soft-deleted page
  */
-export async function restorePage(id: string): Promise<void> {
+export async function restorePage(id: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -727,12 +727,14 @@ export async function restorePage(id: string): Promise<void> {
   }
 
   // Restore draft page (publishing service will handle published version)
-  const { error } = await client
+  let query = client
     .from('pages')
     .update({ deleted_at: null })
     .eq('id', id)
     .eq('is_published', false)
     .not('deleted_at', 'is', null); // Only restore if deleted
+  query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to restore page: ${error.message}`);
@@ -743,17 +745,19 @@ export async function restorePage(id: string): Promise<void> {
  * Force delete a page (permanent deletion)
  * Use with caution!
  */
-export async function forceDeletePage(id: string): Promise<void> {
+export async function forceDeletePage(id: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase not configured');
   }
 
-  const { error } = await client
+  let query = client
     .from('pages')
     .delete()
     .eq('id', id);
+  query = (await applyProjectScopeToQuery(query, client, 'pages', projectId)).query;
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to force delete page: ${error.message}`);

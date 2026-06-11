@@ -1,5 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import type { Collection, CreateCollectionData, UpdateCollectionData } from '@/types';
 import { randomUUID } from 'crypto';
 
@@ -186,13 +186,14 @@ export async function getCollectionByName(name: string, isPublished: boolean = f
 /**
  * Create a new collection (draft by default)
  */
-export async function createCollection(collectionData: CreateCollectionData): Promise<Collection> {
+export async function createCollection(collectionData: CreateCollectionData, projectId?: string | null): Promise<Collection> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
+  const hasProjectScope = await resolveProjectScopeForWrite(client, 'collections', projectId);
   const id = randomUUID();
   const isPublished = collectionData.is_published ?? false;
 
@@ -201,6 +202,7 @@ export async function createCollection(collectionData: CreateCollectionData): Pr
     .insert({
       id,
       ...collectionData,
+      ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
       order: collectionData.order ?? 0,
       is_published: isPublished,
       created_at: new Date().toISOString(),
