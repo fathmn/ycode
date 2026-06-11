@@ -22,11 +22,11 @@
     "node": ">=18"
   },
   "scripts": {
-    "dev": "next dev -p 3002",
-    "dev:webpack": "next dev -p 3002 --webpack",
+    "dev": "next dev -p 3102",
+    "dev:webpack": "next dev -p 3102 --webpack",
     "prod": "npm run build && npm run start",
     "build": "next build",
-    "start": "next start -p 3002",
+    "start": "next start -p 3102",
     "cache:clear": "rm -rf .next",
     "lint": "eslint .",
     "lint:fix": "eslint --fix .",
