@@ -15,11 +15,13 @@ import type { SupabaseConfig } from './types/index.ts';
  * Uses environment variables on Vercel, file-based storage locally
  */
 async function getSupabaseConnectionParams() {
+  const supabaseUrl = process.env.SUPABASE_URL;
   const config: SupabaseConfig = {
     anonKey: process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '',
     serviceRoleKey: process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '',
     connectionUrl: process.env.SUPABASE_CONNECTION_URL || '',
     dbPassword: process.env.SUPABASE_DB_PASSWORD || '',
+    ...(supabaseUrl ? { supabaseUrl } : {}),
   };
 
   if (!config?.connectionUrl || !config?.dbPassword) {
