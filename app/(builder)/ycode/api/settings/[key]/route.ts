@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSettingByKey, setSetting } from '@/lib/repositories/settingsRepository';
-import { clearAllCache } from '@/lib/services/cacheService';
+import { clearAllCache, getAllPublishedRoutes, warmRoutes } from '@/lib/services/cacheService';
 import { recordStudioCustomCodeMutation, requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 const CUSTOM_CODE_SETTING_KEYS = new Set(['custom_code_head', 'custom_code_body']);
@@ -26,6 +26,21 @@ const SETTINGS_OPERATOR_ROLES: StudioProjectRole[] = [
 function rolesForSettingKey(key: string, fallbackRoles: StudioProjectRole[]): StudioProjectRole[] {
   return OPERATOR_ONLY_SETTING_KEYS.has(key) ? SETTINGS_OPERATOR_ROLES : fallbackRoles;
 }
+
+/**
+ * Setting keys that don't affect public-page rendering and therefore should
+ * NOT trigger a cache nuke when updated.
+ *
+ * - `draft_css`: builder-only preview CSS. Public pages serve `published_css`.
+ *   Saved on every edit, so invalidating here would purge every page on every
+ *   keystroke and undo selective invalidation entirely.
+ * - `email`: SMTP credentials for form submission backend. Not consumed by
+ *   public page renders.
+ *
+ * All other keys (redirects, favicon_url, ga_measurement_id, published_css,
+ * color variables, etc.) are read by public pages and DO require invalidation.
+ */
+const DRAFT_ONLY_SETTING_KEYS = new Set(['draft_css', 'email']);
 
 /**
  * GET /ycode/api/settings/[key]
@@ -86,7 +101,26 @@ export async function PUT(
 
     await setSetting(key, value, roleCheck.context.project.id);
 
-    await clearAllCache();
+    // Skip cache invalidation for draft/internal settings so builder
+    // autosaves don't purge the public CDN cache on every edit.
+    if (!DRAFT_ONLY_SETTING_KEYS.has(key)) {
+      await clearAllCache();
+
+      // Prime the cache so the first visit to any public page after this
+      // settings change doesn't pay the cold-cache cost. Capped inside
+      // warmRoutes; long-tail routes self-warm on first real visit.
+      try {
+        const routes = await getAllPublishedRoutes();
+        const warmResult = await warmRoutes(routes, request);
+        if (warmResult) {
+          console.log(
+            `[Cache] settings (${key}): warming ${warmResult.warmed}${warmResult.total > warmResult.warmed ? ` of ${warmResult.total}` : ''} route(s) in background`,
+          );
+        }
+      } catch {
+        // Non-fatal: warming is an optimization
+      }
+    }
 
     if (CUSTOM_CODE_SETTING_KEYS.has(key)) {
       await recordStudioCustomCodeMutation(request, {

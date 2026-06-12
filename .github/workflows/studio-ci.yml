@@ -18,6 +18,10 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Generate Next.js types
+        # next-env.d.ts / Image-Modul-Typen existieren erst nach typegen —
+        # ohne diesen Schritt scheitert tsc in CI an *.svg/*.png-Imports.
+        run: npx next typegen
       - name: Type check
         run: npm run type-check
       - name: Lint

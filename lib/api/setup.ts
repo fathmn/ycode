@@ -12,6 +12,9 @@ import { studioFetch } from '@/lib/api';
  */
 export async function checkSetupStatus(): Promise<{
   is_configured: boolean;
+  is_setup_complete: boolean;
+  is_vercel: boolean;
+  error?: string;
 }> {
   const response = await studioFetch('/ycode/api/setup/status');
 
@@ -36,6 +39,7 @@ export async function connectSupabase(
       service_role_key: config.serviceRoleKey,
       connection_url: config.connectionUrl,
       db_password: config.dbPassword,
+      ...(config.supabaseUrl ? { supabase_url: config.supabaseUrl } : {}),
     }),
   });
 

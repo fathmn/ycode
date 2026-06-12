@@ -1,6 +1,8 @@
-import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { getSupabaseAdmin, getTenantIdFromHeaders } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
+import { getKnexClient } from '@/lib/knex-client';
 import type { CollectionItemValue, CollectionFieldType } from '@/types';
+import { isValidUUID } from '@/lib/utils';
 import { castValue, valueToString } from '../collection-utils';
 import { generateCollectionItemContentHash } from '../hash-utils';
 import { randomUUID } from 'crypto';
@@ -53,7 +55,8 @@ export interface CreateCollectionItemValueData {
  * @param values - Array of value records to insert
  */
 export async function insertValuesBulk(
-  values: Array<{ item_id: string; field_id: string; value: string | null; is_published?: boolean }>
+  values: Array<{ item_id: string; field_id: string; value: string | null; is_published?: boolean }>,
+  projectId?: string | null
 ): Promise<void> {
   const client = await getSupabaseAdmin();
 
@@ -62,6 +65,11 @@ export async function insertValuesBulk(
   }
 
   if (values.length === 0) return;
+
+  const hasProjectScope = await tableHasProjectScopeColumn(client, 'collection_item_values');
+  if (isSharedDbProjectScopeRequired() && (!hasProjectScope || !projectId)) {
+    throw new Error('Project scope is required for collection_item_values');
+  }
 
   const now = new Date().toISOString();
   const valuesToInsert = values.map(v => ({
@@ -72,6 +80,7 @@ export async function insertValuesBulk(
     is_published: v.is_published ?? false,
     created_at: now,
     updated_at: now,
+    ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
   }));
 
   const { error } = await client
@@ -83,6 +92,50 @@ export async function insertValuesBulk(
   }
 }
 
+/**
+ * Insert values via Knex (direct PG connection) with an extended timeout.
+ * Used for oversized values that exceed PostgREST's statement timeout.
+ * Sets tenant context when available so DB triggers can populate tenant_id.
+ */
+export async function insertValuesDirectPg(
+  values: Array<{ item_id: string; field_id: string; value: string | null; is_published?: boolean }>,
+  projectId?: string | null
+): Promise<void> {
+  if (values.length === 0) return;
+
+  const knex = await getKnexClient();
+  const tenantId = await getTenantIdFromHeaders();
+
+  let hasProjectScope = false;
+  const client = await getSupabaseAdmin();
+  if (client) {
+    hasProjectScope = await tableHasProjectScopeColumn(client, 'collection_item_values');
+  }
+  if (isSharedDbProjectScopeRequired() && (!hasProjectScope || !projectId)) {
+    throw new Error('Project scope is required for collection_item_values');
+  }
+
+  const now = new Date().toISOString();
+  const rows = values.map(v => ({
+    id: randomUUID(),
+    item_id: v.item_id,
+    field_id: v.field_id,
+    value: v.value,
+    is_published: v.is_published ?? false,
+    created_at: now,
+    updated_at: now,
+    ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
+  }));
+
+  await knex.transaction(async (trx) => {
+    await trx.raw("SET LOCAL statement_timeout = '60s'");
+    if (tenantId) {
+      await trx.raw('SELECT set_tenant_context(?::uuid)', [tenantId]);
+    }
+    await trx('collection_item_values').insert(rows);
+  });
+}
+
 export interface UpdateCollectionItemValueData {
   value?: string | null;
 }
@@ -91,10 +144,14 @@ export interface UpdateCollectionItemValueData {
  * Get all values for multiple items in one query (batch operation)
  * @param item_ids - Array of item UUIDs
  * @param is_published - Filter for draft (false) or published (true) values. Defaults to false (draft).
+ * @param knownFieldTypes - Optional pre-loaded field-id → type map to skip the extra lookup
+ * @param fieldIds - Optional whitelist of field IDs to fetch
  */
 export async function getValuesByItemIds(
   item_ids: string[],
   is_published: boolean = false,
+  knownFieldTypes?: Record<string, string>,
+  fieldIds?: string[],
   projectId?: string | null
 ): Promise<Record<string, Record<string, any>>> {
   const client = await getSupabaseAdmin();
@@ -103,43 +160,192 @@ export async function getValuesByItemIds(
     throw new Error('Supabase client not configured');
   }
 
-  if (item_ids.length === 0) {
+  // Guard against non-UUID ids (e.g. dangling legacy bindings from imported
+  // content). Passing them to a uuid column throws and would otherwise take
+  // down the whole page render.
+  const safeItemIds = item_ids.filter(isValidUUID);
+  const safeFieldIds = fieldIds?.filter(isValidUUID);
+
+  if (safeItemIds.length === 0 || (safeFieldIds && safeFieldIds.length === 0)) {
     return {};
   }
 
-  // Batch into chunks to avoid exceeding PostgREST URL length limits.
-  // Keep chunks small enough that total value rows stay under Supabase's
-  // default 1000-row response limit (50 items × ~20 fields = ~1000 rows).
-  const CHUNK_SIZE = 50;
   const valuesByItem: Record<string, Record<string, any>> = {};
+  let allRows: Array<{ item_id: string; field_id: string; value: string }> = [];
 
-  for (let i = 0; i < item_ids.length; i += CHUNK_SIZE) {
-    const chunk = item_ids.slice(i, i + CHUNK_SIZE);
+  const hasProjectScope = await tableHasProjectScopeColumn(client, 'collection_item_values');
+  if (isSharedDbProjectScopeRequired() && (!hasProjectScope || !projectId)) {
+    throw new Error('Project scope is required for collection_item_values');
+  }
 
-    let query = client
-      .from('collection_item_values')
-      .select('item_id, field_id, value, collection_fields!inner(type)')
-      .in('item_id', chunk)
-      .eq('is_published', is_published)
-      .is('deleted_at', null)
-      .limit(5000);
-    query = (await applyProjectScopeToQuery(query, client, 'collection_item_values', projectId)).query;
-    const { data, error } = await query;
-
-    if (error) {
-      throw new Error(`Failed to fetch item values: ${error.message}`);
+  // Fresh path: prefer direct DB query (Knex) for large EAV reads.
+  // This avoids PostgREST overhead and URL-size chunking behavior.
+  try {
+    const knex = await getKnexClient();
+    let query = knex('collection_item_values')
+      .select('item_id', 'field_id', 'value')
+      .whereIn('item_id', safeItemIds)
+      .andWhere('is_published', is_published)
+      .whereNull('deleted_at');
+    if (safeFieldIds) {
+      query = query.whereIn('field_id', safeFieldIds);
+    }
+    if (hasProjectScope && projectId) {
+      query = query.andWhere('project_id', projectId);
+    }
+    allRows = await query;
+  } catch {
+    // Fallback: Supabase chunked reads
+    const CHUNK_SIZE = 50;
+    const chunks: string[][] = [];
+    for (let i = 0; i < safeItemIds.length; i += CHUNK_SIZE) {
+      chunks.push(safeItemIds.slice(i, i + CHUNK_SIZE));
     }
 
-    data?.forEach((row: any) => {
-      if (!valuesByItem[row.item_id]) {
-        valuesByItem[row.item_id] = {};
+    const chunkResults = await Promise.all(
+      chunks.map(async (chunk) => {
+        let q = client
+          .from('collection_item_values')
+          .select('item_id, field_id, value')
+          .in('item_id', chunk)
+          .eq('is_published', is_published)
+          .is('deleted_at', null);
+        if (safeFieldIds) {
+          q = q.in('field_id', safeFieldIds);
+        }
+        q = (await applyProjectScopeToQuery(q, client, 'collection_item_values', projectId)).query;
+        const { data, error } = await q.limit(5000);
+
+        if (error) {
+          throw new Error(`Failed to fetch item values: ${error.message}`);
+        }
+
+        return data || [];
+      })
+    );
+
+    for (const rows of chunkResults) {
+      for (const row of rows) {
+        allRows.push(row);
       }
-      const fieldType = row.collection_fields?.type;
-      valuesByItem[row.item_id][row.field_id] = castValue(row.value, fieldType || 'text');
-    });
+    }
+  }
+
+  // Collect unique field IDs (only needed if caller didn't provide types)
+  const discoveredFieldIds = new Set<string>();
+  if (!knownFieldTypes) {
+    for (const row of allRows) {
+      discoveredFieldIds.add(row.field_id);
+    }
+  }
+
+  // Use caller-provided field types, or fetch them in a single query
+  let fieldTypeMap = knownFieldTypes;
+  if (!fieldTypeMap) {
+    fieldTypeMap = {};
+    if (discoveredFieldIds.size > 0) {
+      const { data: fields } = await client
+        .from('collection_fields')
+        .select('id, type')
+        .in('id', Array.from(discoveredFieldIds));
+
+      fields?.forEach((f: any) => { fieldTypeMap![f.id] = f.type; });
+    }
+  }
+
+  for (const row of allRows) {
+    if (!valuesByItem[row.item_id]) {
+      valuesByItem[row.item_id] = {};
+    }
+    valuesByItem[row.item_id][row.field_id] = castValue(row.value, (fieldTypeMap[row.field_id] || 'text') as any);
   }
 
   return valuesByItem;
+}
+
+/** Raw value row needed when publishing/diffing item values. */
+export interface PublishValueRow {
+  id: string;
+  item_id: string;
+  field_id: string;
+  value: string | null;
+  created_at: string;
+}
+
+/**
+ * Bulk-fetch full value rows for many items in a single direct-DB (Knex) query.
+ * Avoids PostgREST's row cap and URL-size chunking, which forced per-batch
+ * paginated reads during publish. Falls back to chunked PostgREST on error.
+ */
+export async function getValueRowsForItems(
+  itemIds: string[],
+  isPublished: boolean,
+  projectId?: string | null,
+  tenantId?: string,
+): Promise<PublishValueRow[]> {
+  if (itemIds.length === 0) return [];
+
+  let hasProjectScope = false;
+  {
+    const scopeClient = await getSupabaseAdmin(tenantId);
+    if (scopeClient) {
+      hasProjectScope = await tableHasProjectScopeColumn(scopeClient, 'collection_item_values');
+    }
+  }
+  if (isSharedDbProjectScopeRequired() && (!hasProjectScope || !projectId)) {
+    throw new Error('Project scope is required for collection_item_values');
+  }
+
+  try {
+    const knex = await getKnexClient();
+    const resolvedTenantId = tenantId ?? await getTenantIdFromHeaders();
+    let query = knex('collection_item_values')
+      .select('id', 'item_id', 'field_id', 'value', 'created_at')
+      .whereIn('item_id', itemIds)
+      .andWhere('is_published', isPublished)
+      .whereNull('deleted_at');
+    if (resolvedTenantId) {
+      query = query.where('tenant_id', resolvedTenantId);
+    }
+    if (hasProjectScope && projectId) {
+      query = query.where('project_id', projectId);
+    }
+    return await query;
+  } catch {
+    // Fallback: paginated PostgREST reads (chunk item IDs to stay within URL limits)
+    const client = await getSupabaseAdmin(tenantId);
+    if (!client) throw new Error('Supabase client not configured');
+
+    const ITEM_CHUNK = 50;
+    const PAGE_SIZE = 1000;
+    const rows: PublishValueRow[] = [];
+
+    for (let i = 0; i < itemIds.length; i += ITEM_CHUNK) {
+      const chunkIds = itemIds.slice(i, i + ITEM_CHUNK);
+      let offset = 0;
+      while (true) {
+        let pageQuery = client
+          .from('collection_item_values')
+          .select('id, item_id, field_id, value, created_at')
+          .in('item_id', chunkIds)
+          .eq('is_published', isPublished)
+          .is('deleted_at', null);
+        pageQuery = (await applyProjectScopeToQuery(pageQuery, client, 'collection_item_values', projectId)).query;
+        const { data, error } = await pageQuery
+          .order('id', { ascending: true })
+          .range(offset, offset + PAGE_SIZE - 1);
+
+        if (error) throw new Error(`Failed to fetch item values: ${error.message}`);
+
+        const batch = (data || []) as PublishValueRow[];
+        rows.push(...batch);
+        if (batch.length < PAGE_SIZE) break;
+        offset += PAGE_SIZE;
+      }
+    }
+
+    return rows;
+  }
 }
 
 /**
@@ -460,6 +666,17 @@ export async function setValuesByFieldName(
     valuesToSet[fieldId] = valueToString(value, type);
   }
 
+  // Auto-bump the virtual `updated_at` field whenever values are being set,
+  // unless the caller explicitly provided one. The DB column on
+  // `collection_items` is bumped via updateContentHash below, but the
+  // user-facing "Updated Date" column in the CMS table reads this virtual
+  // field — without this, edits would never appear to refresh.
+  const updatedAtFieldId = Object.keys(fieldKeyMap).find(id => fieldKeyMap[id] === 'updated_at');
+  const autoBumpedUpdatedAt = updatedAtFieldId && !(updatedAtFieldId in valuesToSet);
+  if (autoBumpedUpdatedAt) {
+    valuesToSet[updatedAtFieldId!] = new Date().toISOString();
+  }
+
   // Detect changes and removals for translation management (only for draft)
   if (!is_published) {
     const changedKeys: string[] = [];
@@ -467,6 +684,9 @@ export async function setValuesByFieldName(
 
     // Check for changed values
     for (const [fieldId, newValue] of Object.entries(valuesToSet)) {
+      // An auto-bumped `updated_at` shouldn't mark translations as incomplete
+      if (autoBumpedUpdatedAt && fieldId === updatedAtFieldId) continue;
+
       const oldValue = currentValuesMap[fieldId];
 
       // Generate content key based on field key (if exists) or field id

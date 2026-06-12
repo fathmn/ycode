@@ -59,7 +59,7 @@ async function fetchCachedGlobalSettings(projectId: string | null) {
   const projectCacheKey = projectId || 'global';
   try {
     return await unstable_cache(
-      async () => fetchGlobalPageSettings(projectId),
+      async () => fetchGlobalPageSettings(false, projectId),
       [`data-for-project-${projectCacheKey}-global-settings`],
       { tags: ['all-pages', `project-${projectCacheKey}`], revalidate: false }
     )();

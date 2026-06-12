@@ -5,14 +5,13 @@
  *
  * Renders selection, hover, and parent outlines on top of the canvas iframe.
  * Uses direct DOM manipulation for instant updates during scrolling.
- * 
+ *
  * Note: Drag initiation for sibling reordering is handled by the
  * useCanvasSiblingReorder hook, which listens to iframe mousedown events.
  */
 
 import React, { useEffect, useRef, useCallback } from 'react';
 import { useEditorStore } from '@/stores/useEditorStore';
-
 interface SelectionOverlayProps {
   /** Reference to the canvas iframe element */
   iframeElement: HTMLIFrameElement | null;
@@ -20,8 +19,6 @@ interface SelectionOverlayProps {
   containerElement: HTMLElement | null;
   /** Currently selected layer ID */
   selectedLayerId: string | null;
-  /** Currently hovered layer ID */
-  hoveredLayerId: string | null;
   /** Parent layer ID (one level up from selected) */
   parentLayerId: string | null;
   /** Current zoom level (percentage) */
@@ -36,12 +33,12 @@ export function SelectionOverlay({
   iframeElement,
   containerElement,
   selectedLayerId,
-  hoveredLayerId,
   parentLayerId,
   zoom,
   activeSublayerIndex,
   activeListItemIndex,
 }: SelectionOverlayProps) {
+  const hoveredLayerIdRef = useRef(useEditorStore.getState().hoveredLayerId);
   const activeUIState = useEditorStore((state) => state.activeUIState);
   const isStateActive = activeUIState !== 'neutral';
 
@@ -58,10 +55,11 @@ export function SelectionOverlay({
   const selectedContainerRef = useRef<HTMLDivElement>(null);
   const hoveredContainerRef = useRef<HTMLDivElement>(null);
   const parentContainerRef = useRef<HTMLDivElement>(null);
-  
-  // Track drag/animation state for scroll/mutation handlers
+
+  // Track drag/animation/resize state for scroll/mutation handlers
   const isDraggingRef = useRef(false);
   const isSliderAnimatingRef = useRef(false);
+  const isSidebarResizingRef = useRef(false);
 
   const hideAllOutlines = useCallback(() => {
     if (selectedContainerRef.current) selectedContainerRef.current.style.display = 'none';
@@ -115,6 +113,14 @@ export function SelectionOverlay({
     const iframeRect = iframeElement.getBoundingClientRect();
     const containerRect = containerElement.getBoundingClientRect();
 
+    // The canvas is scaled with `transform: scale()` on a wrapper, so inner
+    // element rects (measured via getBoundingClientRect inside the iframe) are
+    // reported in the iframe's own unscaled layout coordinates in every browser.
+    // Multiplying by the scale factor (`scale` = zoom/100) maps them to on-screen
+    // pixels. NOTE: do NOT derive the multiplier from iframeRect.width /
+    // innerRootWidth — the iframe element width (canvas width) and the content
+    // layout width can differ, which over-scaled outlines on Safari.
+
     // Ensure we have the right number of child outline divs
     while (container.children.length < targetElements.length) {
       const div = document.createElement('div');
@@ -156,46 +162,94 @@ export function SelectionOverlay({
     });
   }, []);
 
-  // Update all outlines
-  const updateAllOutlines = useCallback((skipSolidBorders = false) => {
-    if (isSliderAnimatingRef.current) {
-      hideAllOutlines();
-      return;
-    }
-
-    if (!iframeElement || !containerElement) {
-      hideAllOutlines();
-      return;
-    }
-
+  /** Resolve iframe state needed to position an outline. Returns null when
+   * outlines must be hidden (during slider animation, sidebar resize, or when
+   * the iframe isn't ready). */
+  const getOutlineContext = useCallback(() => {
+    if (isSliderAnimatingRef.current || isSidebarResizingRef.current) return null;
+    if (!iframeElement || !containerElement) return null;
     const iframeDoc = iframeElement.contentDocument;
-    if (!iframeDoc) {
+    if (!iframeDoc) return null;
+    return { iframeDoc, iframeElement, containerElement, scale: zoom / 100 };
+  }, [iframeElement, containerElement, zoom]);
+
+  // Update just the hovered outline. Used on every hover store change so the
+  // outline tracks the cursor at the full RAF rate without the ~3× DOM work
+  // of refreshing selected/parent outlines that haven't moved.
+  const updateHoveredOutline = useCallback(() => {
+    const ctx = getOutlineContext();
+    if (!ctx) {
       hideAllOutlines();
       return;
     }
+    const hovered = hoveredLayerIdRef.current;
+    const effectiveHoveredId = hovered !== selectedLayerId ? hovered : null;
+    updateOutline(hoveredContainerRef.current, effectiveHoveredId, ctx.iframeDoc, ctx.iframeElement, ctx.containerElement, ctx.scale, HOVERED_OUTLINE_CLASS);
+  }, [getOutlineContext, hideAllOutlines, selectedLayerId, updateOutline, HOVERED_OUTLINE_CLASS]);
 
-    const scale = zoom / 100;
+  // Update all outlines. Called whenever selection/parent change, on scroll,
+  // viewport switches, drag start/end, and on iframe layout shifts (image
+  // loads, font swaps, etc.) detected by the ResizeObserver below.
+  const updateAllOutlines = useCallback((skipSolidBorders = false) => {
+    const ctx = getOutlineContext();
+    if (!ctx) {
+      hideAllOutlines();
+      return;
+    }
 
     // Update selected outline (skip during drag)
     if (!skipSolidBorders) {
-      updateOutline(selectedContainerRef.current, selectedLayerId, iframeDoc, iframeElement, containerElement, scale, SELECTED_OUTLINE_CLASS, activeSublayerIndex, activeListItemIndex);
+      updateOutline(selectedContainerRef.current, selectedLayerId, ctx.iframeDoc, ctx.iframeElement, ctx.containerElement, ctx.scale, SELECTED_OUTLINE_CLASS, activeSublayerIndex, activeListItemIndex);
 
-      // Update hovered outline (only if different from selected)
-      const effectiveHoveredId = hoveredLayerId !== selectedLayerId ? hoveredLayerId : null;
-      updateOutline(hoveredContainerRef.current, effectiveHoveredId, iframeDoc, iframeElement, containerElement, scale, HOVERED_OUTLINE_CLASS);
+      const hovered = hoveredLayerIdRef.current;
+      const effectiveHoveredId = hovered !== selectedLayerId ? hovered : null;
+      updateOutline(hoveredContainerRef.current, effectiveHoveredId, ctx.iframeDoc, ctx.iframeElement, ctx.containerElement, ctx.scale, HOVERED_OUTLINE_CLASS);
     }
 
     // When a sublayer is active, show the parent richText layer with parent outline
     const effectiveParentId = activeSublayerIndex !== null && activeSublayerIndex !== undefined
       ? selectedLayerId
       : (parentLayerId !== selectedLayerId ? parentLayerId : null);
-    updateOutline(parentContainerRef.current, effectiveParentId, iframeDoc, iframeElement, containerElement, scale, PARENT_OUTLINE_CLASS);
-  }, [iframeElement, containerElement, selectedLayerId, hoveredLayerId, parentLayerId, zoom, updateOutline, hideAllOutlines, activeSublayerIndex, activeListItemIndex]);
+    updateOutline(parentContainerRef.current, effectiveParentId, ctx.iframeDoc, ctx.iframeElement, ctx.containerElement, ctx.scale, PARENT_OUTLINE_CLASS);
+  }, [getOutlineContext, hideAllOutlines, selectedLayerId, parentLayerId, updateOutline, activeSublayerIndex, activeListItemIndex, SELECTED_OUTLINE_CLASS, HOVERED_OUTLINE_CLASS, PARENT_OUTLINE_CLASS]);
 
   // Initial update and updates when IDs change
   useEffect(() => {
     updateAllOutlines();
   }, [updateAllOutlines]);
+
+  // Subscribe to hoveredLayerId changes without re-rendering. Uses a
+  // leading + trailing throttle around `updateHoveredOutline` (the cheap
+  // single-outline path): the first hover after an idle period runs
+  // synchronously so the outline lands in the same frame as the mouse event,
+  // and rapid cursor sweeps coalesce into one trailing update per RAF.
+  // Selected/parent outlines stay accurate because the ResizeObserver below
+  // catches layout shifts (image loads etc.) and triggers `updateAllOutlines`.
+  useEffect(() => {
+    let rafId: number | null = null;
+    let lastDrawnId: string | null = hoveredLayerIdRef.current;
+    const unsubscribe = useEditorStore.subscribe((state) => {
+      if (state.hoveredLayerId === hoveredLayerIdRef.current) return;
+      hoveredLayerIdRef.current = state.hoveredLayerId;
+
+      if (rafId !== null) return;
+
+      lastDrawnId = state.hoveredLayerId;
+      updateHoveredOutline();
+
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        if (hoveredLayerIdRef.current !== lastDrawnId) {
+          lastDrawnId = hoveredLayerIdRef.current;
+          updateHoveredOutline();
+        }
+      });
+    });
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      unsubscribe();
+    };
+  }, [updateHoveredOutline]);
 
   // Set up scroll/resize/mutation listeners
   useEffect(() => {
@@ -264,6 +318,21 @@ export function SelectionOverlay({
       });
     }
 
+    // ResizeObserver catches async layout shifts that MutationObserver misses
+    // (image loads, font swaps, transitions). Coalesced into a RAF so a burst
+    // of images loading at once only triggers one full outline refresh.
+    let resizeRafId: number | null = null;
+    const resizeObserver = new ResizeObserver(() => {
+      if (resizeRafId !== null) return;
+      resizeRafId = requestAnimationFrame(() => {
+        resizeRafId = null;
+        updateAllOutlines(isDraggingRef.current);
+      });
+    });
+    if (iframeDoc.body) {
+      resizeObserver.observe(iframeDoc.body);
+    }
+
     // Hide outlines during viewport switch, show after transition settles
     let viewportTimeout: ReturnType<typeof setTimeout> | null = null;
     const handleViewportChange = () => {
@@ -289,7 +358,9 @@ export function SelectionOverlay({
       if (viewportTimeout) clearTimeout(viewportTimeout);
       if (mutationTimeout) clearTimeout(mutationTimeout);
       if (mutationRafId) cancelAnimationFrame(mutationRafId);
+      if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
       mutationObserver.disconnect();
+      resizeObserver.disconnect();
       containerElement.removeEventListener('scroll', handleScroll);
       iframeDoc.removeEventListener('scroll', handleScroll);
       window.removeEventListener('resize', handleScroll);
@@ -303,7 +374,7 @@ export function SelectionOverlay({
   // Hide solid selection/hover outlines during drag, but keep dashed parent outline
   useEffect(() => {
     isDraggingRef.current = isDraggingLayerOnCanvas;
-    
+
     if (isDraggingLayerOnCanvas) {
       hideAllOutlines();
       updateAllOutlines(true); // skipSolidBorders = true, re-shows parent outline
@@ -326,6 +397,18 @@ export function SelectionOverlay({
     }
   }, [isSliderAnimating, updateAllOutlines, hideAllOutlines]);
 
+  // Hide outlines during sidebar resize
+  const isSidebarResizing = useEditorStore((state) => state.isSidebarResizing);
+
+  useEffect(() => {
+    isSidebarResizingRef.current = isSidebarResizing;
+    if (isSidebarResizing) {
+      hideAllOutlines();
+    } else {
+      updateAllOutlines();
+    }
+  }, [isSidebarResizing, hideAllOutlines, updateAllOutlines]);
+
   return (
     <div
       className="absolute inset-0 pointer-events-none overflow-hidden z-40"
@@ -343,4 +426,4 @@ export function SelectionOverlay({
   );
 }
 
-export default SelectionOverlay;
+export default React.memo(SelectionOverlay);

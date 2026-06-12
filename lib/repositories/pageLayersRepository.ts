@@ -114,11 +114,17 @@ export async function getPublishedLayers(pageId: string): Promise<PageLayers | n
  * @param pageId - Page ID
  * @param layers - Page layers
  * @param additionalData - Optional additional fields (e.g., metadata)
+ * @param existingDraft - Optional pre-fetched draft to skip the internal
+ *   `getDraftLayers` read. Callers that already have the row (e.g. the MCP
+ *   page-layers cache) can pass it through to avoid a redundant DB round trip.
+ *   Pass `null` to assert "no draft exists" without re-checking. Omit (or
+ *   pass `undefined`) to preserve the original fetch-then-decide behavior.
  */
 export async function upsertDraftLayers(
   pageId: string,
   layers: Layer[],
   additionalData?: Record<string, any>,
+  existingDraft?: PageLayers | null,
   projectId?: string | null
 ): Promise<PageLayers> {
   const client = await getSupabaseAdmin();
@@ -144,12 +150,14 @@ export async function upsertDraftLayers(
 
   const hasProjectScope = await resolveProjectScopeForWrite(client, 'page_layers', projectId);
 
-  // Check if draft exists
-  const existingDraft = await getDraftLayers(pageId, projectId);
+  // Use the caller-provided draft when available, otherwise fall back to a fresh read.
+  const resolvedDraft = existingDraft !== undefined
+    ? existingDraft
+    : await getDraftLayers(pageId, projectId);
 
   // Detect removed and changed layer content, update translations accordingly
-  if (existingDraft && existingDraft.layers) {
-    const oldContentMap = extractLayerContentMap(existingDraft.layers, 'page', pageId);
+  if (resolvedDraft && resolvedDraft.layers) {
+    const oldContentMap = extractLayerContentMap(resolvedDraft.layers, 'page', pageId);
     const newContentMap = extractLayerContentMap(layers, 'page', pageId);
 
     // Find removed keys (exist in old but not in new)
@@ -171,10 +179,14 @@ export async function upsertDraftLayers(
     }
   }
 
-  // Calculate content hash for layers
+  // Use provided generated_css, or preserve the existing value for hash consistency
+  const cssForHash = additionalData?.generated_css !== undefined
+    ? (additionalData.generated_css as string) || null
+    : resolvedDraft?.generated_css || null;
+
   const contentHash = generatePageLayersHash({
     layers,
-    generated_css: (additionalData?.generated_css as string) || null,
+    generated_css: cssForHash,
   });
 
   // Prepare update data
@@ -191,12 +203,12 @@ export async function upsertDraftLayers(
     updateData.project_id = projectId;
   }
 
-  if (existingDraft) {
+  if (resolvedDraft) {
     // Update existing draft
     let updateQuery = client
       .from('page_layers')
       .update(updateData)
-      .eq('id', existingDraft.id)
+      .eq('id', resolvedDraft.id)
       .eq('is_published', false);
     updateQuery = (await applyProjectScopeToQuery(updateQuery, client, 'page_layers', projectId)).query;
 
@@ -382,9 +394,10 @@ export async function publishPageLayers(draftPageId: string, publishedPageId: st
     if (hasChanges) {
       // Prepare update data WITHOUT primary key fields (id, is_published)
       const updateData: any = {
-        page_id: publishedPageId, // Same page ID (draft and published pages share same id)
+        page_id: publishedPageId,
         layers: draftLayers.layers,
-        content_hash: draftLayers.content_hash, // Copy hash from draft
+        generated_css: draftLayers.generated_css || null,
+        content_hash: draftLayers.content_hash,
         updated_at: new Date().toISOString(),
       };
 
@@ -407,9 +420,10 @@ export async function publishPageLayers(draftPageId: string, publishedPageId: st
   } else {
     // Create new published version - include ALL fields for insert
     const insertData: any = {
-      id: draftLayers.id, // Use same ID (composite key with is_published)
+      id: draftLayers.id,
       page_id: publishedPageId,
       layers: draftLayers.layers,
+      generated_css: draftLayers.generated_css || null,
       content_hash: draftLayers.content_hash,
       is_published: true,
     };
@@ -432,11 +446,15 @@ export async function publishPageLayers(draftPageId: string, publishedPageId: st
  * Batch publish page layers for multiple pages
  * Much more efficient than calling publishPageLayers in a loop
  * @param pageIds - Array of page IDs to publish layers for
- * @returns Number of layers published
+ * @returns Object with count and the page IDs that actually changed
  */
-export async function batchPublishPageLayers(pageIds: string[], projectId?: string | null): Promise<number> {
+export async function batchPublishPageLayers(
+  pageIds: string[],
+  projectId?: string | null,
+  options: { force?: boolean } = {},
+): Promise<{ count: number; changedPageIds: string[] }> {
   if (pageIds.length === 0) {
-    return 0;
+    return { count: 0, changedPageIds: [] };
   }
 
   const client = await getSupabaseAdmin();
@@ -445,49 +463,84 @@ export async function batchPublishPageLayers(pageIds: string[], projectId?: stri
     throw new Error('Supabase not configured');
   }
 
-  // Step 1: Batch fetch all draft layers
-  const draftLayers = await getDraftLayersForPages(pageIds, projectId);
+  // Step 1: Decide which pages to publish WITHOUT transferring the (large)
+  // layers JSONB for every page. We compare lightweight content_hash rows
+  // first, then fetch full draft layers only for the pages that changed.
+  //
+  // Forced mode skips the hash diff: the catch-up path for component/style
+  // changes passes a targeted set and must republish them even though the
+  // draft layers' JSONB still references the component by ID (so the hash is
+  // unchanged) while the resolved/rendered output now differs. Without it,
+  // the static export reads stale published layers and downstream writers
+  // (GitHub) see an empty diff.
+  let pageIdsToPublish: string[];
+
+  if (options.force) {
+    pageIdsToPublish = pageIds;
+  } else {
+    let draftHashesQuery = client
+      .from('page_layers')
+      .select('id, page_id, content_hash')
+      .in('page_id', pageIds)
+      .eq('is_published', false)
+      .is('deleted_at', null);
+    draftHashesQuery = (await applyProjectScopeToQuery(draftHashesQuery, client, 'page_layers', projectId)).query;
+    let publishedHashesQuery = client
+      .from('page_layers')
+      .select('id, content_hash')
+      .in('page_id', pageIds)
+      .eq('is_published', true)
+      .is('deleted_at', null);
+    publishedHashesQuery = (await applyProjectScopeToQuery(publishedHashesQuery, client, 'page_layers', projectId)).query;
+
+    const [draftHashes, publishedHashes] = await Promise.all([
+      draftHashesQuery,
+      publishedHashesQuery,
+    ]);
+
+    if (draftHashes.error) {
+      throw new Error(`Failed to fetch draft layer hashes: ${draftHashes.error.message}`);
+    }
+    if (publishedHashes.error) {
+      throw new Error(`Failed to fetch published layer hashes: ${publishedHashes.error.message}`);
+    }
+
+    const publishedHashById = new Map<string, string | null>(
+      (publishedHashes.data || []).map(r => [r.id, r.content_hash]),
+    );
+
+    pageIdsToPublish = (draftHashes.data || [])
+      .filter(d => {
+        const pubHash = publishedHashById.get(d.id);
+        return pubHash === undefined || pubHash !== d.content_hash;
+      })
+      .map(d => d.page_id);
+
+    if (pageIdsToPublish.length === 0) {
+      return { count: 0, changedPageIds: [] };
+    }
+  }
+
+  // Step 2: Fetch full draft layers only for the pages we will publish
+  const draftLayers = await getDraftLayersForPages(pageIdsToPublish, projectId);
 
   if (draftLayers.length === 0) {
-    return 0;
-  }
-
-  // Build map for quick lookup
-  const draftLayersById = new Map<string, PageLayers>();
-  for (const draft of draftLayers) {
-    draftLayersById.set(draft.id, draft);
-  }
-
-  // Step 2: Batch fetch existing published layers
-  const draftIds = draftLayers.map(d => d.id);
-  const existingPublished = await getPublishedLayersByIds(draftIds, projectId);
-
-  const publishedById = new Map<string, PageLayers>();
-  for (const pub of existingPublished) {
-    publishedById.set(pub.id, pub);
+    return { count: 0, changedPageIds: [] };
   }
 
   // Step 3: Prepare upsert data
-  const layersToUpsert: any[] = [];
   const now = new Date().toISOString();
   const hasProjectScope = await resolveProjectScopeForWrite(client, 'page_layers', projectId);
-
-  for (const draft of draftLayers) {
-    const existing = publishedById.get(draft.id);
-
-    // Only include if new or content_hash changed
-    if (!existing || existing.content_hash !== draft.content_hash) {
-      layersToUpsert.push({
-        id: draft.id,
-        page_id: draft.page_id,
-        layers: draft.layers,
-        content_hash: draft.content_hash,
-        is_published: true,
-        updated_at: now,
-        ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
-      });
-    }
-  }
+  const layersToUpsert: any[] = draftLayers.map(draft => ({
+    id: draft.id,
+    page_id: draft.page_id,
+    layers: draft.layers,
+    generated_css: draft.generated_css || null,
+    content_hash: draft.content_hash,
+    is_published: true,
+    updated_at: now,
+    ...(hasProjectScope && projectId ? { project_id: projectId } : {}),
+  }));
 
   // Step 4: Batch upsert
   if (layersToUpsert.length > 0) {
@@ -502,7 +555,10 @@ export async function batchPublishPageLayers(pageIds: string[], projectId?: stri
     }
   }
 
-  return layersToUpsert.length;
+  return {
+    count: layersToUpsert.length,
+    changedPageIds: [...new Set(layersToUpsert.map((l) => l.page_id as string))],
+  };
 }
 
 /**
@@ -527,4 +583,188 @@ export async function getPageLayers(pageId: string): Promise<PageLayers[]> {
   }
 
   return data || [];
+}
+
+export interface AffectedPagesByResource {
+  componentPageIds: string[];
+  stylePageIds: string[];
+  collectionPageIds: string[];
+}
+
+/**
+ * Expand changed component/style IDs through the components table to find
+ * transitive dependencies. If Component B is nested inside Component A,
+ * editing B should also flag A so that pages using A are invalidated.
+ *
+ * Handles arbitrary nesting depth (A > B > C) via iterative expansion.
+ * Also covers styles used inside components: if a changed style ID appears
+ * inside a component's layers, that component ID is added to the result.
+ *
+ * @returns Additional component IDs that transitively reference the changed resources
+ */
+async function expandThroughComponents(
+  client: NonNullable<Awaited<ReturnType<typeof getSupabaseAdmin>>>,
+  componentIds: string[],
+  styleIds: string[],
+): Promise<string[]> {
+  if (componentIds.length === 0 && styleIds.length === 0) return [];
+
+  const { data: allComponents } = await client
+    .from('components')
+    .select('id, layers')
+    .eq('is_published', false)
+    .is('deleted_at', null);
+
+  if (!allComponents || allComponents.length === 0) return [];
+
+  // Pre-stringify all component layers once
+  const componentTexts = allComponents.map(c => ({
+    id: c.id as string,
+    text: c.layers ? JSON.stringify(c.layers) : '',
+  }));
+
+  const expanded = new Set<string>();
+
+  // Phase 1: find components that contain any of the changed style IDs
+  for (const sid of styleIds) {
+    for (const comp of componentTexts) {
+      if (comp.text.includes(sid)) {
+        expanded.add(comp.id);
+      }
+    }
+  }
+
+  // Phase 2: iteratively find components that contain any changed (or
+  // newly discovered) component IDs until the set stabilizes.
+  // Seed the frontier with both the originally changed components AND
+  // components found in Phase 1 (style-containing components also need
+  // transitive expansion — e.g. Style X in Component B in Component A).
+  const frontier = new Set([...componentIds, ...expanded]);
+  const visited = new Set(frontier);
+
+  while (frontier.size > 0) {
+    const nextFrontier = new Set<string>();
+
+    for (const cid of frontier) {
+      for (const comp of componentTexts) {
+        if (comp.id === cid) continue; // skip self
+        if (expanded.has(comp.id) && visited.has(comp.id)) continue;
+        if (comp.text.includes(cid)) {
+          expanded.add(comp.id);
+          if (!visited.has(comp.id)) {
+            visited.add(comp.id);
+            nextFrontier.add(comp.id);
+          }
+        }
+      }
+    }
+
+    frontier.clear();
+    for (const id of nextFrontier) frontier.add(id);
+  }
+
+  return Array.from(expanded);
+}
+
+/**
+ * Find pages affected by changed components, layer styles, and collections
+ * in a single pass over draft page_layers (and pages.settings for collections).
+ *
+ * Searches via JSON.stringify in JS rather than PostgreSQL `::text` cast
+ * through the Supabase client (which URL-encodes `::` and breaks PostgREST).
+ *
+ * Uses draft rows because they always exist and contain the same structural
+ * references (componentId, styleId, collectionId) as published counterparts.
+ */
+export async function findAffectedPages(
+  componentIds: string[],
+  styleIds: string[],
+  collectionIds: string[],
+): Promise<AffectedPagesByResource> {
+  const result: AffectedPagesByResource = {
+    componentPageIds: [],
+    stylePageIds: [],
+    collectionPageIds: [],
+  };
+
+  const hasComponents = componentIds.length > 0;
+  const hasStyles = styleIds.length > 0;
+  const hasCollections = collectionIds.length > 0;
+
+  if (!hasComponents && !hasStyles && !hasCollections) return result;
+
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase client not available for dependency scan');
+
+  // Expand component/style IDs through nested component references so that
+  // editing Component B inside Component A also flags pages using A.
+  const expandedComponentIds = (hasComponents || hasStyles)
+    ? await expandThroughComponents(client, componentIds, styleIds)
+    : [];
+  const allComponentIds = [...new Set([...componentIds, ...expandedComponentIds])];
+  const hasExpandedComponents = allComponentIds.length > 0;
+
+  // Single scan of all draft page_layers
+  const { data: allLayers } = await client
+    .from('page_layers')
+    .select('page_id, layers')
+    .eq('is_published', false)
+    .is('deleted_at', null);
+
+  if (allLayers) {
+    const componentSet = new Set(allComponentIds);
+    const styleSet = new Set(styleIds);
+    const collectionSet = new Set(collectionIds);
+    const componentPages = new Set<string>();
+    const stylePages = new Set<string>();
+    const collectionPages = new Set<string>();
+
+    for (const row of allLayers) {
+      if (!row.layers) continue;
+      const text = JSON.stringify(row.layers);
+
+      if (hasExpandedComponents && !componentPages.has(row.page_id)) {
+        for (const id of componentSet) {
+          if (text.includes(id)) { componentPages.add(row.page_id); break; }
+        }
+      }
+      if (hasStyles && !stylePages.has(row.page_id)) {
+        for (const id of styleSet) {
+          if (text.includes(id)) { stylePages.add(row.page_id); break; }
+        }
+      }
+      if (hasCollections && !collectionPages.has(row.page_id)) {
+        for (const id of collectionSet) {
+          if (text.includes(id)) { collectionPages.add(row.page_id); break; }
+        }
+      }
+    }
+
+    result.componentPageIds = Array.from(componentPages);
+    result.stylePageIds = Array.from(stylePages);
+    result.collectionPageIds = Array.from(collectionPages);
+  }
+
+  // Collections also need pages.settings search (dynamic template pages)
+  if (hasCollections) {
+    const { data: allPages } = await client
+      .from('pages')
+      .select('id, settings')
+      .eq('is_published', false)
+      .is('deleted_at', null);
+
+    if (allPages) {
+      const collectionPageSet = new Set(result.collectionPageIds);
+      for (const page of allPages) {
+        if (!page.settings || collectionPageSet.has(page.id)) continue;
+        const text = JSON.stringify(page.settings);
+        for (const id of collectionIds) {
+          if (text.includes(id)) { collectionPageSet.add(page.id); break; }
+        }
+      }
+      result.collectionPageIds = Array.from(collectionPageSet);
+    }
+  }
+
+  return result;
 }

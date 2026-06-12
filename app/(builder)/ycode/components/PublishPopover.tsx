@@ -20,6 +20,7 @@ interface PublishPreviewCounts {
   components: number;
   layerStyles: number;
   assets: number;
+  translations: number;
   total: number;
 }
 
@@ -38,6 +39,7 @@ const BREAKDOWN_ITEMS: { key: keyof Omit<PublishPreviewCounts, 'total'>; label: 
   { key: 'collectionItems', label: 'CMS-Einträge', icon: 'database' },
   { key: 'layerStyles', label: 'Layer-Styles', icon: 'cube' },
   { key: 'assets', label: 'Assets', icon: 'image' },
+  { key: 'translations', label: 'Translations', icon: 'globe' },
 ];
 
 function getLastRenderedPreviewUrl(): string {

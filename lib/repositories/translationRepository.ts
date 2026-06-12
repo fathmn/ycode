@@ -5,12 +5,52 @@
  * Supports draft/published workflow with composite primary key (id, is_published)
  */
 
-import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { getSupabaseAdmin, getTenantIdFromHeaders } from '@/lib/supabase-server';
 import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { fetchAllRows } from '@/lib/supabase-constants';
+import { getKnexClient } from '@/lib/knex-client';
 import type { Translation, CreateTranslationData, UpdateTranslationData } from '@/types';
 
+type TranslationDiffRow = Pick<
+  Translation,
+  'id' | 'content_value' | 'is_completed' | 'deleted_at'
+>;
+
 /**
- * Get all translations for a locale (draft by default)
+ * Fetch every translation row (including soft-deleted) for one publish state in
+ * a single direct-DB (Knex) query. Replaces paginated PostgREST reads that
+ * issued ~one round-trip per 1000 rows when diffing large catalogues during
+ * publish. Falls back to paginated PostgREST on error.
+ *
+ * @param columns - SELECT list; pass a narrow set for diff/count callers.
+ */
+export async function getAllTranslationRows<T = Translation>(
+  isPublished: boolean,
+  columns: string[] = ['*'],
+  tenantId?: string,
+): Promise<T[]> {
+  try {
+    const knex = await getKnexClient();
+    const resolvedTenantId = tenantId ?? await getTenantIdFromHeaders();
+    let query = knex('translations').select(columns).where('is_published', isPublished);
+    if (resolvedTenantId) {
+      query = query.where('tenant_id', resolvedTenantId);
+    }
+    return await query as T[];
+  } catch {
+    const client = await getSupabaseAdmin(tenantId);
+    if (!client) return [];
+    const select = columns.includes('*') ? '*' : columns.join(', ');
+    return await fetchAllRows<T>((from, to) =>
+      client.from('translations').select(select).eq('is_published', isPublished).order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{ data: T[] | null; error: unknown }>,
+    );
+  }
+}
+
+/**
+ * Get all translations for a locale (draft by default). Pages through the
+ * 1000-row PostgREST default so projects with large catalogues don't get
+ * silently truncated.
  */
 export async function getTranslationsByLocale(
   localeId: string,
@@ -23,22 +63,32 @@ export async function getTranslationsByLocale(
     throw new Error('Supabase not configured');
   }
 
-  let query = client
-    .from('translations')
-    .select('*')
-    .eq('locale_id', localeId)
-    .eq('is_published', isPublished)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: true });
-  query = (await applyProjectScopeToQuery(query, client, 'translations', projectId)).query;
+  const PAGE_SIZE = 1000;
+  const results: Translation[] = [];
 
-  const { data, error } = await query;
+  for (let from = 0; ; from += PAGE_SIZE) {
+    let query = client
+      .from('translations')
+      .select('*')
+      .eq('locale_id', localeId)
+      .eq('is_published', isPublished)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    query = (await applyProjectScopeToQuery(query, client, 'translations', projectId)).query;
 
-  if (error) {
-    throw new Error(`Failed to fetch translations: ${error.message}`);
+    const { data, error } = await query;
+
+    if (error) {
+      throw new Error(`Failed to fetch translations: ${error.message}`);
+    }
+
+    if (!data || data.length === 0) break;
+    results.push(...(data as Translation[]));
+    if (data.length < PAGE_SIZE) break;
   }
 
-  return data || [];
+  return results;
 }
 
 /**
@@ -340,6 +390,9 @@ export async function upsertTranslations(
     content_key: t.content_key,
     content_type: t.content_type,
     content_value: t.content_value,
+    // Without this, the DB default (false) keeps batch translations hidden on
+    // the live site, which only renders completed translations.
+    is_completed: t.is_completed ?? false,
     is_published: false,
     deleted_at: null, // Restore if previously deleted
   }));
@@ -356,4 +409,53 @@ export async function upsertTranslations(
   }
 
   return data || [];
+}
+
+/**
+ * Count translations needing publish: drafts with no published counterpart,
+ * pending soft-deletes, or rows whose content_value/is_completed differs from
+ * published. Mirrors the diff logic in `publishLocalisation` so the preview
+ * matches what will actually publish. Paginates both sides to avoid the
+ * 1000-row PostgREST default silently truncating the count.
+ */
+export async function getUnpublishedTranslationsCount(): Promise<number> {
+  const cols = ['id', 'content_value', 'is_completed', 'deleted_at'];
+
+  const [draftRows, publishedRows] = await Promise.all([
+    getAllTranslationRows<TranslationDiffRow>(false, cols),
+    getAllTranslationRows<TranslationDiffRow>(true, cols),
+  ]);
+
+  if (draftRows.length === 0) {
+    return 0;
+  }
+
+  const publishedById = new Map<string, TranslationDiffRow>();
+  for (const t of publishedRows) {
+    publishedById.set(t.id, t);
+  }
+
+  let count = 0;
+  for (const draft of draftRows) {
+    const pub = publishedById.get(draft.id);
+
+    if (!pub || pub.deleted_at) {
+      if (!draft.deleted_at) count++;
+      continue;
+    }
+
+    if (draft.deleted_at) {
+      count++;
+      continue;
+    }
+
+    if (
+      draft.content_value !== pub.content_value ||
+      draft.is_completed !== pub.is_completed
+    ) {
+      count++;
+    }
+  }
+
+  return count;
 }

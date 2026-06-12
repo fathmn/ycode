@@ -8,7 +8,6 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import Icon from '@/components/ui/icon';
@@ -40,11 +39,13 @@ import { toast } from 'sonner';
 import { componentsApi, studioFetch } from '@/lib/api';
 import type { Layer } from '@/types';
 import ComponentCard from './ComponentCard';
+import RenameComponentDialog from './RenameComponentDialog';
 import SaveLayoutDialog from './SaveLayoutDialog';
 import { usePagesStore } from '@/stores/usePagesStore';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
 import { useEditorActions } from '@/hooks/use-editor-url';
+import { useLocalizationMode } from '@/hooks/use-localization-mode';
 import type { UseLiveLayerUpdatesReturn } from '@/hooks/use-live-layer-updates';
 
 /**
@@ -276,9 +277,35 @@ async function restoreInlinedComponents(
 }
 
 export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: ElementLibraryProps) {
-  const { addLayerFromTemplate, updateLayer, setDraftLayers, draftsByPageId, pages } = usePagesStore();
-  const { currentPageId, selectedLayerId, setSelectedLayerId, editingComponentId, activeBreakpoint, pushComponentNavigation, startCanvasDrag, endCanvasDrag } = useEditorStore();
-  const { components, componentDrafts, updateComponentDraft, deleteComponent, getDeletePreview, loadComponentDraft, getComponentById, loadComponents } = useComponentsStore();
+  const addLayerFromTemplate = usePagesStore((s) => s.addLayerFromTemplate);
+  const updateLayer = usePagesStore((s) => s.updateLayer);
+  const setDraftLayers = usePagesStore((s) => s.setDraftLayers);
+  const pages = usePagesStore((s) => s.pages);
+
+  const currentPageId = useEditorStore((s) => s.currentPageId);
+  // Intentionally NOT subscribing to selectedLayerId — every usage below is
+  // inside an event handler / async callback. Subscribing would re-render the
+  // entire library (1700+ lines, dozens of ElementButtons, tooltips, context
+  // menus) on every layer click. Read lazily via getState() instead.
+  const setSelectedLayerId = useEditorStore((s) => s.setSelectedLayerId);
+  const editingComponentId = useEditorStore((s) => s.editingComponentId);
+  const editingComponentVariantId = useEditorStore((s) => s.editingComponentVariantId);
+  const activeBreakpoint = useEditorStore((s) => s.activeBreakpoint);
+  const pushComponentNavigation = useEditorStore((s) => s.pushComponentNavigation);
+  const startCanvasDrag = useEditorStore((s) => s.startCanvasDrag);
+  const endCanvasDrag = useEditorStore((s) => s.endCanvasDrag);
+  const leftSidebarWidth = useEditorStore((s) => s.leftSidebarWidth);
+  const { isLocalizing } = useLocalizationMode();
+
+  const components = useComponentsStore((s) => s.components);
+  const componentDrafts = useComponentsStore((s) => s.componentDrafts);
+  const updateComponentDraft = useComponentsStore((s) => s.updateComponentDraft);
+  const deleteComponent = useComponentsStore((s) => s.deleteComponent);
+  const renameComponent = useComponentsStore((s) => s.renameComponent);
+  const getDeletePreview = useComponentsStore((s) => s.getDeletePreview);
+  const loadComponentDraft = useComponentsStore((s) => s.loadComponentDraft);
+  const getComponentById = useComponentsStore((s) => s.getComponentById);
+  const loadComponents = useComponentsStore((s) => s.loadComponents);
   const { openComponent } = useEditorActions();
 
   // Delete component state
@@ -296,6 +323,8 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
     return 'elements';
   });
   const [componentSearch, setComponentSearch] = useState('');
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [componentToRename, setComponentToRename] = useState<Component | null>(null);
   const tabRefs = React.useRef<Record<string, HTMLDivElement | null>>({});
 
   const circularComponentIds = useMemo(() => {
@@ -306,6 +335,16 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
         .map(c => c.id)
     );
   }, [components, editingComponentId]);
+
+  // Resolve the active variant id for the component currently being edited.
+  // Newly-added elements always go into the variant the user is looking at.
+  const activeComponentVariantId = useMemo(() => {
+    if (!editingComponentId) return null;
+    const drafts = componentDrafts[editingComponentId];
+    if (!drafts) return editingComponentVariantId || null;
+    if (editingComponentVariantId && drafts[editingComponentVariantId]) return editingComponentVariantId;
+    return Object.keys(drafts)[0] || null;
+  }, [editingComponentId, editingComponentVariantId, componentDrafts]);
 
   const matchingComponentIds = useMemo(() => {
     if (!componentSearch.trim()) return null;
@@ -394,12 +433,12 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
   }, [startCanvasDrag, onClose]);
 
   const handleAddElement = (elementType: string) => {
-    // If editing component, use component draft instead
-    if (editingComponentId) {
-      const layers = componentDrafts[editingComponentId] || [];
+    const selectedLayerId = useEditorStore.getState().selectedLayerId;
+    // If editing component, use the active variant's draft instead
+    if (editingComponentId && activeComponentVariantId) {
+      const layers = useComponentsStore.getState().componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
       const parentId = selectedLayerId || layers[0]?.id || 'body';
 
-      // Create new layer from template
       const template = getLayerFromTemplate(elementType);
       const displayName = getBlockName(elementType);
 
@@ -569,7 +608,9 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
           );
         }
 
-        updateComponentDraft(editingComponentId, finalLayers);
+        if (activeComponentVariantId) {
+          updateComponentDraft(editingComponentId, activeComponentVariantId, finalLayers);
+        }
         setSelectedLayerId(result.newLayerId);
         if (result.parentToExpand) {
           window.dispatchEvent(new CustomEvent('expandLayer', {
@@ -657,9 +698,10 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
   };
 
   const handleAddLayout = async (layoutKey: string) => {
-    // If editing component, use component draft instead
-    if (editingComponentId) {
-      const layers = componentDrafts[editingComponentId] || [];
+    const selectedLayerId = useEditorStore.getState().selectedLayerId;
+    // If editing component, use the active variant's draft instead
+    if (editingComponentId && activeComponentVariantId) {
+      const layers = useComponentsStore.getState().componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
 
       // Get layout template first (we need it to check if it's a section)
       const layoutTemplate = getLayoutTemplate(layoutKey);
@@ -825,7 +867,9 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
           );
         }
 
-        updateComponentDraft(editingComponentId, finalLayers);
+        if (activeComponentVariantId) {
+          updateComponentDraft(editingComponentId, activeComponentVariantId, finalLayers);
+        }
         setSelectedLayerId(result.newLayerId);
         if (result.parentToExpand) {
           window.dispatchEvent(new CustomEvent('expandLayer', {
@@ -1135,6 +1179,7 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
   };
 
   const handleAddComponent = (componentId: string) => {
+    const selectedLayerId = useEditorStore.getState().selectedLayerId;
     // Find the component
     const component = components.find(c => c.id === componentId);
     if (!component) return;
@@ -1174,8 +1219,8 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
       });
     };
 
-    // If editing a component, add to component draft
-    if (editingComponentId) {
+    // If editing a component, add to the active variant's draft
+    if (editingComponentId && activeComponentVariantId) {
       // Check for circular reference before adding
       const circularError = checkCircularReference(editingComponentId, componentInstanceLayer, components);
       if (circularError) {
@@ -1183,7 +1228,7 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
         return;
       }
 
-      const layers = componentDrafts[editingComponentId] || [];
+      const layers = useComponentsStore.getState().componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
       const parentId = selectedLayerId || layers[0]?.id;
       if (!parentId) return;
 
@@ -1214,7 +1259,7 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
         newLayers.splice(selectedIndex + 1, 0, componentInstanceLayer);
       }
 
-      updateComponentDraft(editingComponentId, newLayers);
+      updateComponentDraft(editingComponentId, activeComponentVariantId, newLayers);
       setSelectedLayerId(componentInstanceLayer.id);
 
       if (parentToExpand) {
@@ -1298,7 +1343,7 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
   const handleEditComponent = async (component: Component, e: React.MouseEvent) => {
     e.stopPropagation();
 
-    const { setSelectedLayerId: setLayerId } = useEditorStore.getState();
+    const { setSelectedLayerId: setLayerId, selectedLayerId } = useEditorStore.getState();
 
     setLayerId(null);
 
@@ -1337,6 +1382,24 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
     }
 
     onClose();
+  };
+
+  const handleStartRename = (component: Component) => {
+    setComponentToRename(component);
+    setRenameDialogOpen(true);
+  };
+
+  const handleConfirmRename = async (newName: string) => {
+    if (!componentToRename) return;
+
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === componentToRename.name) return;
+
+    try {
+      await renameComponent(componentToRename.id, trimmed);
+    } catch (error) {
+      console.error('Failed to rename component:', error);
+    }
   };
 
   const handleDeleteClick = async (component: Component, e: React.MouseEvent) => {
@@ -1387,12 +1450,37 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
 
   const deleteConfirmDescription = `Are you sure you want to delete "${componentName}"? ${usageSuffix}`;
 
+  // Read-only translation mode: hide the library entirely so the user knows
+  // they can't add or modify structural elements while in a non-default locale.
+  if (isLocalizing) {
+    return (
+      <div
+        className={cn(
+          'fixed top-14 bottom-0 w-64 bg-background border-r z-50 flex flex-col items-center justify-center p-6 text-center',
+          !isOpen && 'hidden'
+        )}
+        style={{ left: `${leftSidebarWidth}px` }}
+      >
+        <Empty>
+          <EmptyMedia variant="icon">
+            <Icon name="globe" />
+          </EmptyMedia>
+          <EmptyTitle>Translating</EmptyTitle>
+          <EmptyDescription>
+            Switch to the default locale to add elements.
+          </EmptyDescription>
+        </Empty>
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
-        'fixed left-64 top-14 bottom-0 w-64 bg-background border-r z-50 flex flex-col',
+        'fixed top-14 bottom-0 w-64 bg-background border-r z-50 flex flex-col',
         !isOpen && 'hidden'
       )}
+      style={{ left: `${leftSidebarWidth}px` }}
     >
         {/* Tabs */}
         <Tabs
@@ -1577,6 +1665,7 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
                           circularComponentIds.has(component.id) && 'opacity-40 pointer-events-none',
                           isHidden && 'hidden',
                         )}
+                        onStartRename={() => handleStartRename(component)}
                         onClick={() => handleAddComponent(component.id)}
                         onMouseDown={(e) => {
                           if (e.button !== 0) return;
@@ -1618,6 +1707,7 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem onClick={(e) => handleEditComponent(component, e)}>Edit</DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => handleStartRename(component)}>Rename</DropdownMenuItem>
                               <DropdownMenuItem onClick={(e) => handleDeleteClick(component, e)}>Delete</DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
@@ -1630,6 +1720,13 @@ export default function ElementLibrary({ isOpen, onClose, liveLayerUpdates }: El
             )}
           </TabsContent>
         </Tabs>
+
+        <RenameComponentDialog
+          open={renameDialogOpen}
+          onOpenChange={setRenameDialogOpen}
+          onConfirm={handleConfirmRename}
+          currentName={componentToRename?.name}
+        />
 
         <SaveLayoutDialog
           open={isEditLayoutDialogOpen}

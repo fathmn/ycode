@@ -29,7 +29,7 @@ import { isStudioOperatorRole } from '@/lib/studio-roles';
 
 // 1. React/Next.js
 import { useEffect, useState, useMemo, useRef, useCallback, Suspense, lazy } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 // 2. Internal components
 import CenterCanvas from '../components/CenterCanvas';
@@ -83,12 +83,16 @@ import { useFontsStore } from '@/stores/useFontsStore';
 import { useLocalisationStore } from '@/stores/useLocalisationStore';
 import { useMigrationStore } from '@/stores/useMigrationStore';
 import { useVersionsStore } from '@/stores/useVersionsStore';
+import { useRole } from '@/hooks/use-role';
+import { useImportPaste } from '@/hooks/use-import-paste';
+import type { ExternalPastePlacement } from '@/stores/useExternalPasteStore';
 // Collaboration temporarily disabled
 // import { useCollaborationPresenceStore } from '@/stores/useCollaborationPresenceStore';
 
 // 6. Utils/lib
 import { findHomepage } from '@/lib/page-utils';
-import { findLayerById, getClassesString, removeLayerById, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, findParentAndIndex, insertLayerAfter, updateLayerProps, getLayerIndexes, removeRichTextSublayer } from '@/lib/layer-utils';
+import { getStyleIds } from '@/lib/layer-style-resolve';
+import { findLayerById, getClassesString, removeLayerById, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, findParentAndIndex, insertLayerAfter, updateLayerProps, getLayerIndexes, removeRichTextSublayer, canPasteIntoParent, canHaveChildren, LINK_NESTING_ERROR } from '@/lib/layer-utils';
 import { cloneDeep } from 'lodash';
 
 // 5. Types
@@ -127,7 +131,13 @@ function isProjectNeutralStudioEntry(): boolean {
 
 export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCodeBuilderProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { routeType, resourceId, sidebarTab, navigateToLayers, navigateToCollection, navigateToCollections, navigateToComponent, urlState, updateQueryParams } = useEditorUrl();
+
+  // Role-based access
+  const { isEditor, canEditStructure } = useRole();
+  const canEditStructureRef = useRef(canEditStructure);
+  canEditStructureRef.current = canEditStructure;
 
   // Optimize store subscriptions - use selective selectors to prevent unnecessary re-renders
   const signOut = useAuthStore((state) => state.signOut);
@@ -136,8 +146,6 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
   const authPasswordSetupRequired = useAuthStore((state) => state.passwordSetupRequired);
   const authenticatedUserId = user?.id ?? null;
 
-  const selectedLayerId = useEditorStore((state) => state.selectedLayerId);
-  const selectedLayerIds = useEditorStore((state) => state.selectedLayerIds);
   const setSelectedLayerId = useEditorStore((state) => state.setSelectedLayerId);
   const clearSelection = useEditorStore((state) => state.clearSelection);
   const currentPageId = useEditorStore((state) => state.currentPageId);
@@ -189,9 +197,18 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
   const componentIsSaving = useComponentsStore((state) => state.isSaving);
   const components = useComponentsStore((state) => state.components);
-  const componentDraftLayers = useComponentsStore((state) =>
-    editingComponentId ? state.componentDrafts[editingComponentId] ?? null : null
-  );
+  // Track the active variant draft so layer-tracking refs (selection
+  // restoration, dirty detection) react to variant edits.
+  const editingComponentVariantId = useEditorStore((state) => state.editingComponentVariantId);
+  const componentDraftLayers = useComponentsStore((state) => {
+    if (!editingComponentId) return null;
+    const drafts = state.componentDrafts[editingComponentId];
+    if (!drafts) return null;
+    const variantId = (editingComponentVariantId && drafts[editingComponentVariantId])
+      ? editingComponentVariantId
+      : Object.keys(drafts)[0];
+    return variantId ? drafts[variantId] ?? null : null;
+  });
 
   const migrationsComplete = useMigrationStore((state) => state.migrationsComplete);
   const setMigrationsComplete = useMigrationStore((state) => state.setMigrationsComplete);
@@ -204,7 +221,10 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     urlState.view || 'desktop'
   );
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const lastLayersByPageRef = useRef<Map<string, string>>(new Map());
+  // Tracks the last-seen layers reference per page. Reference equality is
+  // sufficient because store mutators always produce a new layers array on
+  // actual changes (React relies on this for re-rendering).
+  const lastLayersByPageRef = useRef<Map<string, Layer[]>>(new Map());
   const previousPageIdRef = useRef<string | null>(null);
   const previousResourceIdRef = useRef<string | null>(null); // Track URL resourceId changes
   const hasInitializedLayerFromUrlRef = useRef(false);
@@ -227,6 +247,20 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     }
   }, [user, setCurrentCollaborationUser]);
 
+  // Redirect editors away from restricted routes
+  useEffect(() => {
+    if (!isEditor || !authInitialized) return;
+    const restricted = routeType === 'settings' || routeType === 'integrations' || routeType === 'component';
+    if (restricted) {
+      const targetPageId = currentPageId || pages[0]?.id;
+      if (targetPageId) {
+        navigateToLayers(targetPageId);
+      } else {
+        router.replace('/ycode');
+      }
+    }
+  }, [isEditor, authInitialized, routeType, currentPageId, pages, navigateToLayers, router]);
+
   // Sidebar tab from store - immediately synced when tab changes in LeftSidebar
   const activeSidebarTab = useEditorStore((state) => state.activeSidebarTab);
   // Use store-based tab for instant UI feedback, fallback to URL-based for initial load
@@ -235,27 +269,227 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
   // Combined saving state - either page or component
   const isCurrentlySaving = editingComponentId ? componentIsSaving : isSaving;
 
-  // Helper: Get current layers (from page or component)
+  // Helper: Get current layers (from page or active component variant)
   const getCurrentLayers = useCallback((): Layer[] => {
     if (editingComponentId) {
-      const { componentDrafts } = useComponentsStore.getState();
-      return componentDrafts[editingComponentId] || [];
+      const { componentDrafts, getComponentDraftLayers } = useComponentsStore.getState();
+      const drafts = componentDrafts[editingComponentId];
+      const variantId = (editingComponentVariantId && drafts?.[editingComponentVariantId])
+        ? editingComponentVariantId
+        : (drafts ? Object.keys(drafts)[0] : null);
+      return getComponentDraftLayers(editingComponentId, variantId);
     }
     if (currentPageId) {
       return currentDraft ? currentDraft.layers : [];
     }
     return [];
-  }, [editingComponentId, currentPageId, currentDraft]);
+  }, [editingComponentId, editingComponentVariantId, currentPageId, currentDraft]);
 
-  // Helper: Update current layers (page or component)
+  // Helper: Update current layers (page or active component variant)
   const updateCurrentLayers = useCallback((newLayers: Layer[]) => {
     if (editingComponentId) {
-      const { updateComponentDraft } = useComponentsStore.getState();
-      updateComponentDraft(editingComponentId, newLayers);
+      const { componentDrafts, updateComponentDraft } = useComponentsStore.getState();
+      const drafts = componentDrafts[editingComponentId];
+      const variantId = (editingComponentVariantId && drafts?.[editingComponentVariantId])
+        ? editingComponentVariantId
+        : (drafts ? Object.keys(drafts)[0] : null);
+      if (variantId) {
+        updateComponentDraft(editingComponentId, variantId, newLayers);
+      }
     } else if (currentPageId) {
       setDraftLayers(currentPageId, newLayers);
     }
-  }, [editingComponentId, currentPageId, setDraftLayers]);
+  }, [editingComponentId, editingComponentVariantId, currentPageId, setDraftLayers]);
+
+  // Import paste: insert layers produced by an import (Webflow / Figma).
+  // Placement mirrors Ycode's own copy/paste: insert inside the selected layer
+  // when it can hold children, otherwise drop in as a sibling next to it; with
+  // nothing suitable selected, fall back to the page root (body).
+  const insertImportedLayers = useCallback((layers: Layer[], placement?: ExternalPastePlacement) => {
+    if (layers.length === 0 || !canEditStructure) return;
+
+    // Explicit placement from the context menu's "Paste after / inside": honour
+    // the chosen position relative to the target layer instead of the default
+    // selection-based heuristic below.
+    if (placement) {
+      if (editingComponentId) {
+        const currentLayers = getCurrentLayers();
+        const target = findLayerById(currentLayers, placement.layerId);
+        if (!target) return;
+
+        let updated: Layer[];
+        if (placement.mode === 'inside') {
+          if (layers.some(l => !canPasteIntoParent(currentLayers, target.id, l))) {
+            toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+            return;
+          }
+          updated = updateLayerProps(currentLayers, target.id, {
+            children: [...(target.children || []), ...layers],
+          });
+        } else {
+          const result = findParentAndIndex(currentLayers, target.id);
+          if (!result) return;
+          if (
+            result.parent &&
+            layers.some(l => !canPasteIntoParent(currentLayers, result.parent!.id, l))
+          ) {
+            toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+            return;
+          }
+          updated = currentLayers;
+          let index = result.index;
+          for (const layer of layers) {
+            updated = insertLayerAfter(updated, result.parent, index, layer);
+            index += 1;
+          }
+        }
+        updateCurrentLayers(updated);
+        setSelectedLayerId(layers[0].id);
+        return;
+      }
+
+      if (!currentPageId) return;
+      if (placement.mode === 'inside') {
+        for (const layer of layers) {
+          if (!pasteInside(currentPageId, placement.layerId, layer)) {
+            toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+            return;
+          }
+        }
+      } else {
+        let anchorId = placement.layerId;
+        for (const layer of layers) {
+          const pasted = pasteAfter(currentPageId, anchorId, layer);
+          if (!pasted) {
+            toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+            return;
+          }
+          anchorId = pasted.id;
+        }
+      }
+      setSelectedLayerId(layers[0].id);
+      return;
+    }
+
+    const selectedId = selectedLayerIdRef.current;
+
+    // Component editor: the store paste actions are page-scoped, so operate
+    // directly on the component's layer tree using the same rules.
+    if (editingComponentId) {
+      const currentLayers = getCurrentLayers();
+      const selected = selectedId ? findLayerById(currentLayers, selectedId) : null;
+
+      let updated: Layer[];
+      if (selected && canHaveChildren(selected)) {
+        const appendInto = (nodes: Layer[]): Layer[] =>
+          nodes.map(node =>
+            node.id === selected.id
+              ? { ...node, children: [...(node.children || []), ...layers] }
+              : node.children && node.children.length > 0
+                ? { ...node, children: appendInto(node.children) }
+                : node,
+          );
+        updated = appendInto(currentLayers);
+      } else if (selected) {
+        const result = findParentAndIndex(currentLayers, selected.id);
+        if (
+          result?.parent &&
+          layers.some(l => !canPasteIntoParent(currentLayers, result.parent!.id, l))
+        ) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+        const parent = result?.parent ?? null;
+        let index = result ? result.index : currentLayers.length - 1;
+        updated = currentLayers;
+        for (const layer of layers) {
+          updated = insertLayerAfter(updated, parent, index, layer);
+          index += 1;
+        }
+      } else {
+        updated = [...currentLayers, ...layers];
+      }
+
+      updateCurrentLayers(updated);
+      setSelectedLayerId(layers[0].id);
+      return;
+    }
+
+    if (!currentPageId) return;
+
+    const currentLayers = getCurrentLayers();
+    const selected = selectedId ? findLayerById(currentLayers, selectedId) : null;
+
+    if (!selected || canHaveChildren(selected)) {
+      // Inside the selected container — or the page root when nothing usable
+      // is selected. pasteInside appends in order, preserving layer sequence.
+      const targetId = selected
+        ? selected.id
+        : currentLayers.find(l => l.id === 'body' || l.name === 'body')?.id ?? 'body';
+      for (const layer of layers) {
+        if (!pasteInside(currentPageId, targetId, layer)) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+      }
+    } else {
+      // Selected layer can't hold children — drop in next to it. Chain the
+      // anchor through each pasted layer so the original order is kept.
+      let anchorId = selected.id;
+      for (const layer of layers) {
+        const pasted = pasteAfter(currentPageId, anchorId, layer);
+        if (!pasted) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+        anchorId = pasted.id;
+      }
+    }
+
+    setSelectedLayerId(layers[0].id);
+  }, [canEditStructure, editingComponentId, currentPageId, getCurrentLayers, updateCurrentLayers, setSelectedLayerId, pasteInside, pasteAfter]);
+
+  // Normal Ycode paste (internal clipboard) — extracted from keydown so it
+  // can run inside the paste event handler after Figma detection fails.
+  const handleNormalPaste = useCallback(() => {
+    if (!canEditStructure) return;
+    const selectedLayerId = selectedLayerIdRef.current;
+    if (!clipboardLayer || !selectedLayerId) return;
+
+    if (editingComponentId) {
+      const circularError = checkCircularReference(editingComponentId, clipboardLayer, components);
+      if (circularError) {
+        toast.error('Endlosschleife in Komponente erkannt', { description: circularError });
+        return;
+      }
+      const layers = getCurrentLayers();
+      const result = findParentAndIndex(layers, selectedLayerId);
+      if (result) {
+        if (result.parent && !canPasteIntoParent(layers, result.parent.id, clipboardLayer)) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+        const newLayer = regenerateIdsWithInteractionRemapping(cloneDeep(clipboardLayer));
+        updateCurrentLayers(insertLayerAfter(layers, result.parent, result.index, newLayer));
+      }
+    } else if (currentPageId) {
+      let pastedLayer: Layer | null;
+      if (selectedLayerId === 'body') {
+        pastedLayer = pasteInside(currentPageId, selectedLayerId, clipboardLayer);
+      } else {
+        pastedLayer = pasteAfter(currentPageId, selectedLayerId, clipboardLayer);
+      }
+      if (!pastedLayer && clipboardLayer) {
+        toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+      }
+    }
+  }, [canEditStructure, clipboardLayer, editingComponentId, components, getCurrentLayers, updateCurrentLayers, currentPageId, pasteInside, pasteAfter]);
+
+  useImportPaste({
+    enabled: !!(currentPageId || editingComponentId),
+    insertLayers: insertImportedLayers,
+    onNormalPaste: handleNormalPaste,
+  });
 
   // Check if Supabase is configured, redirect to setup if not
   const [supabaseConfigured, setSupabaseConfigured] = useState<boolean | null>(null);
@@ -473,23 +707,29 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     }
   }, [urlState.layerId, resourceId, routeType, setSelectedLayerId, currentPageId, editingComponentId, currentDraft, componentDraftLayers, getCurrentLayers]);
 
-  // Sync selected layer to URL (but only after initialization from URL, skip when in page settings mode or during edit mode transition)
+  // Sync selected layer to URL imperatively (avoids re-rendering YCodeBuilderMain on selection change)
+  const urlSyncDepsRef = useRef({ routeType, updateQueryParams, urlLayerId: urlState.layerId, isEditing: urlState.isEditing });
+  urlSyncDepsRef.current = { routeType, updateQueryParams, urlLayerId: urlState.layerId, isEditing: urlState.isEditing };
+
   useEffect(() => {
-    // Skip if we just transitioned away from edit mode - navigation already includes all params
-    if (justExitedEditMode) {
-      return;
-    }
+    let prevLayerId: string | null = null;
+    const unsub = useEditorStore.subscribe((state) => {
+      const layerId = state.selectedLayerId;
+      if (layerId === prevLayerId) return;
+      prevLayerId = layerId;
 
-    const isPageOrLayersRoute = routeType === 'page' || routeType === 'layers';
-    const isComponentRoute = routeType === 'component';
-
-    if ((isPageOrLayersRoute || isComponentRoute) && !urlState.isEditing && hasInitializedLayerFromUrlRef.current && selectedLayerId) {
-      // Only update if the layer has actually changed from URL
-      if (urlState.layerId !== selectedLayerId) {
-        updateQueryParams({ layer: selectedLayerId });
+      if (!hasInitializedLayerFromUrlRef.current) return;
+      const { routeType: rt, updateQueryParams: uqp, urlLayerId, isEditing } = urlSyncDepsRef.current;
+      const isPageOrLayersRoute = rt === 'page' || rt === 'layers';
+      const isComponentRoute = rt === 'component';
+      if ((isPageOrLayersRoute || isComponentRoute) && !isEditing && layerId) {
+        if (urlLayerId !== layerId) {
+          uqp({ layer: layerId });
+        }
       }
-    }
-  }, [selectedLayerId, routeType, updateQueryParams, urlState.layerId, urlState.isEditing, justExitedEditMode]);
+    });
+    return unsub;
+  }, []);
 
   // Generate initial CSS if draft_css is empty (one-time check after data loads)
   const initialCssCheckRef = useRef(false);
@@ -550,6 +790,19 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     };
   }, []);
 
+  // After login, honor `?next=` (used by the OAuth consent flow to bounce
+  // unauthenticated users through `/ycode` and back). Only same-origin
+  // paths starting with `/ycode` are accepted to prevent open redirects.
+  // Studio: login itself is handled by StudioAuthGate, so the upstream
+  // login form state is intentionally not carried over.
+  useEffect(() => {
+    if (!user || !authInitialized) return;
+    const next = searchParams?.get('next');
+    if (!next) return;
+    if (!next.startsWith('/ycode')) return;
+    router.replace(next);
+  }, [user, authInitialized, searchParams, router]);
+
   // Track initial data load completion
   const initialLoadRef = useRef(false);
 
@@ -594,6 +847,17 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
             setStyles(response.data.styles);
             setSettings(response.data.settings);
             setLocales(response.data.locales || []);
+
+            // Eager-load translations if the persisted selected locale is non-default
+            // so the canvas reflects the locale on first paint instead of source content.
+            const localisationState = useLocalisationStore.getState();
+            const persistedLocaleId = localisationState.selectedLocaleId;
+            if (persistedLocaleId) {
+              const persistedLocale = localisationState.locales.find(l => l.id === persistedLocaleId);
+              if (persistedLocale && !persistedLocale.is_default) {
+                localisationState.loadTranslations(persistedLocaleId);
+              }
+            }
             setAssets(response.data.assets || []);
             setAssetFolders(response.data.assetFolders || []);
             setFonts(response.data.fonts || []);
@@ -713,10 +977,20 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
       const { getComponentById, loadComponentDraft } = useComponentsStore.getState();
       const component = getComponentById(resourceId);
       if (component && editingComponentId !== resourceId) {
-        const { setEditingComponentId } = useEditorStore.getState();
+        const { setEditingComponentId, setEditingComponentVariantId } = useEditorStore.getState();
         // Use currentPageId if available, otherwise find homepage as fallback
         const returnPageId = currentPageId || (pages.length > 0 ? (findHomepage(pages)?.id || pages[0]?.id) : null);
         setEditingComponentId(resourceId, returnPageId);
+        // Restore the active variant from the URL when present so reloads land
+        // back on the same variant. Falls back to the first variant when the
+        // URL is missing/stale, matching `use-edit-component`.
+        const variantFromUrl = urlState.variantId;
+        const variantExists = variantFromUrl
+          && component.variants?.some(v => v.id === variantFromUrl);
+        const initialVariantId = variantExists
+          ? variantFromUrl!
+          : (component.variants && component.variants.length > 0 ? component.variants[0].id : null);
+        setEditingComponentVariantId(initialVariantId);
         // Load component draft (async but we don't need to await in this context)
         loadComponentDraft(resourceId);
       }
@@ -731,6 +1005,17 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
       navigateToLayers(defaultPage.id);
     }
   }, [migrationsComplete, pages.length, components.length, collections.length, routeType, resourceId, currentPageId, editingComponentId, pages, components, collections, setCurrentPageId, setSelectedLayerId, navigateToLayers, navigateToCollection, navigateToCollections, urlState.layerId]);
+
+  // Mirror the active component variant id into the URL while editing a
+  // component, so reloads land back on the same variant. Uses
+  // `updateQueryParams` to avoid a router push (no history entry).
+  // Guard on `editingComponentId` so we don't wipe the URL's `?variant=`
+  // param before the init effect has had a chance to read it.
+  useEffect(() => {
+    if (routeType !== 'component') return;
+    if (!editingComponentId) return;
+    updateQueryParams({ variant: editingComponentVariantId ?? null });
+  }, [routeType, editingComponentId, editingComponentVariantId, updateQueryParams]);
 
   // Auto-select Body layer when switching pages (not when draft updates)
   useEffect(() => {
@@ -758,12 +1043,18 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     }
   }, [currentPageId, currentDraft, setSelectedLayerId, urlState.layerId]);
 
-  // Get selected layer via cached index (O(1) lookup)
-  const selectedLayer = useMemo(() => {
-    if (!currentPageId || !selectedLayerId || !currentDraft) return null;
-    const { layerMap } = getLayerIndexes(currentDraft.layers);
-    return layerMap.get(selectedLayerId) ?? null;
-  }, [currentPageId, selectedLayerId, currentDraft]);
+  const selectedLayerIdRef = useRef<string | null>(null);
+  const selectedLayerIdsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    const unsub = useEditorStore.subscribe((state) => {
+      selectedLayerIdRef.current = state.selectedLayerId;
+      selectedLayerIdsRef.current = state.selectedLayerIds;
+    });
+    selectedLayerIdRef.current = useEditorStore.getState().selectedLayerId;
+    selectedLayerIdsRef.current = useEditorStore.getState().selectedLayerIds;
+    return unsub;
+  }, []);
 
   // Find the next layer to select after deletion
   // Priority: next sibling > previous sibling > parent
@@ -819,23 +1110,24 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     return null;
   };
 
-  // Delete selected layer
+  // Delete selected layer — reads selectedLayerId from ref to avoid callback recreation on selection change
   const deleteSelectedLayer = useCallback(() => {
-    if (!selectedLayerId) return;
+    const layerId = selectedLayerIdRef.current;
+    if (!layerId) return;
 
     // Handle sublayer deletion (remove TipTap block, not the whole layer)
     if (activeSublayerIndex !== null) {
       const layers = getCurrentLayers();
-      const richTextLayer = findLayerById(layers, selectedLayerId);
+      const richTextLayer = findLayerById(layers, layerId);
       if (!richTextLayer) return;
 
       const updates = removeRichTextSublayer(richTextLayer, activeSublayerIndex);
       if (!updates) return;
 
       if (currentPageId) {
-        updateLayer(currentPageId, selectedLayerId, updates);
+        updateLayer(currentPageId, layerId, updates);
       } else if (editingComponentId) {
-        const newLayers = layers.map(l => l.id === selectedLayerId ? { ...l, ...updates } : l);
+        const newLayers = layers.map(l => l.id === layerId ? { ...l, ...updates } : l);
         updateCurrentLayers(newLayers);
       }
       setActiveSublayerIndex(null);
@@ -844,14 +1136,14 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
     // Find the next layer to select before deleting
     const layers = getCurrentLayers();
-    const layerToDelete = findLayerById(layers, selectedLayerId);
+    const layerToDelete = findLayerById(layers, layerId);
 
     // Check if layer can be deleted
     if (layerToDelete && !canDeleteLayer(layerToDelete)) {
       return;
     }
 
-    const nextLayerId = findNextLayerToSelect(layers, selectedLayerId);
+    const nextLayerId = findNextLayerToSelect(layers, layerId);
 
     // Check if this is a pagination wrapper - if so, disable pagination on the collection
     const paginationFor = layerToDelete?.attributes?.['data-pagination-for'];
@@ -896,35 +1188,40 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
       }
 
-      newLayers = removeLayerById(newLayers, selectedLayerId);
+      newLayers = removeLayerById(newLayers, layerId);
       updateCurrentLayers(newLayers);
       setSelectedLayerId(nextLayerId);
     } else if (currentPageId) {
       // Delete from page (pagination sync handled in usePagesStore.deleteLayer)
-      deleteLayer(currentPageId, selectedLayerId);
+      deleteLayer(currentPageId, layerId);
       setSelectedLayerId(nextLayerId);
 
       // Broadcast delete to other collaborators
       if (liveLayerUpdates) {
-        liveLayerUpdates.broadcastLayerDelete(currentPageId, selectedLayerId);
+        liveLayerUpdates.broadcastLayerDelete(currentPageId, layerId);
       }
     }
-  }, [selectedLayerId, editingComponentId, currentPageId, getCurrentLayers, updateCurrentLayers, deleteLayer, setSelectedLayerId, liveLayerUpdates, activeSublayerIndex, setActiveSublayerIndex, updateLayer]);
+  }, [editingComponentId, currentPageId, getCurrentLayers, updateCurrentLayers, deleteLayer, setSelectedLayerId, liveLayerUpdates, activeSublayerIndex, setActiveSublayerIndex, updateLayer]);
 
   // Stable callback for layer updates - reads current state from stores to avoid
   // dependency on editingComponentId/currentPageId which would break React.memo
   const handleLayerUpdate = useCallback((layerId: string, updates: Partial<Layer>) => {
-    const { editingComponentId: compId } = useEditorStore.getState();
+    const { editingComponentId: compId, editingComponentVariantId: variantId } = useEditorStore.getState();
     if (compId) {
       const { componentDrafts, updateComponentDraft } = useComponentsStore.getState();
-      const layers = componentDrafts[compId] || [];
+      const variantDrafts = componentDrafts[compId];
+      const targetVariantId = (variantId && variantDrafts?.[variantId])
+        ? variantId
+        : (variantDrafts ? Object.keys(variantDrafts)[0] : null);
+      if (!targetVariantId || !variantDrafts) return;
+      const layers = variantDrafts[targetVariantId] || [];
       const updateTree = (tree: Layer[]): Layer[] =>
         tree.map(l => {
           if (l.id === layerId) return { ...l, ...updates };
           if (l.children) return { ...l, children: updateTree(l.children) };
           return l;
         });
-      updateComponentDraft(compId, updateTree(layers));
+      updateComponentDraft(compId, targetVariantId, updateTree(layers));
     } else {
       const pageId = useEditorStore.getState().currentPageId;
       if (pageId) {
@@ -1010,11 +1307,11 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
       return;
     }
 
-    const currentLayersJSON = JSON.stringify(currentDraft.layers);
-    const lastLayersJSON = lastLayersByPageRef.current.get(currentPageId);
+    const currentLayers = currentDraft.layers;
+    const lastLayers = lastLayersByPageRef.current.get(currentPageId);
 
-    // Only trigger save if layers actually changed for THIS page
-    if (lastLayersJSON && lastLayersJSON !== currentLayersJSON) {
+    // Only trigger save if the layers array reference actually changed for THIS page
+    if (lastLayers && lastLayers !== currentLayers) {
       if (consumePageMcpSync(currentPageId)) {
         // MCP already saved to DB — cancel any pending autosave and accept
         if (saveTimeoutRef.current) {
@@ -1028,8 +1325,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
       }
     }
 
-    // Update the ref for next comparison (store per page)
-    lastLayersByPageRef.current.set(currentPageId, currentLayersJSON);
+    lastLayersByPageRef.current.set(currentPageId, currentLayers);
   }, [currentPageId, currentDraft, debouncedSave]);
 
   // Cleanup save timeout on unmount only
@@ -1123,17 +1419,21 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         clearTimeout(saveTimeouts[editingComponentId]);
       }
 
-      // Immediately save component draft (ensures all changes are persisted)
+      // Capture whether this draft has any unpersisted edits before saving,
+      // since saveComponentDraft will reset the dirty flag on success.
+      const wasDirty = !!useComponentsStore.getState().componentDraftDirty[editingComponentId];
+
+      // Immediately save component draft (ensures all changes are persisted).
+      // This is a no-op if the draft is not dirty.
       await saveComponentDraft(editingComponentId);
 
-      // Get the updated component to get its layers
-      const updatedComponent = getComponentById(editingComponentId);
-      if (updatedComponent) {
-        // Update all instances across pages with the new layers
-        await updateComponentOnLayers(editingComponentId, updatedComponent.layers);
+      // Only sync across pages and broadcast when the user actually edited
+      // the component during this editing session.
+      if (wasDirty) {
+        updateComponentOnLayers(editingComponentId);
 
-        // Broadcast component layers update to collaborators
-        if (liveComponentUpdates) {
+        const updatedComponent = getComponentById(editingComponentId);
+        if (updatedComponent && liveComponentUpdates) {
           liveComponentUpdates.broadcastComponentLayersUpdate(editingComponentId, updatedComponent.layers);
         }
       }
@@ -1152,9 +1452,16 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
           await loadComponentDraft(returnDestination.id);
 
           // Pop the current component from the stack before transitioning
-          const { componentNavigationStack } = useEditorStore.getState();
+          const { componentNavigationStack, setEditingComponentVariantId: setVariant } = useEditorStore.getState();
           const newStack = [...componentNavigationStack];
           newStack.pop(); // Remove child component entry
+
+          // Restore the parent's variant from the navigation entry
+          const parentVariantId = returnDestination.variantId
+            ?? (parentComponent.variants && parentComponent.variants.length > 0
+              ? parentComponent.variants[0].id
+              : null);
+          setVariant(parentVariantId);
 
           // Transition directly to parent component (avoids showing page)
           // Manually update the stack to reflect the pop
@@ -1169,7 +1476,8 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
           navigateToComponent(
             returnDestination.id,
             undefined, // rightTab - use current
-            returnDestination.layerId || undefined // layerId - restore the layer
+            returnDestination.layerId || undefined, // layerId - restore the layer
+            parentVariantId // variant - restore the active variant
           );
 
           // Restore layer selection if specified
@@ -1178,16 +1486,19 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
           }
         }
       } else {
-        // Returning to a page
-        // Exit edit mode to clear the state and pop the stack
-        setEditingComponentId(null, null);
-
-        // Small delay to ensure state clears
-        await new Promise(resolve => setTimeout(resolve, 10));
-        // Returning to a page (or no stack entry)
-        let targetPageId = returnToPageId;
+        // Returning to a page (or no stack entry).
+        //
+        // `returnToPageId` is a snapshot taken when the user entered component
+        // edit mode and isn't refreshed for non-page entry points (CMS,
+        // Settings, etc.) or after the source page was deleted. In those cases
+        // it would point at a stale/missing page and Next.js would silently
+        // 404 — to the user it just looks like "preview opened the wrong
+        // page". Validate it against the current pages list and silently fall
+        // back to the homepage when it's no longer valid.
+        const isValidReturnPage = returnToPageId
+          && pages.some(p => p.id === returnToPageId);
+        let targetPageId = isValidReturnPage ? returnToPageId : null;
         if (!targetPageId) {
-          // No return page - use homepage or first available page
           const homePage = findHomepage(pages);
           const defaultPage = homePage || pages[0];
           targetPageId = defaultPage?.id || null;
@@ -1198,29 +1509,40 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
           return;
         }
 
-        // Navigate to the target page, including the layer ID in the URL
-        // This ensures the URL sync effect will restore the correct layer
+        // If we fell back, the saved `returnToLayerId` belongs to the original
+        // (now-missing) page and would dangle on the homepage. Drop it.
+        const layerToRestore = isValidReturnPage
+          ? (returnToLayerId || returnDestination?.layerId || undefined)
+          : undefined;
+
+        // Clear edit mode state synchronously, then navigate.
+        // The URL sync effect will restore the correct layer from the URL.
+        setEditingComponentId(null, null);
         navigateToLayers(
           targetPageId,
-          undefined, // view - use current
-          undefined, // rightTab - use current
-          returnToLayerId || returnDestination?.layerId || undefined // layerId - restore the original layer
+          undefined,
+          undefined,
+          layerToRestore
         );
       }
-
-      // Wait for navigation to complete
-      await new Promise(resolve => setTimeout(resolve, 100));
     } finally {
-      // Clear flag after exit completes
-      isExitingComponentModeRef.current = false;
+      // Defer clearing the guard until after the URL update has propagated.
+      // Otherwise the URL sync effect may re-run with the old `routeType ===
+      // 'component'` (because router.push is async) while the guard is already
+      // cleared, and re-enter component edit mode.
+      setTimeout(() => {
+        isExitingComponentModeRef.current = false;
+      }, 0);
     }
 
     // Selection will be restored by the URL sync effect
   }, [navigateToLayers, navigateToComponent, liveComponentUpdates, pages]);
 
-  // Global keyboard shortcuts
+  // Global keyboard shortcuts — reads selection from refs to avoid recreating handler on every selection change
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const selectedLayerId = selectedLayerIdRef.current;
+      const selectedLayerIds = selectedLayerIdsRef.current;
       // Check if user is typing in an input/textarea
       const target = e.target as HTMLElement;
       const isInputFocused = target.tagName === 'INPUT' ||
@@ -1239,13 +1561,23 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
       }
 
+      // Open preview: Cmd/Ctrl + P — handled by HeaderBar via custom event
+      if ((e.metaKey || e.ctrlKey) && e.key === 'p') {
+        e.preventDefault(); // Prevent the browser print dialog
+        window.dispatchEvent(new CustomEvent('togglePreview'));
+        return;
+      }
+
       // Note: Undo/Redo shortcuts (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, Cmd/Ctrl+Y) are handled in CenterCanvas.tsx
       // This prevents duplication and ensures they work both in the main window and inside the iframe
+
+      const isContentOnlyRole = !canEditStructureRef.current;
 
       // Layer-specific shortcuts (only work on layers tab)
       if (activeTab === 'layers') {
         // A - Toggle Element Library (when on layers tab and not typing)
         if (e.key === 'a' && !isInputFocused && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          if (isContentOnlyRole) return;
           e.preventDefault();
           // Dispatch custom event to toggle ElementLibrary
           window.dispatchEvent(new CustomEvent('toggleElementLibrary'));
@@ -1260,7 +1592,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // Shift + Cmd + H - Toggle layer visibility (Show/Hide)
-        if (e.shiftKey && e.metaKey && e.code === 'KeyH') {
+        if (e.shiftKey && e.metaKey && e.code === 'KeyH' && !isContentOnlyRole) {
           if (!isInputFocused && (currentPageId || editingComponentId) && selectedLayerId) {
             e.preventDefault();
             const layers = getCurrentLayers();
@@ -1328,7 +1660,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // Arrow Up/Down - Reorder layer within siblings
-        if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && (currentPageId || editingComponentId) && selectedLayerId && !isInputFocused) {
+        if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !isContentOnlyRole && (currentPageId || editingComponentId) && selectedLayerId && !isInputFocused) {
           e.preventDefault();
 
           const layers = getCurrentLayers();
@@ -1442,7 +1774,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // Copy: Cmd/Ctrl + C (supports multi-select)
-        if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'c' && !isContentOnlyRole) {
           if (!isInputFocused && (currentPageId || editingComponentId)) {
             e.preventDefault();
 
@@ -1487,7 +1819,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // Cut: Cmd/Ctrl + X (supports multi-select)
-        if ((e.metaKey || e.ctrlKey) && e.key === 'x') {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'x' && !isContentOnlyRole) {
           if (!isInputFocused && (currentPageId || editingComponentId)) {
             e.preventDefault();
 
@@ -1558,39 +1890,12 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // Paste: Cmd/Ctrl + V
-        if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
-          if (!isInputFocused && (currentPageId || editingComponentId)) {
-            e.preventDefault();
-            // Use clipboard store for paste (works with context menu)
-            if (clipboardLayer && selectedLayerId) {
-              // In component edit mode, paste into component drafts
-              if (editingComponentId) {
-                const circularError = checkCircularReference(editingComponentId, clipboardLayer, components);
-                if (circularError) {
-                  toast.error('Infinite component loop detected', { description: circularError });
-                  return;
-                }
-
-                const layers = getCurrentLayers();
-                const newLayer = regenerateIdsWithInteractionRemapping(cloneDeep(clipboardLayer));
-                const result = findParentAndIndex(layers, selectedLayerId);
-                if (result) {
-                  updateCurrentLayers(insertLayerAfter(layers, result.parent, result.index, newLayer));
-                }
-              } else if (currentPageId) {
-                // If body is selected, paste inside body (not after it)
-                if (selectedLayerId === 'body') {
-                  pasteInside(currentPageId, selectedLayerId, clipboardLayer);
-                } else {
-                  pasteAfter(currentPageId, selectedLayerId, clipboardLayer);
-                }
-              }
-            }
-          }
-        }
+        // Don't preventDefault here — let the browser fire the paste event so
+        // the paste handler (use-import-paste) can read clipboardData. Webflow,
+        // Figma and normal internal paste are all handled there.
 
         // Duplicate: Cmd/Ctrl + D (supports multi-select)
-        if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'd' && !isContentOnlyRole) {
           if (!isInputFocused && currentPageId) {
             e.preventDefault();
             if (selectedLayerIds.length > 1) {
@@ -1614,14 +1919,14 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // F2 - Rename selected layer
-        if (e.key === 'F2' && !isInputFocused && (currentPageId || editingComponentId) && selectedLayerId && selectedLayerId !== 'body') {
+        if (e.key === 'F2' && !isContentOnlyRole && !isInputFocused && (currentPageId || editingComponentId) && selectedLayerId && selectedLayerId !== 'body') {
           e.preventDefault();
           useEditorStore.getState().setRenamingLayerId(selectedLayerId);
           return;
         }
 
         // Delete: Delete or Backspace (supports multi-select)
-        if ((e.key === 'Delete' || e.key === 'Backspace')) {
+        if ((e.key === 'Delete' || e.key === 'Backspace') && !isContentOnlyRole) {
           if (!isInputFocused && (currentPageId || editingComponentId)) {
             e.preventDefault();
             if (selectedLayerIds.length > 1) {
@@ -1714,21 +2019,22 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
         // Copy Style: Option + Cmd + C
         // Use e.code for physical key detection (e.key produces special chars with Option)
-        if (e.altKey && e.metaKey && e.code === 'KeyC') {
+        if (e.altKey && e.metaKey && e.code === 'KeyC' && !isContentOnlyRole) {
           if (!isInputFocused && (currentPageId || editingComponentId) && selectedLayerId) {
             e.preventDefault();
             const layers = getCurrentLayers();
             const layer = findLayerById(layers, selectedLayerId);
             if (layer) {
               const classes = getClassesString(layer);
-              copyStyleToClipboard(classes, layer.design, layer.styleId, layer.styleOverrides);
+              const ids = getStyleIds(layer);
+              copyStyleToClipboard(classes, layer.design, ids[0], layer.styleOverrides, ids);
             }
           }
         }
 
         // Paste Style: Option + Cmd + V
         // Use e.code for physical key detection (e.key produces special chars with Option)
-        if (e.altKey && e.metaKey && e.code === 'KeyV') {
+        if (e.altKey && e.metaKey && e.code === 'KeyV' && !isContentOnlyRole) {
           if (!isInputFocused && (currentPageId || editingComponentId) && selectedLayerId) {
             e.preventDefault();
             const style = pasteStyleFromClipboard();
@@ -1736,8 +2042,10 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
               const styleProps = {
                 classes: style.classes,
                 design: style.design,
-                styleId: style.styleId,
+                styleId: style.styleIds?.[0] ?? style.styleId,
+                styleIds: style.styleIds ?? (style.styleId ? [style.styleId] : undefined),
                 styleOverrides: style.styleOverrides,
+                styleOverridesByStyle: undefined,
               };
 
               if (editingComponentId) {
@@ -1750,7 +2058,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // Create Component: Option + Cmd + K
-        if (e.altKey && e.metaKey && e.code === 'KeyK') {
+        if (e.altKey && e.metaKey && e.code === 'KeyK' && !isContentOnlyRole) {
           if (!isInputFocused && currentPageId && selectedLayerId && !editingComponentId) {
             e.preventDefault();
             const layers = getCurrentLayers();
@@ -1763,7 +2071,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // Detach from Component: Option + Cmd + B
-        if (e.altKey && e.metaKey && e.code === 'KeyB') {
+        if (e.altKey && e.metaKey && e.code === 'KeyB' && !isContentOnlyRole) {
           if (!isInputFocused && currentPageId && selectedLayerId && !editingComponentId) {
             e.preventDefault();
             const layers = getCurrentLayers();
@@ -1823,8 +2131,6 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     activeTab,
-    selectedLayerId,
-    selectedLayerIds,
     currentPageId,
     editingComponentId,
     setSelectedLayerId,
@@ -1950,8 +2256,8 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         isSaving={routeType === 'settings' || routeType === 'localization' || routeType === 'profile' || routeType === 'forms' || routeType === 'integrations' ? false : isCurrentlySaving}
         hasUnsavedChanges={routeType === 'settings' || routeType === 'localization' || routeType === 'profile' || routeType === 'forms' || routeType === 'integrations' ? false : hasUnsavedChanges}
         lastSaved={routeType === 'settings' || routeType === 'localization' || routeType === 'profile' || routeType === 'forms' || routeType === 'integrations' ? null : lastSaved}
-        isPublishing={routeType === 'settings' || routeType === 'localization' || routeType === 'profile' || routeType === 'forms' || routeType === 'integrations' ? false : isPublishing}
-        setIsPublishing={routeType === 'settings' || routeType === 'localization' || routeType === 'profile' || routeType === 'forms' || routeType === 'integrations' ? () => {} : setIsPublishing}
+        isPublishing={isPublishing}
+        setIsPublishing={setIsPublishing}
         saveImmediately={routeType === 'settings' || routeType === 'localization' || routeType === 'profile' || routeType === 'forms' || routeType === 'integrations' ? async () => {} : saveImmediately}
         activeTab={routeType === 'settings' || routeType === 'localization' || routeType === 'profile' || routeType === 'forms' || routeType === 'integrations' ? 'pages' : activeTab}
         onExitComponentEditMode={handleExitComponentEditMode}
@@ -1976,16 +2282,27 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
           <IntegrationsContent>{children}</IntegrationsContent>
         ) : (
           <>
-            {/* Left Sidebar - Pages & Layers (hidden in CMS mode) */}
-            <div className={activeTab === 'cms' ? 'hidden' : 'contents'}>
+            {/* Left Sidebar - Pages & Layers
+                - Hidden in CMS mode
+                - For editor role: only shown when "Pages" tab is active */}
+            <div className={activeTab === 'cms' || (isEditor && activeTab !== 'pages') ? 'hidden' : 'contents'}>
               <LeftSidebar
-                selectedLayerId={selectedLayerId}
-                selectedLayerIds={selectedLayerIds}
-                onLayerSelect={setSelectedLayerId}
+                onLayerSelect={(layerId) => {
+                  setSelectedLayerId(layerId);
+                  if (isEditor) {
+                    useEditorStore.getState().setActiveSidebarTab('layers');
+                  }
+                }}
                 currentPageId={currentPageId}
-                onPageSelect={setCurrentPageId}
+                onPageSelect={(pageId: string) => {
+                  setCurrentPageId(pageId);
+                  if (isEditor) {
+                    useEditorStore.getState().setActiveSidebarTab('layers');
+                  }
+                }}
                 liveLayerUpdates={liveLayerUpdates}
                 liveComponentUpdates={liveComponentUpdates}
+                readOnly={!canEditStructure}
               />
             </div>
 
@@ -2000,7 +2317,6 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
             <div className={activeTab !== 'cms' ? 'contents' : 'hidden'}>
               {/* Center Canvas - Preview */}
               <CenterCanvas
-                selectedLayerId={selectedLayerId}
                 currentPageId={currentPageId}
                 viewportMode={viewportMode}
                 setViewportMode={setViewportMode}
@@ -2009,11 +2325,12 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
                 liveComponentUpdates={liveComponentUpdates}
               />
 
-              {/* Right Sidebar - Properties */}
-              <RightSidebar
-                selectedLayerId={selectedLayerId}
-                onLayerUpdate={handleLayerUpdate}
-              />
+              {/* Right Sidebar - Properties (hidden for editor role) */}
+              {!isEditor && (
+                <RightSidebar
+                  onLayerUpdate={handleLayerUpdate}
+                />
+              )}
             </div>
           </>
         )}

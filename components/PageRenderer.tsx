@@ -3,33 +3,53 @@ import AnimationInitializer from '@/components/AnimationInitializer';
 import BodyClassApplier from '@/components/BodyClassApplier';
 import ContentHeightReporter from '@/components/ContentHeightReporter';
 import CustomCodeInjector from '@/components/CustomCodeInjector';
-import LayerRenderer from '@/components/LayerRenderer';
+import LayerRendererPublic from '@/components/LayerRendererPublic';
 import SliderInitializer from '@/components/SliderInitializer';
 import LightboxInitializer from '@/components/LightboxInitializer';
 import PasswordForm from '@/components/PasswordForm';
+import YcodeBadge from '@/components/YcodeBadge';
+import { unstable_cache } from 'next/cache';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
-import { buildCustomFontsCss, buildFontClassesCss, filterGoogleFontLinksAgainstHeadHtml, getGoogleFontLinks, removeDuplicateGoogleFontLinksFromHeadHtml } from '@/lib/font-utils';
-import { collectLayerAssetIds, getAssetProxyUrl } from '@/lib/asset-utils';
+import { buildCustomFontsCss, buildFontClassesCss, fetchGoogleFontsCss, filterGoogleFontLinksAgainstHeadHtml, getGoogleFontLinks, removeDuplicateGoogleFontLinksFromHeadHtml } from '@/lib/font-utils';
+import { buildImageSizes, collectLayerAssetIds, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
 import { getAllPages } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { getMapboxAccessToken, getGoogleMapsEmbedApiKey } from '@/lib/map-server';
 import { getAllColorVariables } from '@/lib/repositories/colorVariableRepository';
-import { getItemWithValues, getItemsWithValues } from '@/lib/repositories/collectionItemRepository';
+import { getSettingByKey } from '@/lib/repositories/settingsRepository';
+import { getItemsWithValues, getItemsWithValuesByIds } from '@/lib/repositories/collectionItemRepository';
+import { getValuesByItemIds } from '@/lib/repositories/collectionItemValueRepository';
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
-import { REF_PAGE_PREFIX, REF_COLLECTION_PREFIX, isCollectionItemKeyword } from '@/lib/link-utils';
-import { getClassesString } from '@/lib/layer-utils';
+import { REF_PAGE_PREFIX, REF_COLLECTION_PREFIX, isCollectionItemKeyword, parseCollectionLinkValue } from '@/lib/link-utils';
+import { getClassesString, hasPasswordFormLayer } from '@/lib/layer-utils';
+import { buildLocalizedPageUrls, type LocalizedDynamicSlug } from '@/lib/page-utils';
+import { getTranslatableKey } from '@/lib/locale-runtime';
+import { getTranslationsByLocale } from '@/lib/repositories/translationRepository';
 import { parseSafeBodyStyle } from '@/lib/body-style';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
 import { castValue } from '@/lib/collection-utils';
 import { canRenderStudioCustomCode } from '@/lib/studio-platform';
-import type { Layer, Component, Page, CollectionItemWithValues, CollectionField, Locale, PageFolder, Font, ColorVariable, Asset } from '@/types';
+import type { Layer, Component, Page, CollectionItemWithValues, CollectionField, Locale, PageFolder, Font, ColorVariable, Asset, PasswordProtectionContext, Translation } from '@/types';
 
 interface PageLinkRef { collection_item_id: string; page_id: string }
 
-/** Recursively collect all page link refs ({collection_item_id, page_id}) from a Tiptap JSON node */
+const getCachedPublishedPages = unstable_cache(
+  async () => getAllPages({ is_published: true }),
+  ['page-renderer-published-pages'],
+  { tags: ['all-pages'], revalidate: false }
+);
+
+const getCachedPublishedFolders = unstable_cache(
+  async () => getAllPageFolders({ is_published: true }),
+  ['page-renderer-published-folders'],
+  { tags: ['all-pages'], revalidate: false }
+);
+
+/** Recursively collect all page link refs ({collection_item_id, page_id}) from a Tiptap JSON node.
+ * Also descends into pre-resolved layers stored on embedded richTextComponent nodes. */
 function collectTiptapPageLinks(node: any): PageLinkRef[] {
   if (!node || typeof node !== 'object') return [];
   const results: PageLinkRef[] = [];
@@ -40,6 +60,10 @@ function collectTiptapPageLinks(node: any): PageLinkRef[] {
         results.push({ collection_item_id: mark.attrs.page.collection_item_id, page_id: mark.attrs.page.id });
       }
     }
+  }
+  // Pre-resolved layers from rich-text-embedded components (set by resolveTiptapComponentCollections)
+  if (node.type === 'richTextComponent' && Array.isArray(node.attrs?._resolvedLayers)) {
+    results.push(...collectLayerPageLinks(node.attrs._resolvedLayers as Layer[]));
   }
   if (node.content && Array.isArray(node.content)) {
     for (const child of node.content) results.push(...collectTiptapPageLinks(child));
@@ -58,6 +82,22 @@ function collectLayerPageLinks(layers: Layer[]): PageLinkRef[] {
       const { collection_item_id, id: page_id } = layer.variables.link.page ?? {};
       if (collection_item_id && page_id) results.push({ collection_item_id, page_id });
     }
+    // Field-bound links: extract page refs from pre-resolved link values
+    if (layer.variables?.link?.type === 'field') {
+      const resolvedValue = layer.variables.link.field?.data?._resolvedValue;
+      if (resolvedValue) {
+        const linkValue = parseCollectionLinkValue(resolvedValue);
+        if (linkValue?.type === 'page' && linkValue.page?.collection_item_id && linkValue.page?.id) {
+          results.push({ collection_item_id: linkValue.page.collection_item_id, page_id: linkValue.page.id });
+        }
+      }
+    }
+    // Form redirect_url: extract page refs so the target item slug is pre-fetched
+    const redirectUrl = layer.settings?.form?.redirect_url;
+    if (redirectUrl?.type === 'page') {
+      const { collection_item_id, id: page_id } = redirectUrl.page ?? {};
+      if (collection_item_id && page_id) results.push({ collection_item_id, page_id });
+    }
     const textVar = layer.variables?.text as any;
     if (textVar?.type === 'dynamic_rich_text' && textVar.data?.content) {
       results.push(...collectTiptapPageLinks(textVar.data.content));
@@ -68,9 +108,24 @@ function collectLayerPageLinks(layers: Layer[]): PageLinkRef[] {
   return results;
 }
 
+/** Recursively scan a Tiptap JSON node for richTextComponent nodes and harvest
+ * slugs from their pre-resolved layers (populated by resolveTiptapComponentCollections). */
+function extractTiptapCollectionItemSlugs(node: any, slugs: Record<string, string>): void {
+  if (!node || typeof node !== 'object') return;
+  if (node.type === 'richTextComponent' && Array.isArray(node.attrs?._resolvedLayers)) {
+    const nested = extractCollectionItemSlugs(node.attrs._resolvedLayers as Layer[]);
+    Object.assign(slugs, nested);
+  }
+  if (Array.isArray(node.content)) {
+    for (const child of node.content) extractTiptapCollectionItemSlugs(child, slugs);
+  }
+}
+
 /**
  * Extract collection item slugs from resolved collection layers.
  * These are populated by resolveCollectionLayers with `_collectionItemId` / `_collectionItemSlug`.
+ * Also descends into pre-resolved layers of rich-text-embedded components so links inside
+ * those components (e.g. "current-collection") can be resolved at render time.
  */
 function extractCollectionItemSlugs(layers: Layer[]): Record<string, string> {
   const slugs: Record<string, string> = {};
@@ -78,37 +133,121 @@ function extractCollectionItemSlugs(layers: Layer[]): Record<string, string> {
     if (layer._collectionItemId && layer._collectionItemSlug) {
       slugs[layer._collectionItemId] = layer._collectionItemSlug;
     }
+    const textVar = layer.variables?.text as any;
+    if (textVar?.type === 'dynamic_rich_text' && textVar.data?.content) {
+      extractTiptapCollectionItemSlugs(textVar.data.content, slugs);
+    }
     if (layer.children) layer.children.forEach(scan);
   };
   layers.forEach(scan);
   return slugs;
 }
 
-/** Recursively check if any layer in the tree is a slider */
+/**
+ * Strip heavy SSR-only data from the layer tree before passing to client
+ * components. After resolveCollectionLayers, all variables are pre-resolved
+ * into the layers — _collectionItemValues and _layerDataMap are redundant
+ * and can be enormous (e.g. 50 articles × full rich text bodies).
+ *
+ * The RSC Flight payload serializes everything passed to 'use client'
+ * components, so stripping here avoids doubling the response size.
+ */
+function stripSSROnlyData(layers: Layer[]): Layer[] {
+  return layers.map(layer => {
+    const stripped: Layer = { ...layer };
+
+    delete stripped._collectionItemValues;
+    delete stripped._collectionItemSlug;
+    delete stripped._layerDataMap;
+
+    if (stripped._filterConfig?.layerTemplate) {
+      stripped._filterConfig = {
+        ...stripped._filterConfig,
+        layerTemplate: stripSSROnlyData(stripped._filterConfig.layerTemplate),
+      };
+    }
+
+    if (stripped._paginationMeta?.layerTemplate) {
+      stripped._paginationMeta = {
+        ...stripped._paginationMeta,
+        layerTemplate: stripSSROnlyData(stripped._paginationMeta.layerTemplate),
+      };
+    }
+
+    if (stripped.children) {
+      stripped.children = stripSSROnlyData(stripped.children);
+    }
+
+    return stripped;
+  });
+}
+
+/** Extract minimal animation data from the layer tree for AnimationInitializer */
+function extractAnimationLayers(layers: Layer[]): Layer[] {
+  return layers
+    .filter(layer => layer.interactions?.length || layer.children?.length)
+    .map(layer => ({
+      id: layer.id,
+      name: layer.name,
+      classes: '',
+      interactions: layer.interactions,
+      children: layer.children ? extractAnimationLayers(layer.children) : undefined,
+    }));
+}
+
+/** Scan a Tiptap JSON node for richTextComponent nodes and test their pre-resolved
+ * layers (populated by resolveTiptapComponentCollections) against the predicate. */
+function tiptapTreeHasLayer(node: any, predicate: (layer: Layer) => boolean): boolean {
+  if (!node || typeof node !== 'object') return false;
+  if (node.type === 'richTextComponent' && Array.isArray(node.attrs?._resolvedLayers)
+    && layerTreeHasLayer(node.attrs._resolvedLayers as Layer[], predicate)) {
+    return true;
+  }
+  if (Array.isArray(node.content)) {
+    for (const child of node.content) {
+      if (tiptapTreeHasLayer(child, predicate)) return true;
+    }
+  }
+  return false;
+}
+
+/** Recursively check if any layer matches the predicate, descending into both
+ * children and the pre-resolved layers of rich-text-embedded components. */
+function layerTreeHasLayer(layers: Layer[], predicate: (layer: Layer) => boolean): boolean {
+  for (const layer of layers) {
+    if (predicate(layer)) return true;
+    const textVar = layer.variables?.text as any;
+    if (textVar?.type === 'dynamic_rich_text' && textVar.data?.content
+      && tiptapTreeHasLayer(textVar.data.content, predicate)) {
+      return true;
+    }
+    if (layer.children && layerTreeHasLayer(layer.children, predicate)) return true;
+  }
+  return false;
+}
+
+/** Check if any layer in the tree (including rich-text-embedded components) is a slider */
 function hasSliderLayers(layers: Layer[]): boolean {
-  for (const layer of layers) {
-    if (layer.name === 'slider') return true;
-    if (layer.children && hasSliderLayers(layer.children)) return true;
-  }
-  return false;
+  return layerTreeHasLayer(layers, layer => layer.name === 'slider');
 }
 
-/** Recursively check if any layer in the tree is a lightbox */
+/** Check if any layer in the tree (including rich-text-embedded components) is a lightbox */
 function hasLightboxLayers(layers: Layer[]): boolean {
+  return layerTreeHasLayer(layers, layer => layer.name === 'lightbox');
+}
+
+/**
+ * Recursively check if any layer in the tree has interactions configured.
+ * Used to skip rendering AnimationInitializer (and shipping ~50KB of GSAP +
+ * ScrollTrigger + SplitText to the client) for pages with no animations.
+ */
+function hasAnyInteractions(layers: Layer[]): boolean {
   for (const layer of layers) {
-    if (layer.name === 'lightbox') return true;
-    if (layer.children && hasLightboxLayers(layer.children)) return true;
+    if (layer.interactions?.length) return true;
+    if (layer.children && hasAnyInteractions(layer.children)) return true;
   }
   return false;
 }
-
-/** Password protection context for 401 error pages */
-export type PasswordProtectionContext = {
-  pageId?: string;
-  folderId?: string;
-  redirectUrl: string;
-  isPublished: boolean;
-};
 
 interface PageRendererProps {
   page: Page;
@@ -480,6 +619,7 @@ export default async function PageRenderer({
   ycodeBadge = false,
   passwordProtection,
 }: PageRendererProps) {
+  const usePublishedData = page.is_published && !isPreview;
   const sharedDbScopedRender = isProjectScopeRequired();
   const pageRenderProjectId = getRenderProjectId(page);
   const scopedRenderProjectId = isUuid(explicitRenderProjectId) ? explicitRenderProjectId : null;
@@ -505,6 +645,10 @@ export default async function PageRenderer({
   // Layers are always pre-resolved by the caller (page-fetcher).
   // Components are passed through for rich-text embedded component rendering in LayerRenderer.
   const resolvedLayers = layers || [];
+  // When the 401 page contains an editable password-protected form layer, the form
+  // is rendered & wired inline by LayerRendererPublic; otherwise we fall back to
+  // the hardcoded PasswordForm so older / customised 401 pages still work.
+  const hasInlinePasswordForm = is401Page && hasPasswordFormLayer(resolvedLayers);
 
   // Single tree traversal — derive both sets from the flat list
   const allPageLinks = collectLayerPageLinks(resolvedLayers);
@@ -534,73 +678,169 @@ export default async function PageRenderer({
     Object.assign(collectionItemSlugs, pageCollectionSortedItemSlugs);
   }
 
-  // Fetch pages and folders for link resolution using repository functions
-  // These are needed to resolve page links to their URLs
   let pages: Page[] = [];
   let folders: PageFolder[] = [];
   const renderIsPublished = !isPreview;
 
   try {
-    [pages, folders] = await Promise.all([
-      (renderProjectId || isProjectScopeRequired()) ? getRenderPages(renderProjectId, renderIsPublished) : getAllPages(),
-      (renderProjectId || isProjectScopeRequired()) ? getRenderPageFolders(renderProjectId, renderIsPublished) : getAllPageFolders(),
-    ]);
+    if (renderProjectId || isProjectScopeRequired()) {
+      // Studio: project-scoped render path goes through scoped Supabase helpers.
+      [pages, folders] = await Promise.all([
+        getRenderPages(renderProjectId, renderIsPublished),
+        getRenderPageFolders(renderProjectId, renderIsPublished),
+      ]);
 
-    // Fetch collection items if we have references to them
-    if (referencedItemIds.size > 0) {
-      // Fetch items using repository function which handles EAV properly
-      const itemsWithValues = await Promise.all(
-        Array.from(referencedItemIds).map(itemId => (
-          (renderProjectId || isProjectScopeRequired())
-            ? getRenderItemWithValues(itemId, renderIsPublished, renderProjectId)
-            : getItemWithValues(itemId, renderIsPublished)
-        ))
-      );
+      // Fetch collection items if we have references to them
+      if (referencedItemIds.size > 0) {
+        const itemsWithValues = await Promise.all(
+          Array.from(referencedItemIds).map(itemId => getRenderItemWithValues(itemId, renderIsPublished, renderProjectId))
+        );
 
-      // For each item, find its collection's slug field and extract the slug
-      for (const item of itemsWithValues) {
-        if (!item) continue;
+        // For each item, find its collection's slug field and extract the slug
+        for (const item of itemsWithValues) {
+          if (!item) continue;
 
-        // Get the slug field for this item's collection
-        const fields = (renderProjectId || isProjectScopeRequired())
-          ? await getRenderFieldsByCollectionId(item.collection_id, renderIsPublished, renderProjectId)
-          : await getFieldsByCollectionId(item.collection_id, renderIsPublished);
-        const slugField = fields.find(f => f.key === 'slug');
+          const fields = await getRenderFieldsByCollectionId(item.collection_id, renderIsPublished, renderProjectId);
+          const slugField = fields.find(f => f.key === 'slug');
 
-        if (slugField && item.values[slugField.id]) {
-          collectionItemSlugs[item.id] = item.values[slugField.id];
+          if (slugField && item.values[slugField.id]) {
+            collectionItemSlugs[item.id] = item.values[slugField.id];
+          }
         }
       }
+    } else {
+      // Start pages/folders fetch and referenced-item fetch in parallel
+      const itemsMapPromise = referencedItemIds.size > 0
+        ? getItemsWithValuesByIds(Array.from(referencedItemIds), usePublishedData)
+        : Promise.resolve({} as Record<string, import('@/types').CollectionItemWithValues>);
+
+      [[pages, folders]] = await Promise.all([
+        usePublishedData
+          ? Promise.all([getCachedPublishedPages(), getCachedPublishedFolders()])
+          : Promise.all([
+            getAllPages({ is_published: false }),
+            getAllPageFolders({ is_published: false }),
+          ]),
+        itemsMapPromise.then(async (itemsMap) => {
+          const collectionIds = new Set(Object.values(itemsMap).map(i => i.collection_id));
+          const fieldsByCollection = new Map<string, CollectionField[]>();
+          await Promise.all(
+            Array.from(collectionIds).map(async (collId) => {
+              const fields = await getFieldsByCollectionId(collId, usePublishedData);
+              fieldsByCollection.set(collId, fields);
+            })
+          );
+
+          for (const item of Object.values(itemsMap)) {
+            const fields = fieldsByCollection.get(item.collection_id);
+            const slugField = fields?.find(f => f.key === 'slug');
+            if (slugField && item.values[slugField.id]) {
+              collectionItemSlugs[item.id] = item.values[slugField.id];
+            }
+          }
+        }),
+      ]);
     }
 
-    // Fetch slugs for all items in collections targeted by ref-* links
+    // ref-* links depend on `pages` being resolved, so this runs after
     const refTargetCollectionIds = new Set(
       allPageLinks
         .filter(l => l.collection_item_id.startsWith(REF_PAGE_PREFIX) || l.collection_item_id.startsWith(REF_COLLECTION_PREFIX))
         .map(l => pages.find(p => p.id === l.page_id)?.settings?.cms?.collection_id)
         .filter((id): id is string => !!id)
     );
-    for (const collId of refTargetCollectionIds) {
-      const fields = (renderProjectId || isProjectScopeRequired())
-        ? await getRenderFieldsByCollectionId(collId, renderIsPublished, renderProjectId)
-        : await getFieldsByCollectionId(collId, renderIsPublished);
-      const slugField = fields.find(f => f.key === 'slug');
-      if (!slugField) continue;
-
-      const { items } = (renderProjectId || isProjectScopeRequired())
-        ? await getRenderItemsWithValues(collId, renderIsPublished, renderProjectId)
-        : await getItemsWithValues(collId, renderIsPublished);
-      for (const item of items) {
-        if (item.values[slugField.id]) {
-          collectionItemSlugs[item.id] = item.values[slugField.id];
-        }
-      }
+    if (refTargetCollectionIds.size > 0) {
+      const scopedRender = Boolean(renderProjectId) || isProjectScopeRequired();
+      await Promise.all(
+        Array.from(refTargetCollectionIds).map(async (collId) => {
+          const [fields, { items }] = await Promise.all([
+            scopedRender
+              ? getRenderFieldsByCollectionId(collId, renderIsPublished, renderProjectId)
+              : getFieldsByCollectionId(collId, usePublishedData),
+            scopedRender
+              ? getRenderItemsWithValues(collId, renderIsPublished, renderProjectId)
+              : getItemsWithValues(collId, usePublishedData),
+          ]);
+          const slugField = fields.find(f => f.key === 'slug');
+          if (!slugField) return;
+          for (const item of items) {
+            if (item.values[slugField.id]) {
+              collectionItemSlugs[item.id] = item.values[slugField.id];
+            }
+          }
+        })
+      );
     }
   } catch (error) {
     handleRenderFetchError('Error fetching link resolution data', error);
   }
 
   const dedupedGlobalCustomCodeHead = removeDuplicateGoogleFontLinksFromHeadHtml(globalCustomCodeHead || '');
+
+  // Referenced/ref item slugs above are stored in the source language. On a
+  // non-default locale, swap each to its translated slug so dynamic-page links
+  // resolve to the localized URL (e.g. /fr/.../a-fr instead of /fr/.../a-en).
+  if (translations && locale && !locale.is_default) {
+    for (const itemId of Object.keys(collectionItemSlugs)) {
+      const translatedSlug = translations[`cms:${itemId}:field:key:slug`]?.content_value;
+      if (translatedSlug) {
+        collectionItemSlugs[itemId] = translatedSlug;
+      }
+    }
+  }
+
+  // Pre-compute localized URLs for the locale selector so switching language
+  // preserves translated folder/page/CMS slugs instead of reusing the source slug.
+  // Only runs on multi-locale pages that actually render a locale selector.
+  let localizedPageUrls: Record<string, string> | undefined;
+  if (
+    availableLocales.length > 1 &&
+    layerTreeHasLayer(resolvedLayers, l => l.name === 'localeSelector')
+  ) {
+    try {
+      const translationsByLocale: Record<string, Record<string, Translation>> = {};
+      await Promise.all(
+        availableLocales
+          .filter(l => !l.is_default)
+          .map(async (l) => {
+            // Reuse already-loaded translations for the current locale
+            if (locale && l.id === locale.id && translations) {
+              translationsByLocale[l.id] = translations as Record<string, Translation>;
+              return;
+            }
+            const rows = await getTranslationsByLocale(l.id, usePublishedData);
+            const map: Record<string, Translation> = {};
+            for (const t of rows) {
+              map[getTranslatableKey(t)] = t;
+            }
+            translationsByLocale[l.id] = map;
+          })
+      );
+
+      // Dynamic pages need the translated CMS item slug per locale
+      let dynamicSlug: LocalizedDynamicSlug | null = null;
+      if (page.is_dynamic && collectionItem) {
+        const slugField = collectionFields.find(f => f.key === 'slug');
+        if (slugField) {
+          // collectionItem.values are already translated for the current locale,
+          // so fetch the raw (default-locale) slug to use as the default + fallback.
+          const rawValues = await getValuesByItemIds([collectionItem.id], usePublishedData, undefined, [slugField.id]);
+          const sourceSlug = rawValues[collectionItem.id]?.[slugField.id];
+          if (sourceSlug) {
+            dynamicSlug = {
+              itemId: collectionItem.id,
+              contentKey: slugField.key ? `field:key:${slugField.key}` : `field:id:${slugField.id}`,
+              defaultValue: String(sourceSlug),
+            };
+          }
+        }
+      }
+
+      localizedPageUrls = buildLocalizedPageUrls(page, folders, availableLocales, translationsByLocale, dynamicSlug);
+    } catch (error) {
+      console.error('[PageRenderer] Error building localized page URLs:', error);
+    }
+  }
 
   // Extract custom code from page settings and resolve placeholders for dynamic pages
   const rawPageCustomCodeHead = page.settings?.custom_code?.head || '';
@@ -622,7 +862,7 @@ export default async function PageRenderer({
     requireProject: isProjectScopeRequired() || Boolean(process.env.STUDIO_YCODE_SITE_KEY && process.env.STUDIO_YCODE_SITE_KEY !== 'default'),
   });
 
-  const { hasBodyLayer, bodyClasses, bodyStyle, bodyAttributes, childLayers } = extractBodyLayer(resolvedLayers);
+  const { bodyClasses, bodyStyle, bodyAttributes, childLayers: rawChildLayers } = extractBodyLayer(resolvedLayers);
   const appliedBodyClasses = bodyClasses || 'bg-white';
   const appliedBodyStyle = bodyStyle || '';
   const runtimeProfile = typeof bodyAttributes['data-studio-runtime-profile'] === 'string'
@@ -633,14 +873,21 @@ export default async function PageRenderer({
     : undefined;
   const ssrBodyStyle = bodyStyleForSsr(appliedBodyStyle);
   const safeGaId = safeGaMeasurementId(gaMeasurementId);
-  const hasLayers = childLayers.length > 0;
-  const hasPageTransition = hasStudioPageTransition(childLayers);
+  const hasLayers = rawChildLayers.length > 0;
+  const hasPageTransition = hasStudioPageTransition(rawChildLayers);
 
   // Generate CSS for initial animation states to prevent flickering
   const { css: initialAnimationCSS, hiddenLayerInfo } = generateInitialAnimationCSS(resolvedLayers);
 
+  // Strip heavy SSR-only data before crossing the client component boundary.
+  // On published pages, all variables are pre-resolved so _collectionItemValues
+  // and _layerDataMap are redundant — removing them can cut the payload by 10x+.
+  const childLayers = usePublishedData ? stripSSROnlyData(rawChildLayers) : rawChildLayers;
+  const animationLayers = usePublishedData ? extractAnimationLayers(resolvedLayers) : resolvedLayers;
+
   // Load installed fonts and generate CSS + link URLs
   let fontsCss = '';
+  let googleFontsInlinedCss = '';
   let googleFontLinkUrls: string[] = [];
   try {
     const { getAllFonts: getAllDraftFonts } = await import('@/lib/repositories/fontRepository');
@@ -654,21 +901,34 @@ export default async function PageRenderer({
       dedupedGlobalCustomCodeHead,
       dedupedPageCustomCodeHead,
     );
+
+    // Inline the resolved @font-face CSS so the browser skips the blocking
+    // round-trip to fonts.googleapis.com and goes straight to gstatic for
+    // the woff2 binaries. Cached per font config across requests.
+    if (googleFontLinkUrls.length > 0) {
+      googleFontsInlinedCss = await unstable_cache(
+        async () => fetchGoogleFontsCss(googleFontLinkUrls),
+        [`google-fonts-css-${googleFontLinkUrls.join('|')}`],
+        { tags: ['all-pages'], revalidate: false },
+      )();
+    }
   } catch (error) {
     handleRenderFetchError('Error loading fonts', error);
   }
 
-  // Fetch server-side settings needed by LayerRenderer (map tokens, color variables).
+  // Fetch server-side settings needed by LayerRenderer (map tokens, color variables, timezone).
   // A build without Supabase credentials should still complete; individual
   // repository helpers already fail closed, so keep this fetch best-effort.
   let mapboxToken: string | null = null;
   let googleMapsEmbedKey: string | null = null;
   let serverColorVariables: Awaited<ReturnType<typeof getAllColorVariables>> = [];
+  let timezoneSetting: Awaited<ReturnType<typeof getSettingByKey>> | null = null;
   try {
-    [mapboxToken, googleMapsEmbedKey, serverColorVariables] = await Promise.all([
+    [mapboxToken, googleMapsEmbedKey, serverColorVariables, timezoneSetting] = await Promise.all([
       getMapboxAccessToken(),
       getGoogleMapsEmbedApiKey(),
       (renderProjectId || isProjectScopeRequired()) ? getRenderColorVariables(renderProjectId) : getAllColorVariables(),
+      getSettingByKey('timezone').catch(() => null),
     ]);
   } catch (error) {
     handleRenderFetchError('Error fetching server settings', error);
@@ -683,6 +943,9 @@ export default async function PageRenderer({
   if (serverColorVariables.length > 0) {
     serverSettings.color_variables = serverColorVariables;
   }
+  if (typeof timezoneSetting === 'string' && timezoneSetting) {
+    serverSettings.timezone = timezoneSetting;
+  }
 
   // Pre-resolve all asset URLs for SSR (images, videos, audio, icons, and field values)
   const layerAssetIds = collectLayerAssetIds(resolvedLayers, components);
@@ -690,15 +953,25 @@ export default async function PageRenderer({
   // Also collect from page collection item values (for dynamic pages)
   if (collectionItem) {
     for (const value of Object.values(collectionItem.values)) {
-      if (typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
-        layerAssetIds.add(value);
+      if (typeof value === 'string') {
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+          layerAssetIds.add(value);
+        } else if (value.startsWith('{')) {
+          const linkValue = parseCollectionLinkValue(value);
+          if (linkValue?.type === 'asset' && linkValue.asset?.id) {
+            layerAssetIds.add(linkValue.asset.id);
+          }
+        }
       }
     }
   }
 
   // Fetch all assets and build resolved map
   // Use draft assets (isPublished=false) for preview mode, published assets otherwise
-  let resolvedAssets: Record<string, { url: string; width?: number | null; height?: number | null }> | undefined;
+  // `mimeType` is tracked locally so the LCP heuristic can skip SVG logos;
+  // it is stripped before passing the map across the client boundary.
+  type ResolvedAssetEntry = { url: string; width?: number | null; height?: number | null; mimeType?: string };
+  let resolvedAssetsWithMime: Record<string, ResolvedAssetEntry> | undefined;
   if (layerAssetIds.size > 0) {
     try {
       const { getAssetsByIds } = await import('@/lib/repositories/assetRepository');
@@ -706,7 +979,7 @@ export default async function PageRenderer({
       const assetMap = (renderProjectId || isProjectScopeRequired())
         ? await getRenderAssetsByIds(assetIds, !isPreview, renderProjectId)
         : await getAssetsByIds(assetIds, !isPreview);
-      resolvedAssets = {};
+      resolvedAssetsWithMime = {};
       for (const [id, asset] of Object.entries(assetMap)) {
         let url: string | undefined;
         const proxyUrl = getAssetProxyUrl(asset);
@@ -718,13 +991,45 @@ export default async function PageRenderer({
           url = asset.content;
         }
         if (url) {
-          resolvedAssets[id] = { url, width: asset.width, height: asset.height };
+          resolvedAssetsWithMime[id] = { url, width: asset.width, height: asset.height, mimeType: asset.mime_type };
         }
       }
     } catch (error) {
       handleRenderFetchError('Error fetching assets', error);
     }
   }
+
+  // Identify the LCP candidate so the renderer can flip its loading=lazy
+  // template default to eager + fetchpriority=high. Skips logos/icons by
+  // ignoring images inside header/footer/nav and SVG-backed assets.
+  const lcpCandidate = findLcpCandidate(childLayers, resolvedAssetsWithMime);
+  const lcpCandidateLayerId = lcpCandidate?.layerId ?? null;
+
+  // Resolve the candidate's URL so we can emit <link rel="preload" as="image">
+  // in <head>. The browser starts fetching the hero image as soon as it parses
+  // the preload — well before it reaches the <img> tag deeper in the document.
+  // Only handles asset-variable images; CMS field-bound images on dynamic
+  // pages would need item-aware resolution.
+  let lcpPreloadSrc: string | null = null;
+  let lcpPreloadSrcset: string | null = null;
+  let lcpPreloadSizes: string | null = null;
+  if (lcpCandidate?.assetId && resolvedAssetsWithMime) {
+    const candidateAsset = resolvedAssetsWithMime[lcpCandidate.assetId];
+    if (candidateAsset?.url) {
+      lcpPreloadSrc = getOptimizedImageUrl(candidateAsset.url, 1920, 85);
+      lcpPreloadSrcset = generateImageSrcset(candidateAsset.url, undefined, undefined, candidateAsset.width) || null;
+      lcpPreloadSizes = buildImageSizes(candidateAsset.width || null);
+    }
+  }
+
+  // Strip mimeType before crossing the client component boundary — only
+  // url/width/height are part of the shared `resolvedAssets` contract.
+  const resolvedAssets: Record<string, { url: string; width?: number | null; height?: number | null }> | undefined =
+    resolvedAssetsWithMime
+      ? Object.fromEntries(
+        Object.entries(resolvedAssetsWithMime).map(([id, { url, width, height }]) => [id, { url, width, height }])
+      )
+      : undefined;
 
   return (
     <>
@@ -735,6 +1040,30 @@ export default async function PageRenderer({
 
       {/* Page-specific custom head code — React 19 hoists meta/link/style/title to <head> */}
       {allowCustomCodeExecution && dedupedPageCustomCodeHead && renderRootLayoutHeadCode(dedupedPageCustomCodeHead, 'page-head')}
+
+      {/* Preload the LCP image so the browser starts the fetch from <head>
+          rather than waiting until the parser reaches the <img> tag. Pairs
+          with the eager + fetchpriority=high props the renderer sets on the
+          same layer below. */}
+      {lcpPreloadSrc && (
+        lcpPreloadSrcset ? (
+          <link
+            rel="preload"
+            as="image"
+            href={lcpPreloadSrc}
+            imageSrcSet={lcpPreloadSrcset}
+            imageSizes={lcpPreloadSizes || undefined}
+            fetchPriority="high"
+          />
+        ) : (
+          <link
+            rel="preload"
+            as="image"
+            href={lcpPreloadSrc}
+            fetchPriority="high"
+          />
+        )
+      )}
 
       {/* Strip native browser appearance from form elements so Tailwind classes apply */}
       <style
@@ -758,19 +1087,44 @@ export default async function PageRenderer({
         />
       )}
 
-      {/* Load Google Fonts without render-blocking stylesheets. */}
-      {googleFontLinkUrls.map((url, i) => (
-        <Fragment key={`gfont-${i}`}>
-          <script
-            dangerouslySetInnerHTML={{ __html: fontStylesheetLoaderScript(url) }}
+      {/* Warm up the Google Fonts origins. When CSS is inlined below we only
+          need gstatic (the binary origin); when we fall back to the
+          non-blocking stylesheet loader we also need googleapis. `crossOrigin`
+          on gstatic is required because font files are fetched in CORS mode. */}
+      {googleFontLinkUrls.length > 0 && (
+        <>
+          {!googleFontsInlinedCss && (
+            <link rel="preconnect" href="https://fonts.googleapis.com" />
+          )}
+          <link
+            rel="preconnect" href="https://fonts.gstatic.com"
+            crossOrigin="anonymous"
           />
-          <noscript
-            dangerouslySetInnerHTML={{
-              __html: `<link rel="stylesheet" href="${url.replace(/"/g, '&quot;')}">`,
-            }}
-          />
-        </Fragment>
-      ))}
+        </>
+      )}
+
+      {/* Inline resolved @font-face rules when available — skips the blocking
+          CSS request to fonts.googleapis.com. Falls back to loading the
+          stylesheets without render-blocking if the publish-time fetch failed. */}
+      {googleFontsInlinedCss ? (
+        <style
+          id="ycode-google-fonts"
+          dangerouslySetInnerHTML={{ __html: googleFontsInlinedCss }}
+        />
+      ) : (
+        googleFontLinkUrls.map((url, i) => (
+          <Fragment key={`gfont-${i}`}>
+            <script
+              dangerouslySetInnerHTML={{ __html: fontStylesheetLoaderScript(url) }}
+            />
+            <noscript
+              dangerouslySetInnerHTML={{
+                __html: `<link rel="stylesheet" href="${url.replace(/"/g, '&quot;')}">`,
+              }}
+            />
+          </Fragment>
+        ))
+      )}
 
       {/* Inject custom font @font-face rules and font class CSS */}
       {fontsCss && (
@@ -839,16 +1193,17 @@ export default async function PageRenderer({
         data-studio-runtime-profile={runtimeProfile}
         data-studio-runtime-adapters={runtimeAdapters}
       >
-        <LayerRenderer
+        <LayerRendererPublic
           layers={childLayers}
-          isEditMode={false}
           isPublished={page.is_published}
+          pageId={page.id}
           pageCollectionItemId={collectionItem?.id}
           pageCollectionItemData={collectionItem?.values || undefined}
           pageCollectionSortedItemIds={pageCollectionSortedItemIds}
           hiddenLayerInfo={hiddenLayerInfo}
           currentLocale={locale}
           availableLocales={availableLocales}
+          localizedPageUrls={localizedPageUrls}
           pages={pages as any}
           folders={folders as any}
           collectionItemSlugs={collectionItemSlugs}
@@ -859,10 +1214,13 @@ export default async function PageRenderer({
           components={components}
           allowCustomCodeExecution={allowCustomCodeExecution}
           serverSettings={serverSettings}
+          lcpCandidateLayerId={lcpCandidateLayerId}
+          passwordProtection={is401Page ? passwordProtection : undefined}
         />
 
-        {/* Inject password form for 401 error pages */}
-        {is401Page && passwordProtection && (
+        {/* Fallback hardcoded password form: only when the 401 page has no inline
+            password-protected form layer (e.g. older / customised 401 pages). */}
+        {is401Page && passwordProtection && !hasInlinePasswordForm && (
           <PasswordForm
             pageId={passwordProtection.pageId}
             folderId={passwordProtection.folderId}
@@ -872,8 +1230,15 @@ export default async function PageRenderer({
         )}
       </main>
 
-      {/* Initialize GSAP animations based on layer interactions */}
-      <AnimationInitializer layers={resolvedLayers} initializeGlobalRuntime />
+      {/* Initialize GSAP animations based on layer interactions.
+          Always rendered: the Studio global runtime (page transitions, embedded
+          script execution, reveal handling) must initialize even when no layer
+          has interactions. Layers are pre-stripped on published pages (and
+          emptied when no layer has interactions) to minimize the payload. */}
+      <AnimationInitializer
+        layers={hasAnyInteractions(resolvedLayers) ? animationLayers : []}
+        initializeGlobalRuntime
+      />
 
       {/* Initialize Swiper on slider elements */}
       {hasSliderLayers(resolvedLayers) && <SliderInitializer />}

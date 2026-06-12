@@ -17,7 +17,8 @@ import React, { useMemo, useState, useCallback, useEffect, useRef, useLayoutEffe
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 // 2. External libraries
-import { DndContext, DragOverlay, DragStartEvent, DragEndEvent, DragOverEvent, PointerSensor, useSensor, useSensors, closestCenter, useDraggable, useDroppable } from '@dnd-kit/core';
+import { DndContext, DragOverlay, DragStartEvent, DragEndEvent, DragOverEvent, DragMoveEvent, PointerSensor, useSensor, useSensors, pointerWithin, closestCenter, useDraggable, useDroppable } from '@dnd-kit/core';
+import type { CollisionDetection } from '@dnd-kit/core';
 import { Layers as LayersIcon, Component as ComponentIcon } from 'lucide-react';
 
 // 4. Internal components
@@ -28,6 +29,8 @@ import { useEditorStore } from '@/stores/useEditorStore';
 import { useLayerStylesStore } from '@/stores/useLayerStylesStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
+import { useLocalisationStore } from '@/stores/useLocalisationStore';
+
 import { usePagesStore } from '@/stores/usePagesStore';
 import { useCollaborationPresenceStore, getResourceLockKey, RESOURCE_TYPES } from '@/stores/useCollaborationPresenceStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -35,22 +38,50 @@ import { useAuthStore } from '@/stores/useAuthStore';
 // 6. Utils/lib
 import { cn } from '@/lib/utils';
 import { flattenTree, type FlattenedItem } from '@/lib/tree-utilities';
-import { canHaveChildren, getLayerIcon, getLayerName, getCollectionVariable, isTextContentLayer, isRichTextLayer, hasRichTextContent, getRichTextSublayers, getTextStyleSublayers, canMoveLayer, updateLayerProps, filterDisabledSliderLayers, getLayerCmsFieldBinding, extractBlockText } from '@/lib/layer-utils';
+import { canHaveChildren, getCollectionVariable, isTextContentLayer, isRichTextLayer, hasRichTextContent, getRichTextSublayers, getTextStyleSublayers, canMoveLayer, updateLayerProps, filterDisabledSliderLayers, getLayerCmsFieldBinding, extractBlockText } from '@/lib/layer-utils';
+import { getLayerIcon, getLayerName } from '@/lib/layer-display-utils';
 import { getBlockName } from '@/lib/templates/blocks';
 import { MULTI_ASSET_COLLECTION_ID } from '@/lib/collection-field-utils';
-import { hasStyleOverrides } from '@/lib/layer-style-utils';
 import { getUserInitials, getDisplayName } from '@/lib/collaboration-utils';
 import { getBreakpointPrefix } from '@/lib/breakpoint-utils';
 import { Input } from '@/components/ui/input';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { CollaboratorBadge } from '@/components/collaboration/CollaboratorBadge';
-import { DropLineIndicator, DropContainerIndicator } from '@/components/DropIndicators';
+import { DropLineIndicator } from '@/components/DropIndicators';
 
 // 7. Types
 import type { Layer, Breakpoint } from '@/types';
 import type { UseLiveLayerUpdatesReturn } from '@/hooks/use-live-layer-updates';
 import type { UseLiveComponentUpdatesReturn } from '@/hooks/use-live-component-updates';
 import Icon from '@/components/ui/icon';
+
+/**
+ * Pointer-first collision detection for vertical tree rows.
+ * Uses pointerWithin to accurately detect which row the cursor is over,
+ * falling back to closestCenter when the pointer is between rows or in gaps.
+ */
+const pointerFirstCollision: CollisionDetection = (args) => {
+  const pointerCollisions = pointerWithin(args);
+  if (pointerCollisions.length > 0) {
+    return pointerCollisions;
+  }
+  return closestCenter(args);
+};
+
+/** Calculate drop position (above/below/inside) based on cursor Y within a row. */
+function calcDropPosition(
+  relativeY: number,
+  isContainer: boolean,
+  hasVisibleChildren: boolean,
+): 'above' | 'below' | 'inside' {
+  if (isContainer) {
+    const edge = hasVisibleChildren ? 0.15 : 0.10;
+    if (relativeY < edge) return 'above';
+    if (relativeY > 1 - edge) return 'below';
+    return 'inside';
+  }
+  return relativeY < 0.5 ? 'above' : 'below';
+}
 
 /**
  * Get display label for a layer - returns text content for text layers, otherwise layer name.
@@ -75,7 +106,11 @@ function getLayerDisplayLabel(
     return layer.customName!;
   }
 
-  if (!isTextLayer && layer.customName) {
+  // Component instances: prefer the component's name over the underlying
+  // block's default customName (e.g. a `section` layer converted to a
+  // component would otherwise display as "Section" instead of the
+  // component's actual name).
+  if (!isTextLayer && !layer.componentId && layer.customName) {
     return layer.customName;
   }
 
@@ -99,15 +134,111 @@ function getLayerDisplayLabel(
   return getLayerName(layer, context, breakpoint);
 }
 
+interface LayerTreeStoreValues {
+  getComponentById: ReturnType<typeof useComponentsStore.getState>['getComponentById'];
+  collections: ReturnType<typeof useCollectionsStore.getState>['collections'];
+  fieldsByCollectionId: ReturnType<typeof useCollectionsStore.getState>['fields'];
+  selectLayerWithSublayer: ReturnType<typeof useEditorStore.getState>['selectLayerWithSublayer'];
+  editingComponentId: string | null;
+  interactionTriggerLayerIds: string[];
+  interactionTargetLayerIds: string[];
+  activeInteractionTriggerLayerId: string | null;
+  activeInteractionTargetLayerIds: string[];
+  activeUIState: string;
+}
+
+const LayerTreeStoreContext = React.createContext<LayerTreeStoreValues>(null!);
+
 interface LayersTreeProps {
   layers: Layer[];
-  selectedLayerId: string | null;
-  selectedLayerIds?: string[]; // New multi-select support
   onLayerSelect: (layerId: string) => void;
   onReorder: (newLayers: Layer[], movedLayerId?: string) => void;
   pageId: string;
   liveLayerUpdates?: UseLiveLayerUpdatesReturn | null;
   liveComponentUpdates?: UseLiveComponentUpdatesReturn | null;
+  readOnly?: boolean;
+}
+
+const ROW_HEIGHT = 32;
+
+interface DndInfo {
+  attributes: Record<string, unknown>;
+  listeners: Record<string, unknown>;
+  setRowElement: (el: HTMLDivElement | null) => void;
+}
+
+const DndInfoContext = React.createContext<React.MutableRefObject<DndInfo>>(null!);
+
+interface VirtualLayerRowProps {
+  nodeId: string;
+  isRenaming: boolean;
+  isLocalizing: boolean;
+  translateY: number;
+  children: React.ReactNode;
+}
+
+/**
+ * Wrapper that owns dnd-kit hooks so the inner memoized LayerRow
+ * is shielded from DndContext re-renders. Passes dnd info via a
+ * stable ref context so LayerRow can apply it to its content div.
+ */
+function VirtualLayerRow({ nodeId, isRenaming, isLocalizing, translateY, children }: VirtualLayerRowProps) {
+  const { setNodeRef: setDropRef } = useDroppable({ id: nodeId });
+  const { attributes, listeners, setNodeRef: setDragRef } = useDraggable({
+    id: nodeId,
+    disabled: isRenaming || isLocalizing,
+  });
+
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const dragRefFn = useRef(setDragRef);
+  const dropRefFn = useRef(setDropRef);
+  dragRefFn.current = setDragRef;
+  dropRefFn.current = setDropRef;
+
+  // Stable ref callback — identity never changes
+  const setRowElement = useCallback((el: HTMLDivElement | null) => {
+    elementRef.current = el;
+    dragRefFn.current(el);
+    dropRefFn.current(el);
+  }, []);
+
+  const dndInfoRef = useRef<DndInfo>({
+    attributes: attributes as unknown as Record<string, unknown>,
+    listeners: listeners as unknown as Record<string, unknown>,
+    setRowElement,
+  });
+  dndInfoRef.current.attributes = attributes as unknown as Record<string, unknown>;
+  dndInfoRef.current.listeners = listeners as unknown as Record<string, unknown>;
+
+  // Re-register DOM element when dnd-kit ref setters change
+  useLayoutEffect(() => {
+    if (elementRef.current) {
+      setDragRef(elementRef.current);
+      setDropRef(elementRef.current);
+    }
+  }, [setDragRef, setDropRef]);
+
+  return (
+    <DndInfoContext.Provider value={dndInfoRef}>
+      <div
+        style={{
+          position: 'absolute',
+          // Position rows with `top` rather than `transform: translateY`. A
+          // transformed ancestor becomes the containing block for the row's
+          // `position: sticky` background, which Safari composites incorrectly
+          // in a virtualized list — promoting stale, oversized GPU layers that
+          // paint the blue selection over (and far beyond) the row, hiding the
+          // layer names. Using `top` avoids the transform entirely.
+          top: translateY,
+          left: 0,
+          width: '100%',
+          height: ROW_HEIGHT,
+        }}
+      >
+        {children}
+      </div>
+    </DndInfoContext.Provider>
+  );
 }
 
 interface LayerRowProps {
@@ -121,12 +252,11 @@ interface LayerRowProps {
   isDragging: boolean;
   isDragActive: boolean;
   dropPosition: 'above' | 'below' | 'inside' | null;
-  highlightedDepths: Set<number>;
+  highlightedDepths: string;
   onSelect: (id: string) => void;
   onMultiSelect: (id: string, modifiers: { meta: boolean; shift: boolean }) => void;
   onToggle: (id: string) => void;
   pageId: string;
-  selectedLayerId: string | null;
   liveLayerUpdates?: UseLiveLayerUpdatesReturn | null;
   liveComponentUpdates?: UseLiveComponentUpdatesReturn | null;
   activeBreakpoint: Breakpoint;
@@ -134,6 +264,7 @@ interface LayerRowProps {
   onRenameStart: (id: string) => void;
   onRenameConfirm: (id: string, newName: string | null) => void;
   onToggleVisibility: (id: string) => void;
+  readOnly?: boolean;
 }
 
 // Helper to check if a node is a descendant of another
@@ -181,7 +312,6 @@ const LayerRow = React.memo(function LayerRow({
   onMultiSelect,
   onToggle,
   pageId,
-  selectedLayerId,
   liveLayerUpdates,
   liveComponentUpdates,
   activeBreakpoint,
@@ -189,30 +319,33 @@ const LayerRow = React.memo(function LayerRow({
   onRenameStart,
   onRenameConfirm,
   onToggleVisibility,
+  readOnly,
 }: LayerRowProps) {
-  const getStyleById = useLayerStylesStore((state) => state.getStyleById);
-  const getComponentById = useComponentsStore((state) => state.getComponentById);
-  const collections = useCollectionsStore((state) => state.collections);
-  const fieldsByCollectionId = useCollectionsStore((state) => state.fields);
-
-  // Use selective subscriptions to avoid re-renders when unrelated state changes
-  const selectLayerWithSublayer = useEditorStore((state) => state.selectLayerWithSublayer);
-  const editingComponentId = useEditorStore((state) => state.editingComponentId);
-  const interactionTriggerLayerIds = useEditorStore((state) => state.interactionTriggerLayerIds);
-  const interactionTargetLayerIds = useEditorStore((state) => state.interactionTargetLayerIds);
-  const activeInteractionTriggerLayerId = useEditorStore((state) => state.activeInteractionTriggerLayerId);
-  const activeInteractionTargetLayerIds = useEditorStore((state) => state.activeInteractionTargetLayerIds);
-  const setHoveredLayerId = useEditorStore((state) => state.setHoveredLayerId);
-  const activeUIState = useEditorStore((state) => state.activeUIState);
+  const {
+    getComponentById,
+    collections,
+    fieldsByCollectionId,
+    selectLayerWithSublayer,
+    editingComponentId,
+    interactionTriggerLayerIds,
+    interactionTargetLayerIds,
+    activeInteractionTriggerLayerId,
+    activeInteractionTargetLayerIds,
+    activeUIState,
+  } = React.useContext(LayerTreeStoreContext);
   const isStateActive = activeUIState !== 'neutral';
-  const { setNodeRef: setDropRef } = useDroppable({
-    id: node.id,
+
+  // Disable layer drag/drop and add buttons in non-default locales — the tree
+  // becomes a read-only map of the page while translating.
+  const isLocalizing = useLocalisationStore((state) => {
+    const id = state.selectedLocaleId;
+    if (!id) return false;
+    const locale = state.locales.find((l) => l.id === id);
+    return !!(locale && !locale.is_default);
   });
 
-  const { attributes, listeners, setNodeRef: setDragRef } = useDraggable({
-    id: node.id,
-    disabled: isRenaming,
-  });
+  const dndInfo = React.useContext(DndInfoContext);
+  const { attributes, listeners, setRowElement } = dndInfo.current;
 
   const renameInputRef = React.useRef<HTMLInputElement>(null);
   const renameReadyRef = React.useRef(false);
@@ -239,12 +372,6 @@ const LayerRow = React.memo(function LayerRow({
       renameReadyRef.current = false;
     }
   }, [isRenaming]);
-
-  // Combine refs for drag and drop
-  const setRefs = (element: HTMLDivElement | null) => {
-    setDragRef(element);
-    setDropRef(element);
-  };
 
   const hasChildren = node.layer.children && node.layer.children.length > 0;
   const isCollapsed = node.collapsed || false;
@@ -290,6 +417,43 @@ const LayerRow = React.memo(function LayerRow({
   // Check if this is the Body layer (locked)
   const isLocked = node.layer.id === 'body';
 
+  // Hover is driven by CSS :hover (via `group-hover/row:` on the wrapper) so
+  // each mouseover/leave doesn't queue a React commit. Background colors for
+  // both states are computed once per render and applied through CSS variables.
+  const canHover = !isDragActive && !isDragging && !isLockedByOther;
+
+  const rowBg = isSelected && !usePurpleStyle && !isStateActive
+    ? 'var(--primary)'
+    : isSelected && !usePurpleStyle && isStateActive
+      ? '#8dd92f'
+      : isSelected && usePurpleStyle
+        ? 'rgb(168 85 247)'
+        : isChildOfSelected && !usePurpleStyle && !isStateActive
+          ? 'color-mix(in oklch, var(--primary) 15%, var(--background))'
+          : isChildOfSelected && !usePurpleStyle && isStateActive
+            ? 'color-mix(in oklch, #8dd92f 15%, var(--background))'
+            : isChildOfSelected && usePurpleStyle
+              ? 'color-mix(in oklch, rgb(168 85 247) 10%, var(--background))'
+              : 'transparent';
+
+  const rowHoverBg = !canHover || isSelected
+    ? rowBg
+    : isChildOfSelected && !usePurpleStyle && !isStateActive
+      ? 'color-mix(in oklch, var(--primary) 20%, var(--background))'
+      : isChildOfSelected && !usePurpleStyle && isStateActive
+        ? 'color-mix(in oklch, #8dd92f 20%, var(--background))'
+        : isChildOfSelected && usePurpleStyle
+          ? rowBg
+          : 'color-mix(in oklch, var(--foreground) 8%, var(--background))';
+
+  // The icon area sits on top of the row content, so its background must be
+  // opaque to hide long layer names that scroll behind it. When the row itself
+  // has no background, fall back to the panel background.
+  const deriveIconBg = (bg: string) => bg === 'transparent' ? 'var(--background)' : bg;
+
+  const iconBg = deriveIconBg(rowBg);
+  const iconHoverBg = deriveIconBg(rowHoverBg);
+
   // Sublayer rows (content blocks or text style targets)
   if (node.sublayer) {
     const handleSublayerClick = () => {
@@ -319,58 +483,84 @@ const LayerRow = React.memo(function LayerRow({
     const isSubCollapsed = node.collapsed || false;
 
     return (
-      <div className="relative">
-        {node.depth > 0 && (
-          <>
-            {Array.from({ length: node.depth }).map((_, i) => (
-              <div
-                key={i}
-                className={cn(
-                  'absolute z-10 top-0 bottom-0 w-px',
-                  (isChildOfSelected || isSelected) ? 'dark:bg-white/10 bg-neutral-900/10' : 'dark:bg-secondary bg-neutral-900/10',
-                )}
-                style={{ left: `${i * 14 + 16}px` }}
-              />
-            ))}
-          </>
-        )}
-        <div
-          className={cn(
-            'group relative flex items-center h-8 cursor-pointer',
-            isSelected && !isStateActive && 'bg-primary text-primary-foreground rounded-lg',
-            isSelected && isStateActive && 'bg-[#8dd92f] text-black rounded-lg',
-            !isSelected && isChildOfSelected && !isStateActive && 'dark:bg-primary/15 bg-primary/10 text-current/70',
-            !isSelected && isChildOfSelected && isStateActive && 'dark:bg-[#8dd92f]/15 bg-[#8dd92f]/10 text-current/70',
-            !isSelected && isChildOfSelected && isLastVisibleDescendant && 'rounded-b-lg',
-            !isSelected && isChildOfSelected && !isLastVisibleDescendant && 'rounded-none',
-            !isSelected && !isChildOfSelected && 'rounded-lg text-secondary-foreground/80 dark:text-muted-foreground',
-          )}
-          style={{ paddingLeft: `${node.depth * 14 + 8}px` }}
-          onClick={handleSublayerClick}
-        >
-          {hasExpandableChildren ? (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggle(node.id);
-              }}
-              className={cn(
-                'w-4 h-4 flex items-center justify-center shrink-0',
-                isSubCollapsed ? '' : 'rotate-90',
-              )}
-            >
-              <Icon name="chevronRight" className={cn('size-2.5 opacity-50', isSelected && 'opacity-80')} />
-            </button>
-          ) : (
-            <div className="w-4 h-4 shrink-0" />
-          )}
-          <Icon
-            name={node.sublayer.icon as any}
-            className={cn('size-3 mx-1.5 shrink-0', isSelected ? 'opacity-70' : 'opacity-40')}
+      <div className="relative flex" style={{ width: '100%', minWidth: '100%' }}>
+        {/* Background layer - stays fixed */}
+        <div className="absolute inset-0 pointer-events-none z-0">
+          <div
+            className={cn(
+              'sticky left-0 h-full',
+              isSelected && !isStateActive && 'bg-primary rounded-lg',
+              isSelected && isStateActive && 'bg-[#8dd92f] rounded-lg',
+              !isSelected && isChildOfSelected && !isStateActive && 'dark:bg-primary/15 bg-primary/10',
+              !isSelected && isChildOfSelected && isStateActive && 'dark:bg-[#8dd92f]/15 bg-[#8dd92f]/10',
+              !isSelected && isChildOfSelected && isLastVisibleDescendant && 'rounded-b-lg',
+              !isSelected && isChildOfSelected && !isLastVisibleDescendant && 'rounded-none',
+              !isSelected && !isChildOfSelected && 'rounded-lg',
+            )}
+            style={{ width: 'var(--tree-available-width)' }}
           />
-          <span className={cn('text-2xs truncate select-none', isSelected ? 'opacity-90' : 'opacity-60')}>
-            {node.sublayer.label}
-          </span>
+        </div>
+
+        {/* Content layer */}
+        <div className="relative z-10 flex w-full min-w-full flex-1">
+          {node.depth > 0 && (
+            <>
+              {Array.from({ length: node.depth }).map((_, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    'absolute z-10 top-0 bottom-0 w-px pointer-events-none',
+                    (isChildOfSelected || isSelected) ? 'dark:bg-white/10 bg-neutral-900/10' : 'dark:bg-secondary bg-neutral-900/10',
+                  )}
+                  style={{ left: `${i * 14 + 16}px` }}
+                />
+              ))}
+            </>
+          )}
+          <div
+            className={cn(
+              'group relative flex items-center h-8 cursor-pointer',
+              isSelected && !isStateActive && 'text-primary-foreground',
+              isSelected && isStateActive && 'text-black',
+              !isSelected && isChildOfSelected && 'text-current/70',
+              !isSelected && !isChildOfSelected && 'text-secondary-foreground/80 dark:text-muted-foreground',
+            )}
+            style={{ width: 'max-content', minWidth: '100%' }}
+            onClick={handleSublayerClick}
+          >
+            {/* Indent spacer */}
+            <div style={{ width: `${node.depth * 14 + 8}px`, flex: 'none' }} />
+
+            {/* Content area */}
+            <div
+              className="flex items-center flex-1"
+              style={{ maxWidth: 'var(--tree-available-width)' }}
+            >
+              {hasExpandableChildren ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggle(node.id);
+                  }}
+                  className={cn(
+                    'w-4 h-4 flex items-center justify-center shrink-0',
+                    isSubCollapsed ? '' : 'rotate-90',
+                  )}
+                >
+                  <Icon name="chevronRight" className={cn('size-2.5 opacity-50', isSelected && 'opacity-80')} />
+                </button>
+              ) : (
+                <div className="w-4 h-4 shrink-0" />
+              )}
+              <Icon
+                name={node.sublayer.icon as any}
+                className={cn('size-3 mx-1.5 shrink-0', isSelected ? 'opacity-70' : 'opacity-40')}
+              />
+              <span className={cn('flex-1 text-2xs truncate select-none min-w-0', isSelected ? 'opacity-90' : 'opacity-60')}>
+                {node.sublayer.label}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -382,278 +572,288 @@ const LayerRow = React.memo(function LayerRow({
       pageId={pageId}
       isLocked={isLocked}
       onLayerSelect={onSelect}
-      selectedLayerId={selectedLayerId}
       liveLayerUpdates={liveLayerUpdates}
       liveComponentUpdates={liveComponentUpdates}
       editingComponentId={editingComponentId}
+      readOnly={readOnly}
     >
-      <div className="relative">
-        {/* Vertical connector lines - one for each depth level */}
-        {node.depth > 0 && (
-          <>
-            {Array.from({ length: node.depth }).map((_, i) => {
-              const shouldHighlight = (isSelected || isChildOfSelected) && highlightedDepths.has(i);
-              return (
-                <div
-                  key={i}
-                  className={cn(
-                    'absolute z-10 top-0 bottom-0 w-px ',
-                    shouldHighlight && 'bg-white/30',
-                    isSelected && 'bg-white/10!',
-                    isChildOfSelected && 'dark:bg-white/10 bg-neutral-900/10',
-                    !shouldHighlight && !isChildOfSelected && 'dark:bg-secondary bg-neutral-900/10',
-                  )}
-                  style={{
-                    left: `${i * 14 + 16}px`,
-                  }}
-                />
-              );
-            })}
-          </>
-        )}
+      <div
+        className="relative flex group/row"
+        style={{ width: '100%', minWidth: '100%' }}
+      >
+        {/* Background layer - stays fixed when scrolling horizontally */}
+        <div className="absolute inset-0 pointer-events-none z-0">
+          <div
+            className={cn(
+              'sticky left-0 h-full bg-(--row-bg) group-hover/row:bg-(--row-hover-bg)',
+              isSelected && !hasVisibleChildren && 'rounded-lg',
+              isSelected && hasVisibleChildren && 'rounded-t-lg',
+              !isSelected && isChildOfSelected && !isLastVisibleDescendant && 'rounded-none',
+              !isSelected && isChildOfSelected && isLastVisibleDescendant && 'rounded-b-lg',
+              !isSelected && !isChildOfSelected && 'rounded-lg',
+            )}
+            style={{
+              width: 'var(--tree-available-width)',
+              '--row-bg': rowBg,
+              '--row-hover-bg': rowHoverBg,
+            } as React.CSSProperties}
+          />
+        </div>
 
-        {/* Drop Indicators - using shared components */}
-        {isOver && dropPosition === 'above' && (
-          <DropLineIndicator position="above" offsetLeft={node.depth * 14 + 8} />
-        )}
-        {isOver && dropPosition === 'below' && (
-          <DropLineIndicator position="below" offsetLeft={node.depth * 14 + 8} />
-        )}
+        {/* Drop inside indicator - same sizing as background layer */}
         {isOver && dropPosition === 'inside' && (
-          <DropContainerIndicator />
+          <div className="absolute inset-0 pointer-events-none z-40">
+            <div
+              className="sticky left-0 h-full rounded-lg border-[1.5px] border-primary animate-in fade-in duration-100"
+              style={{ width: 'var(--tree-available-width)' }}
+            />
+          </div>
         )}
 
-        {/* Main Row */}
-        <div
-          ref={setRefs}
-          {...(isRenaming ? {} : attributes)}
-          {...(isRenaming ? {} : listeners)}
-          data-drag-active={isDragActive}
-          data-layer-id={node.id}
-          className={cn(
-            'group relative flex items-center h-8 outline-none focus:outline-none',
-            // Locked by another user - show as non-interactive
-            isLockedByOther ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
-            // Conditional rounding based on position in selected group
-            // Selected parent: rounded top, rounded bottom ONLY if no visible children
-            isSelected && !hasVisibleChildren && 'rounded-lg', // No children: fully rounded
-            isSelected && hasVisibleChildren && 'rounded-t-lg', // Has children: only top rounded
-            // Children of selected should have NO rounding, EXCEPT last visible descendant gets bottom rounding
-            !isSelected && isChildOfSelected && !isLastVisibleDescendant && 'rounded-none',
-            !isSelected && isChildOfSelected && isLastVisibleDescendant && 'rounded-b-lg',
-            // Not in group: fully rounded
-            !isSelected && !isChildOfSelected && 'rounded-lg text-secondary-foreground/80 dark:text-muted-foreground',
-            // Background colors
-            !isDragActive && !isDragging && !isLockedByOther && 'hover:bg-secondary/50',
-            // Component instances OR component edit mode use purple, regular layers use blue
-            // When a UI state (hover/focus/active/etc.) is active, use green (#8dd92f)
-            isSelected && !usePurpleStyle && !isStateActive && 'bg-primary text-primary-foreground hover:bg-primary',
-            isSelected && !usePurpleStyle && isStateActive && 'bg-[#8dd92f] text-black hover:bg-[#8dd92f]',
-            isSelected && usePurpleStyle && 'bg-purple-500 text-white hover:bg-purple-500',
-            !isSelected && isChildOfSelected && !usePurpleStyle && !isStateActive && 'dark:bg-primary/15 bg-primary/10 text-current/70 hover:bg-primary/15 dark:hover:bg-primary/20',
-            !isSelected && isChildOfSelected && !usePurpleStyle && isStateActive && 'dark:bg-[#8dd92f]/15 bg-[#8dd92f]/10 text-current/70 hover:bg-[#8dd92f]/15 dark:hover:bg-[#8dd92f]/20',
-            !isSelected && isChildOfSelected && usePurpleStyle && 'dark:bg-purple-500/10 bg-purple-500/10 text-current/70 hover:bg-purple-500/15 dark:hover:bg-purple-500/20',
-            isSelected && !isDragActive && !isDragging && '',
-            isDragging && '',
-            !isDragActive && ''
+        {/* Content layer - scrolls horizontally */}
+        <div className="relative z-10 flex w-full min-w-full flex-1">
+          {/* Vertical connector lines */}
+          {node.depth > 0 && (
+            <>
+              {Array.from({ length: node.depth }).map((_, i) => {
+                const shouldHighlight = (isSelected || isChildOfSelected) && highlightedDepths.includes(`,${i},`);
+                return (
+                  <div
+                    key={i}
+                    className={cn(
+                      'absolute z-10 top-0 bottom-0 w-px pointer-events-none',
+                      shouldHighlight && 'bg-white/30',
+                      isSelected && 'bg-white/10!',
+                      isChildOfSelected && 'dark:bg-white/10 bg-neutral-900/10',
+                      !shouldHighlight && !isChildOfSelected && 'dark:bg-secondary bg-neutral-900/10',
+                    )}
+                    style={{
+                      left: `${i * 14 + 16}px`,
+                    }}
+                  />
+                );
+              })}
+            </>
           )}
-          style={{ paddingLeft: `${node.depth * 14 + 8}px` }}
-          onMouseEnter={() => {
-            if (!isDragging) {
-              setHoveredLayerId(node.id);
-            }
-          }}
-          onMouseLeave={() => {
-            setHoveredLayerId(null);
-          }}
-          onClick={(e) => {
-            if (isRenaming) return;
-            // Block click if layer is locked by another user
-            if (isLockedByOther) {
-              e.stopPropagation();
-              e.preventDefault();
-              return;
-            }
-            // Normal click: Select only this layer
-            onSelect(node.id);
-          }}
-        >
-          {/* Expand/Collapse Button - show for elements that can have children or richText sublayers */}
-          {(node.canHaveChildren || hasSublayers) ? (
-            effectiveHasChildren ? (
-              <button
-                onClick={(e) => {
+
+          {/* Drop Indicators */}
+          {isOver && dropPosition === 'above' && (
+            <DropLineIndicator position="above" offsetLeft={node.depth > 0 ? (node.depth - 1) * 14 + 17.5 : 4} />
+          )}
+          {isOver && dropPosition === 'below' && (() => {
+            const effectiveDepth = (hasVisibleChildren && !node.collapsed) ? node.depth + 1 : node.depth;
+            return (
+              <DropLineIndicator position="below" offsetLeft={effectiveDepth > 0 ? (effectiveDepth - 1) * 14 + 17.5 : 4} />
+            );
+          })()}
+
+          {/* Main Row */}
+          <div
+            ref={setRowElement}
+            {...(isRenaming ? {} : attributes)}
+            {...(isRenaming ? {} : listeners)}
+            data-drag-active={isDragActive}
+            data-layer-id={node.id}
+            className={cn(
+              'group relative flex items-center h-8 outline-none focus:outline-none',
+              isLockedByOther ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+              isSelected && 'text-primary-foreground',
+              isSelected && isStateActive && 'text-black',
+              isSelected && usePurpleStyle && 'text-white',
+              !isSelected && !isChildOfSelected && 'text-secondary-foreground/80 dark:text-muted-foreground',
+              !isSelected && isChildOfSelected && 'text-current/70',
+            )}
+            style={{ width: 'max-content', minWidth: '100%' }}
+            onClick={(e) => {
+              if (isRenaming) return;
+              if (isLockedByOther) {
+                e.stopPropagation();
+                e.preventDefault();
+                return;
+              }
+              onSelect(node.id);
+            }}
+          >
+          {/* Indent spacer */}
+          <div style={{ width: `${node.depth * 14 + 8}px`, flex: 'none' }} />
+
+          {/* Content area - fixed max-width so names truncate, scroll is for hierarchy */}
+          <div className="flex items-center flex-1" style={{ maxWidth: 'var(--tree-available-width)' }}>
+            {/* Expand/Collapse Button */}
+            {(node.canHaveChildren || hasSublayers) ? (
+              effectiveHasChildren ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!shouldHideChildren) {
+                      onToggle(node.id);
+                    }
+                  }}
+                  className={cn(
+                    'w-4 h-4 flex items-center justify-center shrink-0',
+                    isCollapsed ? '' : 'rotate-90',
+                    shouldHideChildren && 'opacity-30 cursor-not-allowed'
+                  )}
+                  disabled={shouldHideChildren}
+                >
+                  <Icon name="chevronRight" className={cn('size-2.5 opacity-50', isSelected && 'opacity-80')} />
+                </button>
+              ) : (
+                <div className="w-4 h-4 shrink-0" />
+              )
+            ) : (
+              <div className="w-4 h-4 shrink-0 flex items-center justify-center">
+                <div className={cn('ml-px w-1.5 h-px bg-white opacity-0', isSelected && 'opacity-0')} />
+              </div>
+            )}
+
+            {/* Layer Icon */}
+            {isComponentInstance ? (
+              <Icon name="component" className="size-3 mx-1.5 shrink-0" />
+            ) : layerIcon ? (
+              <Icon
+                name={layerIcon}
+                className={cn(
+                  'size-3 mx-1.5 opacity-50 shrink-0',
+                  isSelected && 'opacity-100',
+                )}
+              />
+            ) : (
+              <div
+                className={cn(
+                  'size-3 bg-secondary rounded mx-1.5 shrink-0',
+                  isSelected && 'opacity-10 dark:bg-white'
+                )}
+              />
+            )}
+
+            {/* Label / Inline Rename Input */}
+            {isRenaming ? (
+              <Input
+                ref={renameInputRef}
+                variant="rename-selected"
+                data-renaming
+                className="grow mr-2"
+                defaultValue={node.layer.customName || ''}
+                placeholder={getLayerDisplayLabel({ ...node.layer, customName: undefined }, {
+                  component_name: appliedComponent?.name,
+                  collection_name: finalCollectionName,
+                  source_field_name: sourceFieldName ?? undefined,
+                }, activeBreakpoint)}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                onBlur={(e) => {
+                  if (!renameReadyRef.current) return;
+                  const val = e.currentTarget.value.trim();
+                  onRenameConfirm(node.id, val || null);
+                }}
+                onKeyDown={(e) => {
                   e.stopPropagation();
-                  if (!shouldHideChildren) {
-                    onToggle(node.id);
+                  if (e.key === 'Enter') {
+                    const val = (e.target as HTMLInputElement).value.trim();
+                    onRenameConfirm(node.id, val || null);
+                  } else if (e.key === 'Escape') {
+                    onRenameConfirm(node.id, node.layer.customName || null);
                   }
                 }}
-                className={cn(
-                  'w-4 h-4 flex items-center justify-center shrink-0',
-                  isCollapsed ? '' : 'rotate-90',
-                  shouldHideChildren && 'opacity-30 cursor-not-allowed'
-                )}
-                disabled={shouldHideChildren}
-              >
-                <Icon name="chevronRight" className={cn('size-2.5 opacity-50', isSelected && 'opacity-80')} />
-              </button>
+              />
             ) : (
-              <div className="w-4 h-4 shrink-0" />
-            )
-          ) : (
-            <div className="w-4 h-4 shrink-0 flex items-center justify-center">
-              <div className={cn('ml-px w-1.5 h-px bg-white opacity-0', isSelected && 'opacity-0')} />
-            </div>
-          )}
-
-          {/* Layer Icon */}
-          {isComponentInstance ? (
-            <Icon name="component" className="size-3 mx-1.5 shrink-0" />
-          ) : layerIcon ? (
-            <Icon
-              name={layerIcon}
-              className={cn(
-                'size-3 mx-1.5 opacity-50 shrink-0',
-                isSelected && 'opacity-100',
-              )}
-            />
-          ) : (
-            <div
-              className={cn(
-                'size-3 bg-secondary rounded mx-1.5 shrink-0',
-                isSelected && 'opacity-10 dark:bg-white'
-              )}
-            />
-          )}
-
-          {/* Label / Inline Rename Input */}
-          {isRenaming ? (
-            <Input
-              ref={renameInputRef}
-              variant="rename-selected"
-              data-renaming
-              className="grow mr-2"
-              defaultValue={node.layer.customName || ''}
-              placeholder={getLayerDisplayLabel({ ...node.layer, customName: undefined }, {
-                component_name: appliedComponent?.name,
-                collection_name: finalCollectionName,
-                source_field_name: sourceFieldName ?? undefined,
-              }, activeBreakpoint)}
-              onClick={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
-              onPointerDown={(e) => e.stopPropagation()}
-              onBlur={(e) => {
-                if (!renameReadyRef.current) return;
-                const val = e.currentTarget.value.trim();
-                onRenameConfirm(node.id, val || null);
-              }}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === 'Enter') {
-                  const val = (e.target as HTMLInputElement).value.trim();
-                  onRenameConfirm(node.id, val || null);
-                } else if (e.key === 'Escape') {
-                  onRenameConfirm(node.id, node.layer.customName || null);
-                }
-              }}
-            />
-          ) : (
-            <span
-              className="grow text-xs font-medium overflow-hidden text-ellipsis whitespace-nowrap select-none"
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                if (node.id !== 'body') {
-                  onRenameStart(node.id);
-                }
-              }}
-            >
-              {getLayerDisplayLabel(node.layer, {
-                component_name: appliedComponent?.name,
-                collection_name: finalCollectionName,
-                source_field_name: sourceFieldName ?? undefined,
-              }, activeBreakpoint)}
-            </span>
-          )}
-
-          {/* Lock Indicator - show when layer is locked by another user */}
-          {isLockedByOther && (
-            <div className="mr-2 shrink-0">
-              <CollaboratorBadge
-                collaborator={{
-                  userId: lockOwnerUser?.user_id || '',
-                  email: lockOwnerUser?.email,
-                  color: lockOwnerUser?.color,
+              <span
+                className="flex-1 text-xs font-medium truncate select-none min-w-0"
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  if (node.id !== 'body') {
+                    onRenameStart(node.id);
+                  }
                 }}
-                size="xs"
-                tooltipPrefix="Editing by"
-              />
-            </div>
-          )}
+              >
+                {getLayerDisplayLabel(node.layer, {
+                  component_name: appliedComponent?.name,
+                  collection_name: finalCollectionName,
+                  source_field_name: sourceFieldName ?? undefined,
+                }, activeBreakpoint)}
+              </span>
+            )}
+          </div>
 
-          {/* Style Indicator - temporarily disabled */}
-          {/* {node.layer.styleId && (
-            <div className="flex items-center gap-1 mr-2 shrink-0">
-              <LayersIcon className="w-3 h-3 text-purple-400" />
-              {(() => {
-                const appliedStyle = getStyleById(node.layer.styleId);
-                return appliedStyle && hasStyleOverrides(node.layer, appliedStyle) && (
-                  <div className="w-1.5 h-1.5 rounded-full bg-orange-400" title="Style overridden" />
-                );
-              })()}
-            </div>
-          )} */}
-
-          {/* Interaction trigger indicator */}
-          {interactionTriggerLayerIds.includes(node.id) && (
-            <Icon
-              name="zap"
-              className={cn(
-                'size-3 mr-2 shrink-0',
-                activeInteractionTriggerLayerId === node.id ? 'text-white/80' : 'text-white/40'
-              )}
-            />
-          )}
-
-          {/* Interaction target indicator */}
-          {interactionTargetLayerIds.includes(node.id) && !interactionTriggerLayerIds.includes(node.id) && (
-            <Icon
-              name="zap-outline"
-              className={cn(
-                'size-3 mr-2 shrink-0',
-                activeInteractionTargetLayerIds.includes(node.id) ? 'text-white/70' : 'text-white/40'
-              )}
-            />
-          )}
-
-          {/* Visibility toggle */}
-          {node.id !== 'body' && !isRenaming && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleVisibility(node.id);
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-              className={cn(
-                'size-6 flex items-center justify-center shrink-0 mr-1 rounded cursor-pointer',
-                node.layer.settings?.hidden
-                  ? cn(
-                    'opacity-60',
-                    isSelected ? 'opacity-80 hover:opacity-100' : 'hover:opacity-100'
-                  )
-                  : cn(
-                    'opacity-0 group-hover:opacity-40',
-                    isSelected ? 'group-hover:opacity-60' : '',
-                    'hover:opacity-100!'
-                  ),
-              )}
-              aria-label={node.layer.settings?.hidden ? 'Show element' : 'Hide element'}
+          {/* Right icons overlay - sticky to right edge, starts after chevron+icon area */}
+          <div
+            className="absolute top-0 bottom-0 right-0 flex justify-end pointer-events-none"
+            style={{ left: `${node.depth * 14 + 8 + 36}px` }}
+          >
+            <div
+              className="sticky right-0 h-full flex items-center pointer-events-auto gap-0.5 px-1 rounded-r-lg bg-(--icon-bg) group-hover/row:bg-(--icon-hover-bg)"
+              style={{
+                '--icon-bg': iconBg,
+                '--icon-hover-bg': iconHoverBg,
+              } as React.CSSProperties}
             >
-              <Icon
-                name={node.layer.settings?.hidden ? 'eye-off' : 'eye'}
-                className="size-3"
-              />
-            </button>
-          )}
+              {isLockedByOther && (
+                <div className="mr-1 shrink-0">
+                  <CollaboratorBadge
+                    collaborator={{
+                      userId: lockOwnerUser?.user_id || '',
+                      email: lockOwnerUser?.email,
+                      color: lockOwnerUser?.color,
+                    }}
+                    size="xs"
+                    tooltipPrefix="Editing by"
+                  />
+                </div>
+              )}
+
+              {interactionTriggerLayerIds.includes(node.id) && (
+                <Icon
+                  name="zap"
+                  className={cn(
+                    'size-3 mr-1 shrink-0',
+                    activeInteractionTriggerLayerId === node.id ? 'text-white/80' : 'text-white/40'
+                  )}
+                />
+              )}
+
+              {interactionTargetLayerIds.includes(node.id) && !interactionTriggerLayerIds.includes(node.id) && (
+                <Icon
+                  name="zap-outline"
+                  className={cn(
+                    'size-3 mr-1 shrink-0',
+                    activeInteractionTargetLayerIds.includes(node.id) ? 'text-white/70' : 'text-white/40'
+                  )}
+                />
+              )}
+
+              {node.id !== 'body' && !isRenaming && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleVisibility(node.id);
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className={cn(
+                    'items-center justify-center shrink-0 mr-1 rounded cursor-pointer',
+                    node.layer.settings?.hidden
+                      ? cn(
+                        'size-6 flex opacity-60',
+                        isSelected ? 'opacity-80 hover:opacity-100' : 'hover:opacity-100'
+                      )
+                      : cn(
+                        'size-0 hidden group-hover:flex group-hover:size-6 group-hover:opacity-40',
+                        isSelected ? 'group-hover:opacity-60' : '',
+                        'hover:opacity-100!'
+                      ),
+                  )}
+                  aria-label={node.layer.settings?.hidden ? 'Show element' : 'Hide element'}
+                >
+                  <Icon
+                    name={node.layer.settings?.hidden ? 'eye-off' : 'eye'}
+                    className="size-3"
+                  />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
         </div>
       </div>
     </LayerContextMenu>
@@ -714,6 +914,28 @@ function collectCollapsedIds(layers: Layer[]): Set<string> {
   return collapsed;
 }
 
+/**
+ * Build a stable string key fingerprinting the explicit `open` flags in the
+ * layer tree. Used as an effect dep so we only resync local `collapsedIds`
+ * state when collapse-relevant data actually changes — not on every keystroke
+ * that creates a fresh `layers` array reference.
+ */
+function collectCollapseKey(layers: Layer[]): string {
+  const parts: string[] = [];
+  function traverse(layerList: Layer[]) {
+    for (const layer of layerList) {
+      if (layer.open === false) {
+        parts.push(layer.id);
+      }
+      if (layer.children && layer.children.length > 0) {
+        traverse(layer.children);
+      }
+    }
+  }
+  traverse(layers);
+  return parts.join('|');
+}
+
 // Helper function to update a layer's open state in the tree
 function updateLayerOpenState(layers: Layer[], layerId: string, isOpen: boolean): Layer[] {
   return layers.map(layer => {
@@ -772,30 +994,86 @@ function setLayersOpen(layers: Layer[], idsToOpen: Set<string>): Layer[] {
 // Main LayersTree Component
 export default function LayersTree({
   layers,
-  selectedLayerId,
-  selectedLayerIds: propSelectedLayerIds,
   onLayerSelect,
   onReorder,
   pageId,
   liveLayerUpdates,
   liveComponentUpdates,
+  readOnly = false,
 }: LayersTreeProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [dropPosition, setDropPosition] = useState<'above' | 'below' | 'inside' | null>(null);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => collectCollapsedIds(layers));
-  const [cursorOffsetY, setCursorOffsetY] = useState<number>(0);
+  const pointerYRef = useRef<number>(0);
+  const ghostRef = useRef<HTMLDivElement>(null);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [shouldScrollToSelected, setShouldScrollToSelected] = useState(false);
 
-  // Pull multi-select state and breakpoint from editor store
-  const { selectedLayerIds: storeSelectedLayerIds, lastSelectedLayerId, toggleSelection, selectRange, editingComponentId, activeBreakpoint, activeSublayerIndex: storeActiveSublayerIndex, activeTextStyleKey: storeActiveTextStyleKey, activeListItemIndex: storeActiveListItemIndex } = useEditorStore();
+  // Track actual cursor position via native pointer events during drag.
+  // Updates pointerYRef (for drop-position calc) and ghost element position directly via DOM.
+  useEffect(() => {
+    if (!activeId) return;
+    const handlePointerMove = (e: PointerEvent) => {
+      pointerYRef.current = e.clientY;
+      if (ghostRef.current) {
+        ghostRef.current.style.transform = `translate(${e.clientX + 12}px, ${e.clientY}px)`;
+      }
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    return () => window.removeEventListener('pointermove', handlePointerMove);
+  }, [activeId]);
 
-  // Get component by ID function for drag overlay
-  const { getComponentById } = useComponentsStore();
+  // Pull selection and breakpoint from editor store
+  const selectedLayerId = useEditorStore((s) => s.selectedLayerId);
+  const storeSelectedLayerIds = useEditorStore((s) => s.selectedLayerIds);
+  const lastSelectedLayerId = useEditorStore((s) => s.lastSelectedLayerId);
+  const toggleSelection = useEditorStore((s) => s.toggleSelection);
+  const selectRange = useEditorStore((s) => s.selectRange);
+  const editingComponentId = useEditorStore((s) => s.editingComponentId);
+  const activeBreakpoint = useEditorStore((s) => s.activeBreakpoint);
+  const storeActiveSublayerIndex = useEditorStore((s) => s.activeSublayerIndex);
+  const storeActiveTextStyleKey = useEditorStore((s) => s.activeTextStyleKey);
+  const storeActiveListItemIndex = useEditorStore((s) => s.activeListItemIndex);
+  const selectLayerWithSublayer = useEditorStore((s) => s.selectLayerWithSublayer);
+  const interactionTriggerLayerIds = useEditorStore((s) => s.interactionTriggerLayerIds);
+  const interactionTargetLayerIds = useEditorStore((s) => s.interactionTargetLayerIds);
+  const activeInteractionTriggerLayerId = useEditorStore((s) => s.activeInteractionTriggerLayerId);
+  const activeInteractionTargetLayerIds = useEditorStore((s) => s.activeInteractionTargetLayerIds);
+  const activeUIState = useEditorStore((s) => s.activeUIState);
+  const leftSidebarWidth = useEditorStore((s) => s.leftSidebarWidth);
 
-  // Get collections and fields from store
-  const { collections, fields: fieldsByCollectionId, items: collectionItems } = useCollectionsStore();
+  const isLocalizing = useLocalisationStore((state) => {
+    const id = state.selectedLocaleId;
+    if (!id) return false;
+    const locale = state.locales.find((l) => l.id === id);
+    return !!(locale && !locale.is_default);
+  });
+
+  const getComponentById = useComponentsStore((s) => s.getComponentById);
+
+  const collections = useCollectionsStore((s) => s.collections);
+  const fieldsByCollectionId = useCollectionsStore((s) => s.fields);
+  const collectionItems = useCollectionsStore((s) => s.items);
+
+  const layerTreeStoreValues = useMemo<LayerTreeStoreValues>(() => ({
+    getComponentById,
+    collections,
+    fieldsByCollectionId,
+    selectLayerWithSublayer,
+    editingComponentId,
+    interactionTriggerLayerIds,
+    interactionTargetLayerIds,
+    activeInteractionTriggerLayerId,
+    activeInteractionTargetLayerIds,
+    activeUIState,
+  }), [
+    getComponentById, collections, fieldsByCollectionId,
+    selectLayerWithSublayer, editingComponentId,
+    interactionTriggerLayerIds, interactionTargetLayerIds,
+    activeInteractionTriggerLayerId, activeInteractionTargetLayerIds,
+    activeUIState,
+  ]);
 
   // CMS data for resolving rich text sublayers from actual CMS item content
   const currentPageCollectionItemId = useEditorStore((state) => state.currentPageCollectionItemId);
@@ -810,8 +1088,7 @@ export default function LayersTree({
     return item?.values ?? null;
   }, [pageCollectionId, currentPageCollectionItemId, collectionItems]);
 
-  // Use prop or store state (prop takes precedence for compatibility)
-  const selectedLayerIds = propSelectedLayerIds ?? storeSelectedLayerIds;
+  const selectedLayerIds = storeSelectedLayerIds;
 
   // Flatten the tree for rendering (sorted by CSS order on responsive breakpoints)
   const flattenedNodes = useMemo(
@@ -948,17 +1225,17 @@ export default function LayersTree({
 
   // Calculate which depth levels should be highlighted (selected containers)
   const highlightedDepths = useMemo(() => {
-    const depths = new Set<number>();
+    const depths: number[] = [];
     const selectedIds = selectedLayerId ? [selectedLayerId, ...selectedLayerIds] : selectedLayerIds;
 
     selectedIds.forEach(id => {
       const node = flattenedNodes.find(n => n.id === id);
-      if (node && node.canHaveChildren) {
-        depths.add(node.depth);
+      if (node && node.canHaveChildren && !depths.includes(node.depth)) {
+        depths.push(node.depth);
       }
     });
 
-    return depths;
+    return `,${depths.join(',')},`;
   }, [flattenedNodes, selectedLayerId, selectedLayerIds]);
 
   // Get the currently active node being dragged
@@ -996,8 +1273,13 @@ export default function LayersTree({
     // Update layer first so the label shows the new name immediately
     if (editingComponentId) {
       const { componentDrafts } = useComponentsStore.getState();
-      const compLayers = componentDrafts[editingComponentId] || [];
-      updateComponentDraft(editingComponentId, updateLayerProps(compLayers, id, { customName: value }));
+      const variantId = useEditorStore.getState().editingComponentVariantId;
+      const variantDrafts = componentDrafts[editingComponentId];
+      const targetVariantId = (variantId && variantDrafts?.[variantId]) ? variantId : (variantDrafts ? Object.keys(variantDrafts)[0] : null);
+      if (targetVariantId && variantDrafts) {
+        const compLayers = variantDrafts[targetVariantId] || [];
+        updateComponentDraft(editingComponentId, targetVariantId, updateLayerProps(compLayers, id, { customName: value }));
+      }
     } else {
       updateLayer(pageId, id, { customName: value });
     }
@@ -1017,43 +1299,53 @@ export default function LayersTree({
 
     if (editingComponentId) {
       const { componentDrafts } = useComponentsStore.getState();
-      const compLayers = componentDrafts[editingComponentId] || [];
-      updateComponentDraft(editingComponentId, updateLayerProps(compLayers, id, updates));
+      const variantId = useEditorStore.getState().editingComponentVariantId;
+      const variantDrafts = componentDrafts[editingComponentId];
+      const targetVariantId = (variantId && variantDrafts?.[variantId]) ? variantId : (variantDrafts ? Object.keys(variantDrafts)[0] : null);
+      if (targetVariantId && variantDrafts) {
+        const compLayers = variantDrafts[targetVariantId] || [];
+        updateComponentDraft(editingComponentId, targetVariantId, updateLayerProps(compLayers, id, updates));
+      }
     } else {
       updateLayer(pageId, id, updates);
     }
   }, [editingComponentId, pageId, updateLayer, updateComponentDraft, flattenedNodes]);
 
   // Configure sensors for drag detection
-  const sensors = useSensors(
+  const defaultSensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
         distance: 8, // 8px movement required to start drag
       },
     })
   );
+  const noSensors = useSensors();
+  const sensors = readOnly ? noSensors : defaultSensors;
 
-  // Multi-select click handler
   const handleMultiSelect = useCallback((id: string, modifiers: { meta: boolean; shift: boolean }) => {
     if (id === 'body') {
-      // Body layer can't be multi-selected
       onLayerSelect(id);
       return;
     }
 
     if (modifiers.meta) {
-      // Cmd/Ctrl+Click: Toggle selection
       toggleSelection(id);
-    } else if (modifiers.shift && lastSelectedLayerId) {
-      // Shift+Click: Select range
-      selectRange(lastSelectedLayerId, id, flattenedNodes);
+    } else if (modifiers.shift) {
+      const lastId = useEditorStore.getState().lastSelectedLayerId;
+      if (lastId) selectRange(lastId, id, flattenedNodes);
     }
-  }, [toggleSelection, selectRange, lastSelectedLayerId, flattenedNodes, onLayerSelect]);
+  }, [toggleSelection, selectRange, flattenedNodes, onLayerSelect]);
 
-  // Sync collapsedIds state when layers change (from external updates)
+  // Sync collapsedIds state when collapse flags change (from external updates).
+  // Depend on a derived key instead of the `layers` reference so the tree
+  // doesn't rebuild this Set on every keystroke when only text/style changed.
+  const collapseKey = useMemo(() => collectCollapseKey(layers), [layers]);
   useEffect(() => {
     setCollapsedIds(collectCollapsedIds(layers));
-  }, [layers]);
+    // `layers` is intentionally excluded — we re-sync only when the derived
+    // collapse fingerprint changes, not on every layer-tree mutation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collapseKey]);
 
   // Listen for expand events from ElementLibrary
   useEffect(() => {
@@ -1197,26 +1489,51 @@ export default function LayersTree({
     }
   }, [shouldScrollToSelected]);
 
-  // Virtualizer: discover the nearest scroll-container ancestor
-  const scrollContainerRef = useRef<HTMLElement | null>(null);
+  // Virtualizer: discover the nearest scroll-container ancestor.
+  // Held in state (not a ref) so resolving it triggers a re-render — the
+  // virtualizer only rebinds its scroll element on render, and a ref write
+  // alone leaves it stuck with a null element (blank tree, intermittently
+  // on Safari where the rescue re-render often loses the timing race).
+  const [scrollContainer, setScrollContainer] = useState<HTMLElement | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
     let el = wrapperRef.current?.parentElement ?? null;
     while (el) {
       const style = getComputedStyle(el);
-      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
-        scrollContainerRef.current = el;
-        return;
-      }
+      if (style.overflowY === 'auto' || style.overflowY === 'scroll') break;
       el = el.parentElement;
     }
+    const scroller = el;
+    if (!scroller) return;
+
+    // Bind the virtualizer's scroll element only once it has a measurable
+    // height. The virtualizer reads the viewport height once on bind; if that
+    // read is 0 (Safari before layout settles, or while the Layers tab is
+    // hidden), it computes an empty range and renders no rows — and if the
+    // 0→height ResizeObserver tick is missed (a Safari quirk) the tree stays
+    // blank with just the selection bar. Waiting for a non-zero height makes
+    // the first viewport read reliable across browsers.
+    if (scroller.clientHeight > 0) {
+      setScrollContainer(scroller);
+      return;
+    }
+    const ro = new ResizeObserver(() => {
+      if (scroller.clientHeight > 0) {
+        setScrollContainer(scroller);
+        ro.disconnect();
+      }
+    });
+    ro.observe(scroller);
+    return () => ro.disconnect();
   }, []);
 
-  const ROW_HEIGHT = 32;
+  const treeAvailableWidth = leftSidebarWidth - 32;
+  const maxDepth = useMemo(() => flattenedNodes.reduce((max, n) => Math.max(max, n.depth), 0), [flattenedNodes]);
+
   const virtualizer = useVirtualizer({
     count: flattenedNodes.length,
-    getScrollElement: () => scrollContainerRef.current,
+    getScrollElement: () => scrollContainer,
     estimateSize: () => ROW_HEIGHT,
     overscan: 20,
   });
@@ -1228,7 +1545,7 @@ export default function LayersTree({
     const idx = flattenedNodes.findIndex(n => n.id === selectedLayerId);
     if (idx < 0) return;
 
-    const scrollEl = scrollContainerRef.current;
+    const scrollEl = scrollContainer;
     if (!scrollEl) {
       virtualizer.scrollToIndex(idx, { align: 'center', behavior: 'smooth' });
       return;
@@ -1238,6 +1555,7 @@ export default function LayersTree({
     const virtualItems = virtualizer.getVirtualItems();
     const item = virtualItems.find(v => v.index === idx);
 
+    let needsVerticalScroll = true;
     if (item) {
       const wrapperTop = wrapperRef.current?.getBoundingClientRect().top ?? 0;
       const scrollTop = scrollEl.getBoundingClientRect().top;
@@ -1246,31 +1564,71 @@ export default function LayersTree({
       const viewBottom = scrollTop + scrollEl.clientHeight - SCROLL_MARGIN;
 
       if (itemScreenTop >= viewTop && itemScreenTop + ROW_HEIGHT <= viewBottom) {
-        return;
+        needsVerticalScroll = false;
       }
     }
 
-    // Jump to item first so virtualizer renders it, then center manually
-    const isAbove = idx * ROW_HEIGHT < scrollEl.scrollTop;
-    virtualizer.scrollToIndex(idx, { align: isAbove ? 'start' : 'end' });
+    if (needsVerticalScroll) {
+      const isAbove = idx * ROW_HEIGHT < scrollEl.scrollTop;
+      virtualizer.scrollToIndex(idx, { align: isAbove ? 'start' : 'end' });
+    }
 
     const timeout = setTimeout(() => {
       const wrapperEl = wrapperRef.current;
       if (!wrapperEl || !scrollEl) return;
 
-      const wrapperRect = wrapperEl.getBoundingClientRect();
-      const scrollRect = scrollEl.getBoundingClientRect();
-      const wrapperOffset = wrapperRect.top - scrollRect.top + scrollEl.scrollTop;
-      const itemTop = wrapperOffset + idx * ROW_HEIGHT;
-      const targetScroll = itemTop - (scrollEl.clientHeight / 2) + (ROW_HEIGHT / 2);
-      scrollEl.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
+      if (needsVerticalScroll) {
+        const wrapperRect = wrapperEl.getBoundingClientRect();
+        const scrollRect = scrollEl.getBoundingClientRect();
+        const wrapperOffset = wrapperRect.top - scrollRect.top + scrollEl.scrollTop;
+        const itemTop = wrapperOffset + idx * ROW_HEIGHT;
+        const targetScroll = itemTop - (scrollEl.clientHeight / 2) + (ROW_HEIGHT / 2);
+        scrollEl.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
+      }
+
+      // Horizontal scroll: align to parent's parent layer's chevron - 2px
+      const node = flattenedNodes[idx];
+      const targetLeft = node && node.depth > 0 ? (node.depth - 2) * 14 - 2 : 0;
+      if (Math.abs(scrollEl.scrollLeft - targetLeft) > 1) {
+        scrollEl.scrollTo({ left: targetLeft, behavior: 'smooth' });
+      }
     }, 100);
 
     return () => clearTimeout(timeout);
-  }, [shouldScrollToSelected, selectedLayerId, flattenedNodes, virtualizer]);
+  }, [shouldScrollToSelected, selectedLayerId, flattenedNodes, virtualizer, scrollContainer]);
 
-  // Pull hover state management from editor store
-  const { setHoveredLayerId: setHoveredLayerIdFromStore } = useEditorStore();
+  const setHoveredLayerIdFromStore = useEditorStore((s) => s.setHoveredLayerId);
+
+  // Hover delegation via passive native listener — zero cost during mouseover
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+
+    let hoverId: string | null = null;
+
+    const onOver = (e: MouseEvent) => {
+      const row = (e.target as HTMLElement).closest<HTMLElement>('[data-layer-id]');
+      const id = row?.dataset.layerId ?? null;
+      if (id !== hoverId) {
+        hoverId = id;
+        setHoveredLayerIdFromStore(id);
+      }
+    };
+
+    const onLeave = () => {
+      if (hoverId !== null) {
+        hoverId = null;
+        setHoveredLayerIdFromStore(null);
+      }
+    };
+
+    el.addEventListener('mouseover', onOver, { passive: true });
+    el.addEventListener('mouseleave', onLeave, { passive: true });
+    return () => {
+      el.removeEventListener('mouseover', onOver);
+      el.removeEventListener('mouseleave', onLeave);
+    };
+  }, [setHoveredLayerIdFromStore]);
 
   // Handle drag start
   const handleDragStart = useCallback((event: DragStartEvent) => {
@@ -1287,20 +1645,27 @@ export default function LayersTree({
     // Clear hover state when dragging starts
     setHoveredLayerIdFromStore(null);
 
-    // Calculate where user clicked within the element
-    const activeRect = event.active.rect.current.initial;
-    if (activeRect && event.activatorEvent) {
-      const clickY = (event.activatorEvent as PointerEvent).clientY;
-      const elementTop = activeRect.top;
-      const offsetWithinElement = clickY - elementTop;
-      setCursorOffsetY(offsetWithinElement);
-    } else if (activeRect) {
-      setCursorOffsetY(activeRect.height / 2); // Fallback to middle
-    }
-
     setActiveId(draggedId);
     onLayerSelect(draggedId);
   }, [flattenedNodes, onLayerSelect, isProcessing, setHoveredLayerIdFromStore]);
+
+  // Compute drop position for a given node + pointer Y.
+  // Shared by handleDragOver (on target change) and handleDragMove (on every pointer move).
+  const computeDropPosition = useCallback((
+    overRect: { top: number; height: number },
+    overNode: FlattenedItem,
+    activeNodeLayer?: { name: string } | null,
+  ): 'above' | 'below' | 'inside' => {
+    const offsetY = pointerYRef.current - overRect.top;
+    const relativeY = Math.max(0, Math.min(1, offsetY / overRect.height));
+
+    const isDraggingSection = activeNodeLayer?.name === 'section';
+    const isOverBody = overNode.id === 'body' || overNode.layer.name === 'body';
+    const isContainerType = overNode.canHaveChildren && !(isDraggingSection && !isOverBody);
+    const hasVisibleChildren = !!(overNode.layer.children?.length) && !collapsedIds.has(overNode.id);
+
+    return calcDropPosition(relativeY, isContainerType, hasVisibleChildren);
+  }, [collapsedIds]);
 
   // Handle drag over - standard 25/50/25 drop zone detection
   const handleDragOver = useCallback((event: DragOverEvent) => {
@@ -1339,82 +1704,8 @@ export default function LayersTree({
       return;
     }
 
-    // Calculate pointer position relative to the hovered element
-    // Use the current drag event's active position for accurate detection
-    const activeRect = event.active.rect.current;
-    if (!activeRect.initial) {
-      setOverId(overId);
-      setDropPosition(null);
-      return;
-    }
-
-    const pointerY = activeRect.translated?.top ?? activeRect.initial.top;
-    const { top, height } = event.over.rect;
-
-    // Use the ACTUAL cursor offset captured on drag start
-    const actualPointerY = pointerY + cursorOffsetY;
-
-    const offsetY = actualPointerY - top;
-    const relativeY = offsetY / height;
-
-    // Use pre-calculated canHaveChildren from the node
-    const nodeCanHaveChildren = overNode.canHaveChildren;
-
-    // Special case: When dragging Section, disable "inside" drop for all containers except Body
-    // Sections can only be at Body level, never nested inside other containers
+    const position = computeDropPosition(event.over.rect, overNode, activeNode?.layer);
     const isDraggingSection = activeNode && activeNode.layer.name === 'section';
-    const isOverBody = overNode.id === 'body' || overNode.layer.name === 'body';
-    const shouldDisableInsideDrop = isDraggingSection && !isOverBody;
-
-    // Layers that can have children strongly prefer "inside" drops
-    const isContainerType = nodeCanHaveChildren && !shouldDisableInsideDrop;
-
-    // Determine drop position based on pointer position
-    let position: 'above' | 'below' | 'inside';
-
-    // Check if node has visible children
-    const hasVisibleChildren = overNode.layer.children &&
-                                overNode.layer.children.length > 0 &&
-                                !collapsedIds.has(overNode.id);
-
-    // Clearer, more predictable drop zones
-    if (nodeCanHaveChildren && !shouldDisableInsideDrop) {
-      // Elements that can have children use generous inside zone
-      if (isContainerType) {
-        // Containers (Block, Section, Container, Form)
-        if (hasVisibleChildren) {
-          // With visible children: 15% top/bottom, 70% inside
-          if (relativeY < 0.15) {
-            position = 'above';
-          } else if (relativeY > 0.85) {
-            position = 'below';
-          } else {
-            position = 'inside';
-          }
-        } else {
-          // Empty/collapsed containers: 10% top/bottom, 80% inside
-          if (relativeY < 0.10) {
-            position = 'above';
-          } else if (relativeY > 0.90) {
-            position = 'below';
-          } else {
-            position = 'inside';
-          }
-        }
-      } else {
-        // Other elements that can have children (e.g., links with nested content)
-        if (relativeY < 0.20) {
-          position = 'above';
-        } else if (relativeY > 0.80) {
-          position = 'below';
-        } else {
-          position = 'inside';
-        }
-      }
-    } else {
-      // Leaf nodes: simple 50/50 split
-      position = relativeY < 0.5 ? 'above' : 'below';
-    }
 
     // CRITICAL: When dragging a Section, prevent it from being dropped inside ANY container except Body
     // Check if the target node's parent is NOT Body (Section can only be at Body level)
@@ -1442,13 +1733,11 @@ export default function LayersTree({
       const targetParentId = overNode.parentId;
       const currentParentId = activeNode.parentId;
 
-      // Check if hovering over a container that IS the current parent
-      // This would place element outside its own container
+      // Hovering over the container that IS the current parent with above/below
+      // would escape to the grandparent level — force "inside" instead
       if (overNode.id === currentParentId && canHaveChildren(overNode.layer)) {
-        // Dragging over the container that contains the dragged element
-        // "above" or "below" would escape to the grandparent level
-        setOverId(null);
-        setDropPosition(null);
+        setOverId(overId);
+        setDropPosition('inside');
         return;
       }
 
@@ -1512,7 +1801,29 @@ export default function LayersTree({
 
     setOverId(overId);
     setDropPosition(position);
-  }, [flattenedNodes, collapsedIds, activeId, cursorOffsetY, layers]);
+  }, [flattenedNodes, activeId, layers, computeDropPosition]);
+
+  // Recalculate drop position on every pointer movement.
+  // onDragOver only fires when the target element changes, so without this
+  // the position would be locked to wherever the cursor entered the row.
+  const handleDragMove = useCallback((event: DragMoveEvent) => {
+    const currentOverId = event.over?.id as string | null;
+    if (!currentOverId || !event.over?.rect || currentOverId === 'end-drop-zone' || currentOverId === 'body') return;
+
+    const overNode = flattenedNodes.find((n) => n.id === currentOverId);
+    if (!overNode) return;
+
+    const activeNode = activeId ? flattenedNodes.find((n) => n.id === activeId) : null;
+    let position = computeDropPosition(event.over.rect, overNode, activeNode?.layer);
+
+    // When dragging over own parent, force "inside" to prevent escaping
+    if (activeNode && (position === 'above' || position === 'below') &&
+        overNode.id === activeNode.parentId && canHaveChildren(overNode.layer)) {
+      position = 'inside';
+    }
+
+    setDropPosition(position);
+  }, [flattenedNodes, activeId, computeDropPosition]);
 
   // Handle drag end - perform the actual reorder
   const handleDragEnd = useCallback(
@@ -1523,7 +1834,6 @@ export default function LayersTree({
         setActiveId(null);
         setOverId(null);
         setDropPosition(null);
-        setCursorOffsetY(0);
         return;
       }
 
@@ -1538,7 +1848,6 @@ export default function LayersTree({
           setActiveId(null);
           setOverId(null);
           setDropPosition(null);
-          setCursorOffsetY(0);
           setIsProcessing(false);
           return;
         }
@@ -1567,7 +1876,7 @@ export default function LayersTree({
         setActiveId(null);
         setOverId(null);
         setDropPosition(null);
-        setCursorOffsetY(0);
+
         setTimeout(() => setIsProcessing(false), 0);
         return;
       }
@@ -1578,7 +1887,7 @@ export default function LayersTree({
         setActiveId(null);
         setOverId(null);
         setDropPosition(null);
-        setCursorOffsetY(0);
+
         setIsProcessing(false);
         return;
       }
@@ -1588,7 +1897,7 @@ export default function LayersTree({
         setActiveId(null);
         setOverId(null);
         setDropPosition(null);
-        setCursorOffsetY(0);
+
         setIsProcessing(false);
         return;
       }
@@ -1607,7 +1916,7 @@ export default function LayersTree({
         setActiveId(null);
         setOverId(null);
         setDropPosition(null);
-        setCursorOffsetY(0);
+
         setIsProcessing(false);
         return;
       }
@@ -1627,7 +1936,7 @@ export default function LayersTree({
           setActiveId(null);
           setOverId(null);
           setDropPosition(null);
-          setCursorOffsetY(0);
+  
           setIsProcessing(false);
           return;
         }
@@ -1642,7 +1951,7 @@ export default function LayersTree({
             setActiveId(null);
             setOverId(null);
             setDropPosition(null);
-            setCursorOffsetY(0);
+    
             setIsProcessing(false);
             return;
           }
@@ -1654,7 +1963,7 @@ export default function LayersTree({
           setActiveId(null);
           setOverId(null);
           setDropPosition(null);
-          setCursorOffsetY(0);
+  
           setIsProcessing(false);
           return;
         }
@@ -1664,7 +1973,7 @@ export default function LayersTree({
           setActiveId(null);
           setOverId(null);
           setDropPosition(null);
-          setCursorOffsetY(0);
+  
           setIsProcessing(false);
           return;
         }
@@ -1674,7 +1983,7 @@ export default function LayersTree({
           setActiveId(null);
           setOverId(null);
           setDropPosition(null);
-          setCursorOffsetY(0);
+  
           setIsProcessing(false);
           return;
         }
@@ -1698,7 +2007,7 @@ export default function LayersTree({
           setActiveId(null);
           setOverId(null);
           setDropPosition(null);
-          setCursorOffsetY(0);
+  
           setIsProcessing(false);
           return;
         }
@@ -1713,7 +2022,7 @@ export default function LayersTree({
             setActiveId(null);
             setOverId(null);
             setDropPosition(null);
-            setCursorOffsetY(0);
+    
             setIsProcessing(false);
             return;
           }
@@ -1754,7 +2063,6 @@ export default function LayersTree({
       setActiveId(null);
       setOverId(null);
       setDropPosition(null);
-      setCursorOffsetY(0);
 
       // Use setTimeout to reset processing flag after state updates complete
       setTimeout(() => setIsProcessing(false), 0);
@@ -1767,7 +2075,6 @@ export default function LayersTree({
     setActiveId(null);
     setOverId(null);
     setDropPosition(null);
-    setCursorOffsetY(0);
   }, []);
 
   // Handle expand/collapse toggle
@@ -1803,7 +2110,6 @@ export default function LayersTree({
     [onLayerSelect]
   );
 
-  // Pre-compute selection-related data for all nodes (avoids expensive calculations in render loop)
   const nodeSelectionData = useMemo(() => {
     const selectedIdsSet = new Set(selectedLayerIds);
     if (selectedLayerId) selectedIdsSet.add(selectedLayerId);
@@ -1924,30 +2230,36 @@ export default function LayersTree({
   }, [flattenedNodes, selectedLayerIds, selectedLayerId, collapsedIds, storeActiveSublayerIndex, storeActiveTextStyleKey, storeActiveListItemIndex]);
 
   return (
+    <LayerTreeStoreContext.Provider value={layerTreeStoreValues}>
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={pointerFirstCollision}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
+      onDragMove={handleDragMove}
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div ref={wrapperRef} style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+      <div ref={wrapperRef} style={{ height: virtualizer.getTotalSize(), position: 'relative', minWidth: maxDepth > 0 ? `${maxDepth * 14 + 8 + treeAvailableWidth}px` : undefined }}>
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const node = flattenedNodes[virtualRow.index];
           const selectionData = nodeSelectionData.get(node.id)!;
 
+          // `highlightedDepths` is only consumed when drawing the connector
+          // lines on selected / child-of-selected rows. Other rows would
+          // otherwise re-render on every selection change just because the
+          // string flipped — pin them to the empty token so React.memo bails.
+          const rowHighlightedDepths = (selectionData.isSelected || selectionData.isChildOfSelected)
+            ? highlightedDepths
+            : ',,';
+
           return (
-            <div
+            <VirtualLayerRow
               key={node.id}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: ROW_HEIGHT,
-                transform: `translateY(${virtualRow.start}px)`,
-              }}
+              nodeId={node.id}
+              isRenaming={renamingLayerId === node.id}
+              isLocalizing={isLocalizing}
+              translateY={virtualRow.start}
             >
               <LayerRow
                 node={node}
@@ -1960,12 +2272,11 @@ export default function LayersTree({
                 isDragging={activeId === node.id}
                 isDragActive={!!activeId}
                 dropPosition={overId === node.id ? dropPosition : null}
-                highlightedDepths={highlightedDepths}
+                highlightedDepths={rowHighlightedDepths}
                 onSelect={handleSelect}
                 onMultiSelect={handleMultiSelect}
                 onToggle={handleToggle}
                 pageId={pageId}
-                selectedLayerId={selectedLayerId}
                 liveLayerUpdates={liveLayerUpdates}
                 liveComponentUpdates={liveComponentUpdates}
                 activeBreakpoint={activeBreakpoint}
@@ -1973,8 +2284,9 @@ export default function LayersTree({
                 onRenameStart={handleRenameStart}
                 onRenameConfirm={handleRenameConfirm}
                 onToggleVisibility={handleToggleVisibility}
+                readOnly={readOnly}
               />
-            </div>
+            </VirtualLayerRow>
           );
         })}
 
@@ -1988,48 +2300,51 @@ export default function LayersTree({
         </div>
       </div>
 
-      {/* Drag Overlay - custom ghost element with 40px offset */}
-      <DragOverlay dropAnimation={null}>
-        {activeNode ? (
-          <div
-            className="flex items-center text-white text-xs h-8 rounded-lg"
-            style={{ transform: 'translateX(40px)' }}
-          >
-            {(() => {
-              const draggedComponent = activeNode.layer.componentId ? getComponentById(activeNode.layer.componentId) : null;
-              const layerIcon = getLayerIcon(activeNode.layer, 'box', activeBreakpoint);
-              const isActiveNodeSelected = selectedLayerIds.includes(activeNode.id) || selectedLayerId === activeNode.id;
+      {/* Empty DragOverlay to suppress dnd-kit default ghost */}
+      <DragOverlay dropAnimation={null}>{null}</DragOverlay>
 
-              return (
-                <>
-                  {draggedComponent ? (
-                    <ComponentIcon className="w-3 h-3 shrink-0 mx-1.5 opacity-75" />
-                  ) : layerIcon ? (
-                    <Icon
-                      name={layerIcon}
-                      className={cn(
-                        'size-3 mx-1.5 opacity-50 shrink-0',
-                        isActiveNodeSelected && 'opacity-100',
-                      )}
-                    />
-                  ) : (
-                    <div className="size-3 bg-white/10 rounded mx-1.5 shrink-0" />
-                  )}
-                </>
-              );
-            })()}
-            <span className="pointer-events-none">
-              {getLayerDisplayLabel(activeNode.layer, {
-                component_name: activeNode.layer.componentId ? getComponentById(activeNode.layer.componentId)?.name : null,
-                collection_name: activeNodeCollectionContext.collection_name,
-                source_field_name: activeNodeCollectionContext.source_field_name,
-              }, activeBreakpoint)}
-            </span>
-          </div>
-        ) : null}
-      </DragOverlay>
+      {/* Custom drag ghost positioned at actual cursor via DOM ref */}
+      {activeNode && (
+        <div
+          ref={ghostRef}
+          className="fixed top-0 left-0 z-50 flex items-center text-white text-xs h-8 rounded-lg pointer-events-none"
+          style={{ transform: 'translate(-9999px, -9999px)' }}
+        >
+          {(() => {
+            const draggedComponent = activeNode.layer.componentId ? getComponentById(activeNode.layer.componentId) : null;
+            const layerIcon = getLayerIcon(activeNode.layer, 'box', activeBreakpoint);
+            const isActiveNodeSelected = selectedLayerIds.includes(activeNode.id) || selectedLayerId === activeNode.id;
+
+            return (
+              <>
+                {draggedComponent ? (
+                  <ComponentIcon className="w-3 h-3 shrink-0 mx-1.5 opacity-75" />
+                ) : layerIcon ? (
+                  <Icon
+                    name={layerIcon}
+                    className={cn(
+                      'size-3 mx-1.5 opacity-50 shrink-0',
+                      isActiveNodeSelected && 'opacity-100',
+                    )}
+                  />
+                ) : (
+                  <div className="size-3 bg-white/10 rounded mx-1.5 shrink-0" />
+                )}
+              </>
+            );
+          })()}
+          <span>
+            {getLayerDisplayLabel(activeNode.layer, {
+              component_name: activeNode.layer.componentId ? getComponentById(activeNode.layer.componentId)?.name : null,
+              collection_name: activeNodeCollectionContext.collection_name,
+              source_field_name: activeNodeCollectionContext.source_field_name,
+            }, activeBreakpoint)}
+          </span>
+        </div>
+      )}
       <div className="min-h-10" />
     </DndContext>
+    </LayerTreeStoreContext.Provider>
   );
 }
 

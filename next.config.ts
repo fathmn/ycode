@@ -4,18 +4,41 @@ import { fileURLToPath } from 'node:url';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
+const imageRemotePatterns: NonNullable<NonNullable<NextConfig['images']>['remotePatterns']> = [
+  {
+    protocol: 'https',
+    hostname: '**.supabase.co',
+    pathname: '/storage/v1/object/public/**',
+  },
+];
+
+// Self-hosted Supabase: allow the custom domain for storage image optimization.
+// Supports both "https://supabase.example.com" and bare "supabase.example.com".
+if (process.env.SUPABASE_URL) {
+  try {
+    const parsed = new URL(
+      process.env.SUPABASE_URL.startsWith('http')
+        ? process.env.SUPABASE_URL
+        : `https://${process.env.SUPABASE_URL}`,
+    );
+    imageRemotePatterns.push({
+      protocol: (parsed.protocol.replace(':', '') as 'http' | 'https') || 'https',
+      hostname: parsed.hostname,
+      pathname: '/storage/v1/object/public/**',
+    });
+  } catch {
+    // Invalid SUPABASE_URL — skip adding remote pattern
+  }
+}
+
 const nextConfig: NextConfig = {
+  trailingSlash: false,
+  staticPageGenerationTimeout: 120,
   experimental: {
     proxyClientMaxBodySize: '500mb',
   },
   images: {
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: '**.supabase.co',
-        pathname: '/storage/v1/object/public/**',
-      },
-    ],
+    remotePatterns: imageRemotePatterns,
   },
 
   // Ensure sharp works properly in serverless environments (Vercel)
@@ -88,13 +111,20 @@ const nextConfig: NextConfig = {
       },
       {
         // Apply to public pages ONLY (exclude /ycode/*, /_next/*, /a/*)
+        // NOTE: Do NOT set Cache-Control here. Vercel recommends letting
+        // ISR manage cache headers automatically so per-URL cache-tag
+        // tracking works for selective revalidateTag invalidations.
+        // Manual s-maxage breaks per-URL purging on catch-all routes.
         source: '/:path((?!ycode|_next|a/).*)*',
         headers: [
           {
-            key: 'Cache-Control',
-            // Cache until re-published: CDN caches for up to 1 year
-            // On publish, revalidatePath purges CDN; revalidateTag purges data cache
-            value: 'public, s-maxage=31536000, stale-while-revalidate=31536000',
+            // Open the TLS connection to fonts.gstatic.com while the document
+            // is still streaming so woff2 binaries can be fetched the moment
+            // the inlined @font-face rules are parsed. Sending this as a
+            // response header (vs. <link rel=preconnect> in <head>) lets the
+            // browser act on it before parsing the document.
+            key: 'Link',
+            value: '<https://fonts.gstatic.com>; rel=preconnect; crossorigin',
           },
         ],
       },

@@ -10,8 +10,9 @@
 
 import type { AssetVariable, FieldVariable, DynamicTextVariable, DynamicRichTextVariable, StaticTextVariable, ComponentVariableValue, Layer } from '@/types';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
-import { resolveFieldFromSources } from '@/lib/cms-variables-utils';
+import { buildFieldVariablePath, resolveFieldFromSources } from '@/lib/cms-variables-utils';
 import { DEFAULT_ASSETS } from '@/lib/asset-constants';
+import { buildSvgDataUrl } from '@/lib/asset-utils';
 import { stringToTiptapContent } from '@/lib/text-format-utils';
 
 /** Canonical empty componentOverrides structure — use when setting/resetting overrides */
@@ -23,6 +24,7 @@ export const EMPTY_OVERRIDES: NonNullable<Layer['componentOverrides']> = {
   audio: {},
   video: {},
   icon: {},
+  variant: {},
   variableLinks: {},
 };
 
@@ -62,6 +64,22 @@ export function createDynamicRichTextVariable(content: string): DynamicRichTextV
       },
     };
   }
+}
+
+/**
+ * Create a DynamicRichTextVariable directly from plain text, without attempting
+ * JSON parsing. Use this when the source value is known to be plain text
+ * (e.g. a translation whose stored content_type is `text` even though the
+ * target variable is `dynamic_rich_text`), to avoid the noisy JSON.parse
+ * fallback in `createDynamicRichTextVariable`.
+ */
+export function createDynamicRichTextVariableFromPlainText(content: string): DynamicRichTextVariable {
+  return {
+    type: 'dynamic_rich_text',
+    data: {
+      content: stringToTiptapContent(content),
+    },
+  };
 }
 
 /**
@@ -266,7 +284,7 @@ export function getVariableStringValue(
  */
 export function getImageUrlFromVariable(
   src: AssetVariable | FieldVariable | DynamicTextVariable | undefined | null,
-  getAsset?: (id: string) => { public_url: string | null; content?: string | null } | null,
+  getAsset?: (id: string) => { public_url: string | null; content?: string | null; width?: number | null; height?: number | null } | null,
   collectionItemData?: Record<string, string>,
   pageCollectionItemData?: Record<string, string> | null,
   useDefault: boolean = true
@@ -288,8 +306,7 @@ export function getImageUrlFromVariable(
       return asset.public_url;
     }
     if (asset?.content) {
-      // Convert inline SVG content to data URL
-      return `data:image/svg+xml,${encodeURIComponent(asset.content)}`;
+      return buildSvgDataUrl(asset.content, asset.width, asset.height);
     }
     return undefined;
   }
@@ -298,9 +315,13 @@ export function getImageUrlFromVariable(
     const fieldId = src.data.field_id;
     if (!fieldId) return undefined;
 
+    // Build path with relationships so nested-reference image fields resolve
+    // (e.g. Author reference -> Photo image field).
+    const fieldPath = buildFieldVariablePath(fieldId, src.data.relationships);
+
     // Use source-aware resolution (respects source: 'page' | 'collection')
     const resolvedValue = resolveFieldFromSources(
-      fieldId,
+      fieldPath,
       src.data.source,
       collectionItemData,
       pageCollectionItemData
@@ -314,7 +335,7 @@ export function getImageUrlFromVariable(
         return asset.public_url;
       }
       if (asset?.content) {
-        return `data:image/svg+xml,${encodeURIComponent(asset.content)}`;
+        return buildSvgDataUrl(asset.content, asset.width, asset.height);
       }
     }
 
@@ -378,9 +399,12 @@ export function getVideoUrlFromVariable(
     const fieldId = src.data.field_id;
     if (!fieldId) return undefined;
 
+    // Build path with relationships so nested-reference fields resolve
+    const fieldPath = buildFieldVariablePath(fieldId, src.data.relationships);
+
     // Use source-aware resolution (respects source: 'page' | 'collection')
     const resolvedValue = resolveFieldFromSources(
-      fieldId,
+      fieldPath,
       src.data.source,
       collectionItemData,
       pageCollectionItemData

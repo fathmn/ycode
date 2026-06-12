@@ -8,14 +8,22 @@ import 'server-only';
 
 import { cache } from 'react';
 import type { Metadata } from 'next';
-import type { Page } from '@/types';
+import type { Asset, Locale, Page, PageFolder, Translation } from '@/types';
 import type { CollectionItemWithValues } from '@/types';
 import { resolveInlineVariables, resolveImageUrl } from '@/lib/resolve-cms-variables';
 import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 import { getAssetById } from '@/lib/repositories/assetRepository';
-import { getAssetProxyUrl } from '@/lib/asset-utils';
+import { getAllLocales } from '@/lib/repositories/localeRepository';
+import { getAllPublishedPageFolders } from '@/lib/repositories/pageFolderRepository';
+import { getTranslationsByLocale } from '@/lib/repositories/translationRepository';
+import { buildSvgDataUrl, getAssetProxyUrl } from '@/lib/asset-utils';
 import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
+import { buildPageHreflangAlternates } from '@/lib/hreflang-utils';
+import { getTranslatableKey } from '@/lib/locale-runtime';
 import { getSiteBaseUrl } from '@/lib/url-utils';
+
+/** Languages map shape Next.js expects under `metadata.alternates.languages`. */
+type MetadataLanguages = NonNullable<NonNullable<Metadata['alternates']>['languages']>;
 
 /**
  * Global page render settings fetched once per page render
@@ -30,7 +38,9 @@ export interface GlobalPageSettings {
   globalCustomCodeBody?: string | null;
   ycodeBadge?: boolean;
   faviconUrl?: string | null;
+  faviconMimeType?: string | null;
   webClipUrl?: string | null;
+  webClipMimeType?: string | null;
 }
 
 /** @deprecated Use GlobalPageSettings instead */
@@ -59,11 +69,21 @@ export interface GenerateMetadataOptions {
 }
 
 /**
- * Fetch all global page settings in a single database query
- * Includes SEO settings, published CSS, and global custom code
- * Wrapped with React cache to deduplicate within the same request
+ * Resolve a usable URL for favicon/web-clip assets, falling back to an
+ * inline data URL for SVGs stored without a public_url/storage_path.
  */
-export const fetchGlobalPageSettings = cache(async (projectId?: string | null): Promise<GlobalPageSettings> => {
+function resolveIconAssetUrl(asset: Asset): string | null {
+  const proxyOrPublic = getAssetProxyUrl(asset) || asset.public_url || null;
+  if (proxyOrPublic) return proxyOrPublic;
+
+  if (asset.mime_type === 'image/svg+xml' && asset.content) {
+    return buildSvgDataUrl(asset.content, asset.width, asset.height);
+  }
+
+  return null;
+}
+
+async function fetchGlobalPageSettingsImpl(isPreview = false, projectId?: string | null): Promise<GlobalPageSettings> {
   const settings = await getSettingsByKeys([
     'google_site_verification',
     'global_canonical_url',
@@ -77,14 +97,19 @@ export const fetchGlobalPageSettings = cache(async (projectId?: string | null): 
   ], projectId);
 
   // Fetch favicon and web clip asset URLs if IDs are set
+  // In preview mode, read draft assets so the favicon shows before publishing.
   let faviconUrl: string | null = null;
+  let faviconMimeType: string | null = null;
   let webClipUrl: string | null = null;
+  let webClipMimeType: string | null = null;
+  const isAssetPublished = !isPreview;
 
   if (settings.favicon_asset_id) {
     try {
-      const asset = await getAssetById(settings.favicon_asset_id, true, projectId);
+      const asset = await getAssetById(settings.favicon_asset_id, isAssetPublished, projectId);
       if (asset) {
-        faviconUrl = getAssetProxyUrl(asset) || asset.public_url || null;
+        faviconUrl = resolveIconAssetUrl(asset);
+        faviconMimeType = asset.mime_type || null;
       }
     } catch {
       // Ignore errors fetching favicon
@@ -93,9 +118,10 @@ export const fetchGlobalPageSettings = cache(async (projectId?: string | null): 
 
   if (settings.web_clip_asset_id) {
     try {
-      const asset = await getAssetById(settings.web_clip_asset_id, true, projectId);
+      const asset = await getAssetById(settings.web_clip_asset_id, isAssetPublished, projectId);
       if (asset) {
-        webClipUrl = getAssetProxyUrl(asset) || asset.public_url || null;
+        webClipUrl = resolveIconAssetUrl(asset);
+        webClipMimeType = asset.mime_type || null;
       }
     } catch {
       // Ignore errors fetching web clip
@@ -114,12 +140,116 @@ export const fetchGlobalPageSettings = cache(async (projectId?: string | null): 
     globalCustomCodeBody: settings.custom_code_body || null,
     ycodeBadge: settings.ycode_badge ?? false,
     faviconUrl,
+    faviconMimeType,
     webClipUrl,
+    webClipMimeType,
   };
+}
+
+/**
+ * Fetch all global page settings in a single database query
+ * Includes SEO settings, published CSS, and global custom code
+ * Wrapped with React cache to deduplicate within the same request (non-preview only)
+ */
+const fetchGlobalPageSettingsCached = cache(async (projectId?: string | null): Promise<GlobalPageSettings> => {
+  return fetchGlobalPageSettingsImpl(false, projectId);
 });
 
+export async function fetchGlobalPageSettings(isPreview = false, projectId?: string | null): Promise<GlobalPageSettings> {
+  if (isPreview) {
+    // Preview mode: bypass cache and read draft assets
+    return fetchGlobalPageSettingsImpl(true, projectId);
+  }
+  return fetchGlobalPageSettingsCached(projectId);
+}
+
 /** @deprecated Use fetchGlobalPageSettings instead */
-export const fetchGlobalSeoSettings = fetchGlobalPageSettings;
+export const fetchGlobalSeoSettings = fetchGlobalPageSettingsCached;
+
+/**
+ * Localization data needed to build per-page hreflang alternates.
+ * Translations are keyed by locale ID, then by translatable key.
+ */
+interface HreflangDataset {
+  locales: Locale[];
+  folders: PageFolder[];
+  translationsByLocale: Map<string, Record<string, Translation>>;
+}
+
+/**
+ * Load published locales, folders and per-locale translations needed to build
+ * hreflang alternates. Wrapped in React cache so it runs once per request even
+ * when multiple metadata helpers ask for it. Returns a single locale only when
+ * the site isn't multilingual, in which case callers skip hreflang.
+ */
+const fetchHreflangDataset = cache(async (): Promise<HreflangDataset> => {
+  const [locales, folders] = await Promise.all([
+    getAllLocales(true),
+    getAllPublishedPageFolders(),
+  ]);
+
+  const translationsByLocale = new Map<string, Record<string, Translation>>();
+
+  if (locales.length > 1) {
+    for (const locale of locales) {
+      if (locale.is_default) continue;
+      const translations = await getTranslationsByLocale(locale.id, true);
+      const map: Record<string, Translation> = {};
+      for (const t of translations) {
+        map[getTranslatableKey(t)] = t;
+      }
+      translationsByLocale.set(locale.id, map);
+    }
+  }
+
+  return { locales, folders, translationsByLocale };
+});
+
+/**
+ * Build the `metadata.alternates.languages` map for a page on a multilingual
+ * site. Returns null when hreflang shouldn't be emitted (single locale, no
+ * absolute base URL, or no resolvable alternates).
+ */
+async function buildHreflangLanguages(
+  page: Page,
+  baseUrl: string,
+  collectionItem?: CollectionItemWithValues
+): Promise<MetadataLanguages | null> {
+  const { locales, folders, translationsByLocale } = await fetchHreflangDataset();
+
+  if (locales.length <= 1) {
+    return null;
+  }
+
+  // Dynamic pages need the collection item's slug to resolve per-locale URLs.
+  const slugFieldId = page.settings?.cms?.slug_field_id;
+  const dynamicSlug = page.is_dynamic && collectionItem && slugFieldId
+    ? {
+      itemId: collectionItem.id,
+      fieldId: slugFieldId,
+      defaultValue: collectionItem.values?.[slugFieldId] || '',
+    }
+    : null;
+
+  const alternates = buildPageHreflangAlternates({
+    page,
+    folders,
+    baseUrl,
+    locales,
+    translationsByLocale,
+    dynamicSlug,
+  });
+
+  if (alternates.length === 0) {
+    return null;
+  }
+
+  const languages: MetadataLanguages = {};
+  for (const alt of alternates) {
+    languages[alt.hreflang as keyof MetadataLanguages] = alt.href;
+  }
+  return languages;
+}
 
 /**
  * Generate Next.js metadata from a page object
@@ -165,10 +295,11 @@ export async function generatePageMetadata(
   // absolute URLs as strings here instead of relying on metadataBase.
   let siteBaseUrl: string | null = null;
 
-  // Use pre-fetched global SEO settings or fetch if not provided (skip for preview mode)
-  if (!isPreview) {
-    const seoSettings = options.globalSeoSettings || await fetchGlobalSeoSettings();
+  // Always fetch global settings — preview mode reads draft assets so the
+  // favicon and web clip render before the user publishes.
+  const seoSettings = options.globalSeoSettings || await fetchGlobalPageSettings(isPreview);
 
+  if (!isPreview) {
     siteBaseUrl = getSiteBaseUrl({
       globalCanonicalUrl: seoSettings.globalCanonicalUrl,
       primaryDomainUrl,
@@ -189,20 +320,43 @@ export async function generatePageMetadata(
         : `${canonicalBase}${pagePath.startsWith('/') ? pagePath : '/' + pagePath}`;
 
       metadata.alternates = {
+        ...metadata.alternates,
         canonical: canonicalUrl,
       };
     }
 
-    // Add custom favicon and web clip (apple-touch-icon) from settings
-    // Default favicon is handled by app/icon.svg
-    if (seoSettings.faviconUrl || seoSettings.webClipUrl) {
-      metadata.icons = {};
-      if (seoSettings.faviconUrl) {
-        metadata.icons.icon = seoSettings.faviconUrl;
+    // Add hreflang alternates for multilingual sites. Skipped for error pages
+    // and noindex pages (excluded from the language cluster, mirroring the
+    // sitemap), and requires an absolute base URL to emit valid links.
+    if (siteBaseUrl && !isErrorPage && !seo?.noindex) {
+      try {
+        const languages = await buildHreflangLanguages(page, siteBaseUrl, collectionItem);
+        if (languages) {
+          metadata.alternates = {
+            ...metadata.alternates,
+            languages,
+          };
+        }
+      } catch (error) {
+        // Non-fatal: a page should still render without hreflang links.
+        console.error('Failed to generate hreflang alternates:', error);
       }
-      if (seoSettings.webClipUrl) {
-        metadata.icons.apple = seoSettings.webClipUrl;
-      }
+    }
+  }
+
+  // Add custom favicon and web clip (apple-touch-icon) — applies to preview too.
+  // Default favicon is handled by app/icon.svg
+  if (seoSettings.faviconUrl || seoSettings.webClipUrl) {
+    metadata.icons = {};
+    if (seoSettings.faviconUrl) {
+      metadata.icons.icon = seoSettings.faviconMimeType
+        ? { url: seoSettings.faviconUrl, type: seoSettings.faviconMimeType }
+        : seoSettings.faviconUrl;
+    }
+    if (seoSettings.webClipUrl) {
+      metadata.icons.apple = seoSettings.webClipMimeType
+        ? { url: seoSettings.webClipUrl, type: seoSettings.webClipMimeType }
+        : seoSettings.webClipUrl;
     }
   }
 

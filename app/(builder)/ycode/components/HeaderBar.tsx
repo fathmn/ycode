@@ -1,12 +1,13 @@
 'use client';
 
+import { useCallback, useRef, useEffect, useState, useMemo } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
 import {
   STUDIO_PROJECT_SELECTION_EVENT,
   getSelectedStudioProjectSlug,
+  studioFetch,
   studioProjectsApi,
 } from '@/lib/api';
-import { useRef, useEffect, useState, useMemo, useCallback } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
 import { useEditorUrl } from '@/hooks/use-editor-url';
 import { findHomepage } from '@/lib/page-utils';
 import { getTranslationValue } from '@/lib/localisation-utils';
@@ -29,13 +30,8 @@ import { useEditorStore } from '@/stores/useEditorStore';
 import { usePagesStore } from '@/stores/usePagesStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useLocalisationStore } from '@/stores/useLocalisationStore';
+
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page-utils';
-import { canManageStudioIntegrations, isStudioOperatorRole } from '@/lib/studio-roles';
-import {
-  studioProjectPathSlugFromPathname,
-  studioProjectRoutePathFromSlug,
-  ycodePathnameFromStudioProjectPath,
-} from '@/lib/studio-project-path';
 
 // 5. Types
 import type { Page } from '@/types';
@@ -49,6 +45,13 @@ import Icon from '@/components/ui/icon';
 import { Separator } from '@/components/ui/separator';
 import { BackupRestoreDialog } from '@/components/project/BackupRestoreDialog';
 import { isCloudVersion } from '@/lib/utils';
+import { useRole } from '@/hooks/use-role';
+import { canManageStudioIntegrations, isStudioOperatorRole } from '@/lib/studio-roles';
+import {
+  studioProjectPathSlugFromPathname,
+  studioProjectRoutePathFromSlug,
+  ycodePathnameFromStudioProjectPath,
+} from '@/lib/studio-project-path';
 import { toast } from 'sonner';
 
 type StudioProject = {
@@ -114,10 +117,35 @@ export default function HeaderBar({
     projectRootIsYcode: true,
   });
   const pageDropdownRef = useRef<HTMLDivElement>(null);
-  const { currentPageCollectionItemId, currentPageId: storeCurrentPageId, isPreviewMode, setPreviewMode, openFileManager, setKeyboardShortcutsOpen, setActiveSidebarTab, lastDesignUrl, setLastDesignUrl, previewReturnUrl, previewReturnTab, setPreviewReturn } = useEditorStore();
-  const { folders, pages: storePages } = usePagesStore();
-  const { items, fields, collections, selectedCollectionId: storeSelectedCollectionId, setSelectedCollectionId } = useCollectionsStore();
-  const { locales, selectedLocaleId, setSelectedLocaleId, translations } = useLocalisationStore();
+  const { isEditor, canManageSettings, canManageMembers } = useRole();
+  const editorSidebarTab = useEditorStore((s) => s.activeSidebarTab);
+  const currentPageCollectionItemId = useEditorStore((s) => s.currentPageCollectionItemId);
+  const storeCurrentPageId = useEditorStore((s) => s.currentPageId);
+  const isPreviewMode = useEditorStore((s) => s.isPreviewMode);
+  const setPreviewMode = useEditorStore((s) => s.setPreviewMode);
+  const openFileManager = useEditorStore((s) => s.openFileManager);
+  const setKeyboardShortcutsOpen = useEditorStore((s) => s.setKeyboardShortcutsOpen);
+  const setActiveSidebarTab = useEditorStore((s) => s.setActiveSidebarTab);
+  const lastDesignUrl = useEditorStore((s) => s.lastDesignUrl);
+  const setLastDesignUrl = useEditorStore((s) => s.setLastDesignUrl);
+  const previewReturnUrl = useEditorStore((s) => s.previewReturnUrl);
+  const previewReturnTab = useEditorStore((s) => s.previewReturnTab);
+  const setPreviewReturn = useEditorStore((s) => s.setPreviewReturn);
+
+  const folders = usePagesStore((s) => s.folders);
+  const storePages = usePagesStore((s) => s.pages);
+
+  const items = useCollectionsStore((s) => s.items);
+  const fields = useCollectionsStore((s) => s.fields);
+  const collections = useCollectionsStore((s) => s.collections);
+  const storeSelectedCollectionId = useCollectionsStore((s) => s.selectedCollectionId);
+  const setSelectedCollectionId = useCollectionsStore((s) => s.setSelectedCollectionId);
+
+  const locales = useLocalisationStore((s) => s.locales);
+  const selectedLocaleId = useLocalisationStore((s) => s.selectedLocaleId);
+  const setSelectedLocaleId = useLocalisationStore((s) => s.setSelectedLocaleId);
+  const translations = useLocalisationStore((s) => s.translations);
+  const loadTranslations = useLocalisationStore((s) => s.loadTranslations);
   const { navigateToLayers, navigateToCollection, navigateToCollections, updateQueryParams, routeType } = useEditorUrl();
 
   // Optimistic nav button state - set immediately on click, cleared when URL catches up
@@ -175,6 +203,7 @@ export default function HeaderBar({
   const [selectedProjectPrimaryDomain, setSelectedProjectPrimaryDomain] = useState<string | null>(null);
   const [selectedProjectPathSlug, setSelectedProjectPathSlug] = useState<string | null>(null);
   const [selectedProjectRole, setSelectedProjectRole] = useState<string | null>(null);
+  const [hasUpdate, setHasUpdate] = useState(false);
   const [showTransferDialog, setShowTransferDialog] = useState(false);
   const isStudioOperator = isStudioOperatorRole(selectedProjectRole);
   const canManageIntegrations = canManageStudioIntegrations(selectedProjectRole);
@@ -236,6 +265,22 @@ export default function HeaderBar({
       window.removeEventListener(STUDIO_PROJECT_SELECTION_EVENT, resolveProjectBaseUrl);
       window.removeEventListener('storage', handleStorage);
     };
+  }, []);
+
+  // Check for updates on mount
+  useEffect(() => {
+    const checkForUpdates = async () => {
+      try {
+        const response = await studioFetch('/ycode/api/updates/check');
+        if (response.ok) {
+          const data = await response.json();
+          setHasUpdate(data.available === true);
+        }
+      } catch (error) {
+        console.error('Failed to check for updates:', error);
+      }
+    };
+    checkForUpdates();
   }, []);
 
   // Get selected locale (computed from subscribed store values)
@@ -349,6 +394,82 @@ export default function HeaderBar({
     return path === '/' ? '' : path;
   }, [currentPage, isSettingsRoute, storePages, folders, localizedPagePath, collectionItemSlug, selectedLocale, localeTranslations]);
 
+  // Toggle preview mode (shared by the header button and the ⌘P shortcut)
+  const handleTogglePreview = useCallback(async () => {
+    if (!currentPage || isSaving) return;
+
+    if (isPreviewMode) {
+      if (previewReturnUrl) {
+        // Navigate back while keeping preview visible — the useEffect
+        // above will turn off preview once the route change completes
+        if (previewReturnTab) {
+          setActiveSidebarTab(previewReturnTab);
+        }
+        router.push(previewReturnUrl);
+        setPreviewReturn(null);
+        return;
+      }
+
+      setPreviewMode(false);
+      updateQueryParams({ preview: undefined });
+      return;
+    }
+
+    if (currentPageId) {
+      setIsEnteringPreview(true);
+      try {
+        await saveImmediately(currentPageId);
+      } catch (error) {
+        console.error('Failed to save before preview:', error);
+        toast.error('Vorschau konnte nicht geöffnet werden', {
+          description: 'Der aktuelle Entwurf konnte nicht gespeichert werden.',
+        });
+        return;
+      } finally {
+        setIsEnteringPreview(false);
+      }
+    }
+
+    setPreviewMode(true);
+
+    // Preview renders the current page, so when invoked from a non-design
+    // route (CMS, forms, etc.) we need to jump to the layers view first
+    const isDesignRoute = routeType === 'layers' || routeType === 'page' || routeType === 'component' || routeType === null;
+    if (!isDesignRoute && currentPageId) {
+      setPreviewReturn(window.location.pathname + window.location.search, activeTab);
+      setActiveSidebarTab('layers');
+      const params = new URLSearchParams(window.location.search);
+      params.set('preview', 'true');
+      router.push(`${studioRoute(`/layers/${currentPageId}`)}?${params.toString()}`);
+      return;
+    }
+
+    updateQueryParams({ preview: 'true' });
+  }, [
+    currentPage,
+    currentPageId,
+    isSaving,
+    isPreviewMode,
+    previewReturnUrl,
+    previewReturnTab,
+    routeType,
+    saveImmediately,
+    activeTab,
+    router,
+    setActiveSidebarTab,
+    setPreviewMode,
+    setPreviewReturn,
+    studioRoute,
+    updateQueryParams,
+  ]);
+
+  // Listen for the ⌘P shortcut dispatched from the global keyboard handler
+  useEffect(() => {
+    const handleTogglePreviewEvent = () => handleTogglePreview();
+    window.addEventListener('togglePreview', handleTogglePreviewEvent);
+    return () => window.removeEventListener('togglePreview', handleTogglePreviewEvent);
+  }, [handleTogglePreview]);
+
   // Apply theme to HTML element
   useEffect(() => {
     const root = document.documentElement;
@@ -404,19 +525,21 @@ export default function HeaderBar({
           <DropdownMenuContent align="start">
             {isCloudVersion() && (
               <>
-                <DropdownMenuItem asChild>
-                  <a href="/ycode">
-                    Dashboard
-                  </a>
+                <DropdownMenuItem
+                  onClick={() => router.push(studioRoute('/'))}
+                >
+                  Dashboard
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
               </>
             )}
-            <DropdownMenuItem
-              onClick={() => router.push(studioRoute('/settings/general'))}
-            >
-              Einstellungen
-            </DropdownMenuItem>
+            {canManageSettings && (
+              <DropdownMenuItem
+                onClick={() => router.push(studioRoute('/settings/general'))}
+              >
+                Einstellungen
+              </DropdownMenuItem>
+            )}
 
             <DropdownMenuItem
               onClick={() => openFileManager()}
@@ -488,38 +611,73 @@ export default function HeaderBar({
         </DropdownMenu>
 
         <div className="flex gap-1">
-          <Button
-            variant={activeNavButton === 'design' ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={() => {
-              setOptimisticNav('design');
-              setActiveSidebarTab('layers');
-              // Restore last design URL if available
-              if (lastDesignUrl) {
-                router.push(lastDesignUrl);
-              } else {
-                const targetPageId = storeCurrentPageId || findHomepage(storePages)?.id || storePages[0]?.id;
-                if (targetPageId) {
-                  navigateToLayers(targetPageId);
+          {isEditor ? (
+            <>
+              <Button
+                variant={(activeNavButton === 'design' && editorSidebarTab !== 'pages') ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => {
+                  setOptimisticNav('design');
+                  setActiveSidebarTab('layers');
+                  if (lastDesignUrl) {
+                    router.push(lastDesignUrl);
+                  } else {
+                    const targetPageId = storeCurrentPageId || findHomepage(storePages)?.id || storePages[0]?.id;
+                    if (targetPageId) {
+                      navigateToLayers(targetPageId);
+                    }
+                  }
+                }}
+              >
+                <Icon name="pencil" />
+                Inhalte
+              </Button>
+              <Button
+                variant={editorSidebarTab === 'pages' ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => {
+                  setActiveSidebarTab('pages');
+                  const targetPageId = storeCurrentPageId || findHomepage(storePages)?.id || storePages[0]?.id;
+                  if (targetPageId) {
+                    navigateToLayers(targetPageId);
+                  }
+                }}
+              >
+                <Icon name="page" />
+                Seiten
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant={activeNavButton === 'design' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => {
+                setOptimisticNav('design');
+                setActiveSidebarTab('layers');
+                if (lastDesignUrl) {
+                  router.push(lastDesignUrl);
+                } else {
+                  const targetPageId = storeCurrentPageId || findHomepage(storePages)?.id || storePages[0]?.id;
+                  if (targetPageId) {
+                    navigateToLayers(targetPageId);
+                  }
                 }
-              }
-            }}
-          >
-            <Icon name="cursor-default" />
-            Design
-          </Button>
+              }}
+            >
+              <Icon name="cursor-default" />
+              Design
+            </Button>
+          )}
           <Button
             variant={activeNavButton === 'cms' ? 'secondary' : 'ghost'}
             size="sm"
             onClick={() => {
-              // Save current design URL before navigating away
               const isDesignRoute = routeType === 'layers' || routeType === 'page' || routeType === 'component';
               if (isDesignRoute) {
                 setLastDesignUrl(window.location.pathname + window.location.search);
               }
               setOptimisticNav('cms');
               setActiveSidebarTab('cms');
-              // Navigate to last selected or first available collection
               const targetCollectionId = storeSelectedCollectionId || collections[0]?.id;
               if (targetCollectionId) {
                 setSelectedCollectionId(targetCollectionId);
@@ -532,22 +690,23 @@ export default function HeaderBar({
             <Icon name="database" />
             CMS
           </Button>
-          <Button
-            variant={activeNavButton === 'forms' ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={() => {
-              // Save current design URL before navigating away
-              const isDesignRoute = routeType === 'layers' || routeType === 'page' || routeType === 'component';
-              if (isDesignRoute) {
-                setLastDesignUrl(window.location.pathname + window.location.search);
-              }
-              setOptimisticNav('forms');
-              router.push(studioRoute('/forms'));
-            }}
-          >
-            <Icon name="form" />
-            Formulare
-          </Button>
+          {!isEditor && (
+            <Button
+              variant={activeNavButton === 'forms' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => {
+                const isDesignRoute = routeType === 'layers' || routeType === 'page' || routeType === 'component';
+                if (isDesignRoute) {
+                  setLastDesignUrl(window.location.pathname + window.location.search);
+                }
+                setOptimisticNav('forms');
+                router.push(studioRoute('/forms'));
+              }}
+            >
+              <Icon name="form" />
+              Formulare
+            </Button>
+          )}
           {canManageIntegrations && (
             <Button
               variant={activeNavButton === 'integrations' ? 'secondary' : 'ghost'}
@@ -577,9 +736,25 @@ export default function HeaderBar({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {canManageSettings && !editorPathname.startsWith('/ycode/localization') && (
+              <>
+                <DropdownMenuItem
+                  onClick={() => router.push(studioRoute('/localization'))}
+                >
+                  Sprachen verwalten
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
             <DropdownMenuRadioGroup
               value={selectedLocaleId || ''}
-              onValueChange={(value) => setSelectedLocaleId(value)}
+              onValueChange={(value) => {
+                setSelectedLocaleId(value);
+                // Eager-load translations so the canvas reflects the new locale
+                // without waiting for component-level effects to run. The store
+                // short-circuits for the default locale and for cached locales.
+                loadTranslations(value);
+              }}
             >
               {locales.map((locale) => (
                 <DropdownMenuRadioItem key={locale.id} value={locale.id}>
@@ -587,23 +762,13 @@ export default function HeaderBar({
                     {locale.label}
                     {locale.is_default && (
                       <Badge variant="secondary" className="text-[10px] mr-5">
-                        Default
+                        Standard
                       </Badge>
                     )}
                   </span>
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
-            {!editorPathname.startsWith('/ycode/localization') && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => router.push(studioRoute('/localization'))}
-                >
-                  Sprachen verwalten
-                </DropdownMenuItem>
-              </>
-            )}
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -624,6 +789,22 @@ export default function HeaderBar({
           </a>
         </Button>
 
+        {hasUpdate && canManageSettings && (
+          <>
+            <div className="h-5">
+              <Separator orientation="vertical" />
+            </div>
+
+            <Button
+              size="xs"
+              variant="default"
+              className="bg-primary/20 hover:bg-primary/30 text-blue-400 hover:text-blue-300"
+              onClick={() => router.push(studioRoute('/settings/updates'))}
+            >
+              Update verfügbar
+            </Button>
+          </>
+        )}
       </div>
 
       {/* Right: User & Actions */}
@@ -634,7 +815,7 @@ export default function HeaderBar({
         <ActiveUsersInHeader />
 
         {/* Invite User */}
-        <InviteUserButton />
+        {canManageMembers && <InviteUserButton />}
 
         {/* Save Status Indicator */}
         <div className="flex items-center justify-end w-16 text-xs text-zinc-500 dark:text-white/50">
@@ -661,55 +842,7 @@ export default function HeaderBar({
         <Button
           size="sm"
           variant="secondary"
-          onClick={async () => {
-            if (isPreviewMode) {
-              if (previewReturnUrl) {
-                // Navigate back while keeping preview visible — the useEffect
-                // above will turn off preview once the route change completes
-                if (previewReturnTab) {
-                  setActiveSidebarTab(previewReturnTab);
-                }
-                router.push(previewReturnUrl);
-                setPreviewReturn(null);
-                return;
-              }
-
-              setPreviewMode(false);
-              updateQueryParams({ preview: undefined });
-              return;
-            }
-
-            if (currentPageId) {
-              setIsEnteringPreview(true);
-              try {
-                await saveImmediately(currentPageId);
-              } catch (error) {
-                console.error('Failed to save before preview:', error);
-                toast.error('Vorschau konnte nicht geöffnet werden', {
-                  description: 'Der aktuelle Entwurf konnte nicht gespeichert werden.',
-                });
-                return;
-              } finally {
-                setIsEnteringPreview(false);
-              }
-            }
-
-            setPreviewMode(true);
-
-            // Preview renders the current page, so when invoked from a non-design
-            // route (CMS, forms, etc.) we need to jump to the layers view first
-            const isDesignRoute = routeType === 'layers' || routeType === 'page' || routeType === 'component' || routeType === null;
-            if (!isDesignRoute && currentPageId) {
-              setPreviewReturn(window.location.pathname + window.location.search, activeTab);
-              setActiveSidebarTab('layers');
-              const params = new URLSearchParams(window.location.search);
-              params.set('preview', 'true');
-              router.push(`${studioRoute(`/layers/${currentPageId}`)}?${params.toString()}`);
-              return;
-            }
-
-            updateQueryParams({ preview: 'true' });
-          }}
+          onClick={handleTogglePreview}
           disabled={!currentPage || isSaving || isEnteringPreview}
           className={isPreviewMode ? 'bg-black text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90' : ''}
         >

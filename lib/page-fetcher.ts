@@ -1,12 +1,15 @@
 import { escapeHtml } from '@/lib/escape-html';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { getKnexClient } from '@/lib/knex-client';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl, detectLocaleFromPath, matchPageWithTranslatedSlugs, matchDynamicPageWithTranslatedSlugs } from '@/lib/page-utils';
-import { getItemWithValues, getItemsWithValues, getItemIdsByFieldValue } from '@/lib/repositories/collectionItemRepository';
+import { getItemWithValues, getItemsWithValues, getItemsWithValuesByIds, getItemIdsByFieldValue, getItemsByCollectionId, getSlugsByItemIds } from '@/lib/repositories/collectionItemRepository';
+import { getValuesByItemIds } from '@/lib/repositories/collectionItemValueRepository';
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
+import { enrichItemsWithCountValues } from '@/lib/repositories/collectionCountRepository';
 import type { Page, PageFolder, PageLayers, Component, ComponentVariable, CollectionItemWithValues, CollectionField, Layer, CollectionPaginationMeta, Translation, Locale, Asset } from '@/types';
-import { getCollectionVariable, resolveFieldValue, evaluateVisibility, getLayerHtmlTag, filterDisabledSliderLayers } from '@/lib/layer-utils';
+import { getCollectionVariable, resolveFieldValue, evaluateVisibility, evaluateCondition, getLayerHtmlTag, filterDisabledSliderLayers } from '@/lib/layer-utils';
 import { isFieldVariable, isAssetVariable, createDynamicTextVariable, createDynamicRichTextVariable, createAssetVariable, getDynamicTextContent, getVariableStringValue, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
-import { generateImageSrcset, getOptimizedImageUrl, getAssetProxyUrl, DEFAULT_ASSETS, collectLayerAssetIds } from '@/lib/asset-utils';
+import { buildImageSizes, generateImageSrcset, getOptimizedImageUrl, getAssetProxyUrl, DEFAULT_ASSETS, collectLayerAssetIds, buildSvgDataUrl, parseImageDimension, getSvgAspectRatioStyle } from '@/lib/asset-utils';
 import {
   getFallbackImageWidthForLayer,
   getImageFetchPriority,
@@ -16,8 +19,9 @@ import {
   getImageTransformQualityForLayer,
 } from '@/lib/image-rendering';
 import { resolveComponents, applyComponentOverrides } from '@/lib/resolve-components';
+import { getComponentVariantLayers } from '@/lib/component-variant-utils';
 import { isTiptapDoc, hasBlockElementsWithResolver } from '@/lib/tiptap-utils';
-import { castValue } from '@/lib/collection-utils';
+import { castValue, parseMultiReferenceValue, remapLayerIdsForCollectionItem } from '@/lib/collection-utils';
 import { DEFAULT_TEXT_STYLES } from '@/lib/text-format-utils';
 
 // Pagination context passed through to resolveCollectionLayers
@@ -28,26 +32,25 @@ export interface PaginationContext {
   defaultPage?: number;
 }
 
-import { resolveFieldLinkValue, resolveRefCollectionItemId, generateLinkHref, isLinkAtCollectionBoundary } from '@/lib/link-utils';
+import { resolveFieldLinkValue, resolveRefCollectionItemId, generateLinkHref, isLinkAtCollectionBoundary, isLinkToCurrentPage, parseCollectionLinkValue, extractCrossCollectionItemIds } from '@/lib/link-utils';
 import type { LinkResolutionContext } from '@/lib/link-utils';
 import { getLinkSettingsFromMark } from '@/lib/tiptap-extensions/rich-text-link';
-import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/templates/utilities';
+import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
 import { resolveInlineVariables, resolveInlineVariablesFromData } from '@/lib/inline-variables';
-import { formatFieldValue } from '@/lib/cms-variables-utils';
-import { buildLayerTranslationKey, getTranslationByKey, hasValidTranslationValue, getTranslationValue } from '@/lib/localisation-utils';
+import { formatFieldValue, resolveFieldFromSources } from '@/lib/cms-variables-utils';
+import { buildLayerTranslationKey, getTranslationByKey, hasValidTranslationValue, getTranslationValue, injectTranslatedText, applyCmsTranslations, translateComponentOverrides } from '@/lib/localisation-utils';
 import { formatDateFieldsInItemValues } from '@/lib/date-format-utils';
 import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired } from '@/lib/project-scope';
 import { parseMultiAssetFieldValue, buildAssetVirtualValues } from '@/lib/multi-asset-utils';
-import { parseMultiReferenceValue } from '@/lib/collection-utils';
 import { combineBgValues, mergeStaticBgVars } from '@/lib/tailwind-class-mapper';
 import { generateInitialAnimationCSS } from '@/lib/animation-utils';
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS } from '@/lib/map-utils';
 import { getMapboxAccessToken, getGoogleMapsEmbedApiKey } from '@/lib/map-server';
 import { getAssetsByIds } from '@/lib/repositories/assetRepository';
-import { isVirtualAssetField, findDisplayField } from '@/lib/collection-field-utils';
+import { isVirtualAssetField, findDisplayField, hasDynamicDateRule, isDynamicDateCondition } from '@/lib/collection-field-utils';
 import { resolveFormLayerId } from '@/lib/form-layer';
-import type { FieldVariable, AssetVariable, DynamicTextVariable, LinkSettings } from '@/types';
+import type { DynamicVisibilityCondition, FieldVariable, AssetVariable, DynamicTextVariable, LinkSettings } from '@/types';
 import type { DesignColorVariable } from '@/types';
 
 // Cached map provider tokens for synchronous use inside layerToHtml.
@@ -118,6 +121,36 @@ export interface PageData {
   locale?: Locale | null; // Current locale (if detected from URL)
   availableLocales?: Locale[]; // All active locales for locale switcher
   translations?: Record<string, Translation>; // Translations for locale-aware URL generation
+  /** Per-page CSS generated from this page's layers + resolved components. */
+  generatedCss?: string | null;
+}
+
+/**
+ * Strip heavy data from PageData to reduce serialized size for caching.
+ * After the server-side resolution pipeline (resolveComponents → resolveCollectionLayers
+ * → resolveRichTextCollections → resolveAllAssets), component layers are fully expanded
+ * in the layer tree and rich-text embedded components have pre-resolved _resolvedLayers.
+ * This strips component layers and pageLayers metadata that aren't needed downstream.
+ */
+export function slimPageData(data: PageData): PageData {
+  return {
+    ...data,
+    pageLayers: { layers: data.pageLayers.layers || [] } as PageLayers,
+    components: data.components.map(({ layers, ...rest }) => ({ ...rest, layers: [] }) as Component),
+    generatedCss: data.generatedCss,
+  };
+}
+
+export type PageDataCore = Omit<PageData, 'pageLayers'>;
+
+export function splitPageData(data: PageData): { core: PageDataCore; layers: Layer[] } {
+  const slimmed = slimPageData(data);
+  const { pageLayers, ...core } = slimmed;
+  return { core, layers: pageLayers.layers || [] };
+}
+
+export function reassemblePageData(core: PageDataCore, layers: Layer[]): PageData {
+  return { ...core, pageLayers: { layers } as PageLayers };
 }
 
 /**
@@ -209,18 +242,32 @@ export async function loadTranslationsForLocale(
       return { locale: null, translations: {} };
     }
 
-    // Fetch all translations for this locale
-    let translationsQuery = supabase
-      .from('translations')
-      .select('*')
-      .eq('locale_id', locale.id)
-      .eq('is_published', isPublished)
-      .is('deleted_at', null);
-    translationsQuery = (await applyProjectScopeToQuery(translationsQuery, supabase, 'translations', projectId)).query;
-    const { data: translations } = await translationsQuery;
+    // Fetch all translations for this locale. Supabase caps PostgREST
+    // responses at 1000 rows by default — projects with more translations
+    // were silently truncated, causing entire layers to render in the
+    // source language on SSR while the editor (which fetches via its own
+    // paginated API) showed them correctly. Page through explicit ranges.
+    const PAGE_SIZE = 1000;
+    const translations: Translation[] = [];
+    for (let from = 0; ; from += PAGE_SIZE) {
+      let translationsPageQuery = supabase
+        .from('translations')
+        .select('*')
+        .eq('locale_id', locale.id)
+        .eq('is_published', isPublished)
+        .is('deleted_at', null);
+      translationsPageQuery = (await applyProjectScopeToQuery(translationsPageQuery, supabase, 'translations', projectId)).query;
+      const { data: page, error } = await translationsPageQuery
+        .range(from, from + PAGE_SIZE - 1);
 
-    if (!translations) {
-      return { locale, translations: {} };
+      if (error) {
+        console.error('Failed to fetch translations page:', error);
+        break;
+      }
+
+      if (!page || page.length === 0) break;
+      translations.push(...(page as Translation[]));
+      if (page.length < PAGE_SIZE) break;
     }
 
     // Build translations map keyed by translatable key
@@ -350,14 +397,16 @@ async function getCollectionItemBySlug(
  * @param isPublished - Whether to fetch published or draft version
  * @param paginationContext - Optional pagination context with page numbers from URL
  */
-export async function fetchPageByPath(
+async function fetchPageByPathInternal(
   slugPath: string,
   isPublished: boolean,
   paginationContext?: PaginationContext,
   tenantId?: string,
-  projectId?: string | null
+  projectId?: string | null,
+  options?: { resolveLayers?: boolean }
 ): Promise<PageData | null> {
   try {
+    const resolveLayers = options?.resolveLayers !== false;
     const supabase = await getSupabaseAdmin(tenantId);
 
     if (!supabase) {
@@ -365,22 +414,26 @@ export async function fetchPageByPath(
       return null;
     }
 
-    // Get all active locales from the database
-    let localesQuery = supabase
-      .from('locales')
-      .select('*')
-      .eq('is_published', isPublished)
-      .is('deleted_at', null);
+    // Fetch shared page lookup data in parallel.
+    // Components/timezone are only needed when resolving layers.
+    let localesQuery = supabase.from('locales').select('*').eq('is_published', isPublished).is('deleted_at', null);
     localesQuery = (await applyProjectScopeToQuery(localesQuery, supabase, 'locales', projectId)).query;
-    const { data: availableLocales } = await localesQuery;
+    let pagesQuery = supabase.from('pages').select('*').eq('is_published', isPublished).is('deleted_at', null);
+    pagesQuery = (await applyProjectScopeToQuery(pagesQuery, supabase, 'pages', projectId)).query;
+    let foldersQuery = supabase.from('page_folders').select('*').eq('is_published', isPublished).is('deleted_at', null);
+    foldersQuery = (await applyProjectScopeToQuery(foldersQuery, supabase, 'page_folders', projectId)).query;
+    const [{ data: availableLocales }, { data: pages }, { data: folders }, components, timezone] = await Promise.all([
+      localesQuery,
+      pagesQuery,
+      foldersQuery,
+      resolveLayers ? fetchComponents(supabase, isPublished, projectId) : Promise.resolve([] as Component[]),
+      resolveLayers ? getTimezoneSetting(projectId) : Promise.resolve('UTC'),
+    ]);
 
     const validLocaleCodes = availableLocales?.map(l => l.code) || [];
-
-    // Detect locale from URL path using database locale codes
     const localeDetection = detectLocaleFromPath(slugPath, validLocaleCodes);
     const pathWithoutLocale = localeDetection?.remainingPath ?? slugPath;
 
-    // Load translations if locale detected
     let translations: Record<string, Translation> | undefined;
     let detectedLocale: Locale | null = null;
 
@@ -394,17 +447,6 @@ export async function fetchPageByPath(
       detectedLocale = locale;
       translations = trans;
     }
-
-    // Fetch pages, folders, and components in parallel
-    let pagesQuery = supabase.from('pages').select('*').eq('is_published', isPublished).is('deleted_at', null);
-    pagesQuery = (await applyProjectScopeToQuery(pagesQuery, supabase, 'pages', projectId)).query;
-    let foldersQuery = supabase.from('page_folders').select('*').eq('is_published', isPublished).is('deleted_at', null);
-    foldersQuery = (await applyProjectScopeToQuery(foldersQuery, supabase, 'page_folders', projectId)).query;
-    const [{ data: pages }, { data: folders }, components] = await Promise.all([
-      pagesQuery,
-      foldersQuery,
-      fetchComponents(supabase, isPublished, projectId),
-    ]);
 
     if (!pages || !folders) {
       return null;
@@ -422,7 +464,7 @@ export async function fetchPageByPath(
         // Apply translations for the detected locale
         let processedLayers = homepageData.pageLayers.layers || [];
         if (translations && Object.keys(translations).length > 0) {
-          processedLayers = injectTranslatedText(processedLayers, homepageData.page.id, translations);
+          processedLayers = injectTranslatedText(processedLayers, homepageData.page.id, translations, { includeIncomplete: !isPublished });
         }
 
         // Resolve all AssetVariables to URLs server-side (prevents client-side API calls)
@@ -435,7 +477,7 @@ export async function fetchPageByPath(
             ...homepageData.pageLayers,
             layers: processedLayers,
           },
-          components: homepageData.components, // Layers are pre-resolved; components passed for rich-text embedded rendering
+          components: homepageData.components,
           locale: detectedLocale,
           availableLocales: availableLocales as Locale[] || [],
           translations,
@@ -513,6 +555,37 @@ export async function fetchPageByPath(
             // Found the matching dynamic page
             matchingPage = dynamicPage;
 
+            // Metadata-only mode: skip heavy layer/component resolution
+            if (!resolveLayers) {
+              let enhancedItemValues = await resolveReferenceFields(
+                collectionItem.values,
+                collectionFields,
+                isPublished,
+                '',
+                new Set(),
+                translations,
+                projectId
+              );
+              enhancedItemValues = applyCmsTranslations(collectionItem.id, enhancedItemValues, collectionFields, translations, { includeIncomplete: !isPublished });
+              enhancedItemValues = formatDateFieldsInItemValues(enhancedItemValues, collectionFields, timezone);
+
+              const enhancedCollectionItem = {
+                ...collectionItem,
+                values: enhancedItemValues,
+              };
+
+              return {
+                page: matchingPage,
+                pageLayers: { layers: [] } as any,
+                components: [],
+                collectionItem: enhancedCollectionItem,
+                collectionFields,
+                locale: detectedLocale,
+                availableLocales: availableLocales as Locale[] || [],
+                translations,
+              };
+            }
+
             // Get layers for the dynamic page
             let pageLayersQuery = supabase
               .from('page_layers')
@@ -539,14 +612,13 @@ export async function fetchPageByPath(
               isPublished,
               '',
               new Set(),
+              translations,
               projectId
             );
 
             // Apply CMS translations to the item values
-            enhancedItemValues = applyCmsTranslations(collectionItem.id, enhancedItemValues, collectionFields, translations);
+            enhancedItemValues = applyCmsTranslations(collectionItem.id, enhancedItemValues, collectionFields, translations, { includeIncomplete: !isPublished });
 
-            // Format date fields in user's timezone
-            const timezone = await getTimezoneSetting(projectId);
             const rawItemValues = { ...enhancedItemValues };
             enhancedItemValues = formatDateFieldsInItemValues(enhancedItemValues, collectionFields, timezone);
 
@@ -556,8 +628,13 @@ export async function fetchPageByPath(
               values: enhancedItemValues,
             };
 
-            // First, resolve components so collection layers inside components are available
-            const layersWithComponents = resolveComponents(pageLayers?.layers || [], components);
+            // Translate component-instance override values first, so the translated
+            // values are what `resolveComponents` propagates into the rendered tree.
+            const localizedRawLayers = detectedLocale && translations && Object.keys(translations).length > 0
+              ? translateComponentOverrides(pageLayers?.layers || [], matchingPage.id, translations, { includeIncomplete: !isPublished })
+              : pageLayers?.layers || [];
+
+            const layersWithComponents = resolveComponents(localizedRawLayers, components);
 
             // Inject dynamic page collection data into layers (including expanded component layers)
             // This resolves inline variables like "Name → Location" on the page
@@ -572,7 +649,7 @@ export async function fetchPageByPath(
             // Pass enhanced values so nested collections can filter based on dynamic page data
             // Pass collectionItem.id so inverse reference layers can query by parent item
             let resolvedLayers = layersWithInjectedData.length > 0
-              ? await resolveCollectionLayers(layersWithInjectedData, isPublished, enhancedItemValues, paginationContext, translations, collectionItem.id, projectId)
+              ? await resolveCollectionLayers(layersWithInjectedData, isPublished, enhancedItemValues, paginationContext, translations, collectionItem.id, timezone, collectionItem.id, projectId)
               : [];
 
             // Resolve collections inside rich text embedded components
@@ -580,7 +657,7 @@ export async function fetchPageByPath(
 
             // Apply translations (components already resolved above)
             if (detectedLocale && translations && Object.keys(translations).length > 0) {
-              resolvedLayers = injectTranslatedText(resolvedLayers, matchingPage.id, translations);
+              resolvedLayers = injectTranslatedText(resolvedLayers, matchingPage.id, translations, { includeIncomplete: !isPublished });
             }
 
             // Resolve all AssetVariables to URLs server-side (prevents client-side API calls)
@@ -602,6 +679,7 @@ export async function fetchPageByPath(
               const { items: fetchedItems } = await getItemsWithValues(
                 cmsSettings.collection_id,
                 isPublished,
+                undefined,
                 undefined,
                 projectId
               );
@@ -629,14 +707,15 @@ export async function fetchPageByPath(
                 ...pageLayers,
                 layers: resolvedLayers,
               },
-              components, // Layers are pre-resolved; components passed for rich-text embedded rendering
-              collectionItem: enhancedCollectionItem, // Include enhanced collection item for dynamic pages
-              collectionFields, // Include collection fields for resolving placeholders
+              components,
+              collectionItem: enhancedCollectionItem,
+              collectionFields,
               pageCollectionSortedItemIds,
               pageCollectionSortedItemSlugs,
               locale: detectedLocale,
               availableLocales: availableLocales as Locale[] || [],
               translations,
+              generatedCss: pageLayers?.generated_css || null,
             };
           }
         }
@@ -647,6 +726,17 @@ export async function fetchPageByPath(
     }
 
     // Handle non-dynamic page (exact match)
+    if (!resolveLayers) {
+      return {
+        page: matchingPage,
+        pageLayers: { layers: [] } as any,
+        components: [],
+        locale: detectedLocale,
+        availableLocales: availableLocales as Locale[] || [],
+        translations,
+      };
+    }
+
     // Get layers for the matched page
     let pageLayersQuery = supabase
       .from('page_layers')
@@ -665,13 +755,16 @@ export async function fetchPageByPath(
       return null;
     }
 
-    // First, resolve components so collection layers inside components are available
-    const layersWithComponents = resolveComponents(pageLayers?.layers || [], components);
+    // Translate component-instance override values before resolving components,
+    // so per-instance translations propagate correctly through the override pipeline.
+    const localizedRawLayers = detectedLocale && translations && Object.keys(translations).length > 0
+      ? translateComponentOverrides(pageLayers?.layers || [], matchingPage.id, translations, { includeIncomplete: !isPublished })
+      : pageLayers?.layers || [];
 
-    // Resolve collection layers server-side (for both draft and published)
-    // The isPublished parameter controls which collection items to fetch
+    const layersWithComponents = resolveComponents(localizedRawLayers, components);
+
     let resolvedLayers = layersWithComponents.length > 0
-      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, paginationContext, translations, undefined, projectId)
+      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, paginationContext, translations, undefined, timezone, undefined, projectId)
       : [];
 
     // Resolve collections inside rich text embedded components
@@ -679,7 +772,7 @@ export async function fetchPageByPath(
 
     // Apply translations (components already resolved above)
     if (detectedLocale && translations && Object.keys(translations).length > 0) {
-      resolvedLayers = injectTranslatedText(resolvedLayers, matchingPage.id, translations);
+      resolvedLayers = injectTranslatedText(resolvedLayers, matchingPage.id, translations, { includeIncomplete: !isPublished });
     }
 
     // Resolve all AssetVariables to URLs server-side (prevents client-side API calls)
@@ -692,15 +785,36 @@ export async function fetchPageByPath(
         ...pageLayers,
         layers: resolvedLayers,
       },
-      components, // Layers are pre-resolved; components passed for rich-text embedded rendering
+      components,
       locale: detectedLocale,
       availableLocales: availableLocales as Locale[] || [],
       translations,
+      generatedCss: pageLayers?.generated_css || null,
     };
   } catch (error) {
     console.error('Failed to fetch page:', error);
     return null;
   }
+}
+
+export async function fetchPageByPath(
+  slugPath: string,
+  isPublished: boolean,
+  paginationContext?: PaginationContext,
+  tenantId?: string,
+  projectId?: string | null,
+): Promise<PageData | null> {
+  return fetchPageByPathInternal(slugPath, isPublished, paginationContext, tenantId, projectId, { resolveLayers: true });
+}
+
+export async function fetchPageByPathForMetadata(
+  slugPath: string,
+  isPublished: boolean,
+  paginationContext?: PaginationContext,
+  tenantId?: string,
+  projectId?: string | null,
+): Promise<PageData | null> {
+  return fetchPageByPathInternal(slugPath, isPublished, paginationContext, tenantId, projectId, { resolveLayers: false });
 }
 
 /**
@@ -771,7 +885,7 @@ export async function fetchErrorPage(
     // Resolve collection layers server-side (for both draft and published)
     // The isPublished parameter controls which collection items to fetch
     let resolvedLayers = layersWithComponents.length > 0
-      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, undefined, undefined, undefined, projectId)
+      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, undefined, undefined, undefined, undefined, undefined, projectId)
       : [];
 
     // Resolve collections inside rich text embedded components
@@ -812,7 +926,7 @@ export async function fetchHomepage(
   tenantId?: string,
   translations?: Record<string, Translation>,
   projectId?: string | null
-): Promise<Pick<PageData, 'page' | 'pageLayers' | 'components' | 'locale' | 'availableLocales' | 'translations'> | null> {
+): Promise<Pick<PageData, 'page' | 'pageLayers' | 'components' | 'locale' | 'availableLocales' | 'translations' | 'generatedCss'> | null> {
   try {
     const supabase = await getSupabaseAdmin(tenantId);
 
@@ -867,12 +981,17 @@ export async function fetchHomepage(
       return null;
     }
 
-    // First, resolve components so collection layers inside components are available
-    const layersWithComponents = resolveComponents(pageLayers?.layers || [], components);
+    // Translate component-instance override values before resolving components
+    // so per-instance translations are applied through the override pipeline.
+    const localizedRawLayers = translations && Object.keys(translations).length > 0
+      ? translateComponentOverrides(pageLayers?.layers || [], homepage.id, translations, { includeIncomplete: !isPublished })
+      : pageLayers?.layers || [];
+
+    const layersWithComponents = resolveComponents(localizedRawLayers, components);
 
     // Resolve collection layers server-side (for both draft and published)
     let resolvedLayers = layersWithComponents.length > 0
-      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, paginationContext, translations, undefined, projectId)
+      ? await resolveCollectionLayers(layersWithComponents, isPublished, undefined, paginationContext, translations, undefined, undefined, undefined, projectId)
       : [];
 
     // Resolve collections inside rich text embedded components
@@ -888,10 +1007,11 @@ export async function fetchHomepage(
         ...pageLayers,
         layers: resolvedLayers,
       },
-      components, // Layers are pre-resolved; components passed for rich-text embedded rendering
+      components,
       locale: null,
       availableLocales: availableLocales as Locale[] || [],
       translations: translations || {},
+      generatedCss: pageLayers?.generated_css || null,
     };
   } catch (error) {
     if (isSharedDbProjectScopeRequired()) {
@@ -899,136 +1019,6 @@ export async function fetchHomepage(
     }
     return null;
   }
-}
-
-/**
- * Inject translated text and assets into layers recursively
- * Replaces layer text content and asset sources with translations when available
- * Handles both page-level and component-level translations
- * @param layers - Layer tree to translate
- * @param pageId - Page ID for building translation keys
- * @param translations - Translations map
- * @returns Layers with translated text and assets
- */
-function injectTranslatedText(
-  layers: Layer[],
-  pageId: string,
-  translations: Record<string, Translation>
-): Layer[] {
-  return layers.map(layer => {
-    const updates: Partial<Layer> = {};
-    const variableUpdates: Partial<Layer['variables']> = {};
-
-    // Use original layer ID for translation lookups — after resolveComponents,
-    // child layer IDs are transformed to instance-specific IDs (e.g., "instanceId-childId")
-    // but translations are stored with the original component layer IDs
-    const translationLayerId = layer._originalLayerId || layer.id;
-
-    // 1. Inject text translation
-    const textTranslationKey = buildLayerTranslationKey(pageId, `layer:${translationLayerId}:text`, layer._masterComponentId);
-    const textTranslation = getTranslationByKey(translations, textTranslationKey);
-
-    const textValue = getTranslationValue(textTranslation);
-    if (textValue) {
-      // Preserve the original variable type (dynamic_text or dynamic_rich_text)
-      if (layer.variables?.text?.type === 'dynamic_rich_text') {
-        variableUpdates.text = createDynamicRichTextVariable(textValue);
-      } else {
-        variableUpdates.text = createDynamicTextVariable(textValue);
-      }
-    }
-
-    // 2. Inject asset translations for media layers
-    // Image layer - translate src and alt text
-    if (layer.name === 'image') {
-      const imageSrcKey = buildLayerTranslationKey(pageId, `layer:${translationLayerId}:image_src`, layer._masterComponentId);
-      const imageSrcTranslation = getTranslationByKey(translations, imageSrcKey);
-      const imageAltKey = buildLayerTranslationKey(pageId, `layer:${translationLayerId}:image_alt`, layer._masterComponentId);
-      const imageAltTranslation = getTranslationByKey(translations, imageAltKey);
-
-      if (imageSrcTranslation || imageAltTranslation) {
-        const imageUpdates: any = { ...layer.variables?.image };
-
-        if (imageSrcTranslation && imageSrcTranslation.content_value) {
-          imageUpdates.src = createAssetVariable(imageSrcTranslation.content_value);
-        }
-
-        const imageAltValue = getTranslationValue(imageAltTranslation);
-        if (imageAltValue) {
-          imageUpdates.alt = createDynamicTextVariable(imageAltValue);
-        } else {
-          // Preserve original alt if no translation
-          imageUpdates.alt = layer.variables?.image?.alt || createDynamicTextVariable('');
-        }
-
-        variableUpdates.image = imageUpdates;
-      }
-    }
-
-    // Video layer - translate src and poster
-    if (layer.name === 'video') {
-      const videoSrcKey = buildLayerTranslationKey(pageId, `layer:${translationLayerId}:video_src`, layer._masterComponentId);
-      const videoSrcTranslation = getTranslationByKey(translations, videoSrcKey);
-      const videoPosterKey = buildLayerTranslationKey(pageId, `layer:${translationLayerId}:video_poster`, layer._masterComponentId);
-      const videoPosterTranslation = getTranslationByKey(translations, videoPosterKey);
-
-      if (videoSrcTranslation || videoPosterTranslation) {
-        const videoUpdates: any = { ...layer.variables?.video };
-
-        if (videoSrcTranslation && videoSrcTranslation.content_value) {
-          videoUpdates.src = createAssetVariable(videoSrcTranslation.content_value);
-        }
-
-        if (videoPosterTranslation && videoPosterTranslation.content_value) {
-          videoUpdates.poster = createAssetVariable(videoPosterTranslation.content_value);
-        }
-
-        variableUpdates.video = videoUpdates;
-      }
-    }
-
-    // Audio layer - translate src
-    if (layer.name === 'audio') {
-      const audioSrcKey = buildLayerTranslationKey(pageId, `layer:${translationLayerId}:audio_src`, layer._masterComponentId);
-      const audioSrcTranslation = getTranslationByKey(translations, audioSrcKey);
-
-      if (audioSrcTranslation && audioSrcTranslation.content_value) {
-        variableUpdates.audio = {
-          src: createAssetVariable(audioSrcTranslation.content_value),
-        };
-      }
-    }
-
-    // Icon layer - translate src
-    if (layer.name === 'icon') {
-      const iconSrcKey = buildLayerTranslationKey(pageId, `layer:${translationLayerId}:icon_src`, layer._masterComponentId);
-      const iconSrcTranslation = getTranslationByKey(translations, iconSrcKey);
-
-      if (iconSrcTranslation && iconSrcTranslation.content_value) {
-        variableUpdates.icon = {
-          src: createAssetVariable(iconSrcTranslation.content_value),
-        };
-      }
-    }
-
-    // Apply variable updates if any
-    if (Object.keys(variableUpdates).length > 0) {
-      updates.variables = {
-        ...layer.variables,
-        ...variableUpdates,
-      };
-    }
-
-    // Recursively process children
-    if (layer.children && layer.children.length > 0) {
-      updates.children = injectTranslatedText(layer.children, pageId, translations);
-    }
-
-    return {
-      ...layer,
-      ...updates,
-    };
-  });
 }
 
 /**
@@ -1049,62 +1039,12 @@ async function fetchComponents(supabase: any, isPublished: boolean = false, proj
 }
 
 /**
- * Apply CMS translations to collection item values
- * @param itemId - Collection item ID
- * @param itemValues - Original item values (field_id -> value)
- * @param collectionFields - Collection fields to determine field keys
- * @param translations - Translations map
- * @returns Item values with translations applied
- */
-function applyCmsTranslations(
-  itemId: string,
-  itemValues: Record<string, string>,
-  collectionFields: CollectionField[],
-  translations?: Record<string, Translation>
-): Record<string, string> {
-  if (!translations || Object.keys(translations).length === 0) {
-    return itemValues;
-  }
-
-  const translatedValues = { ...itemValues };
-
-  // Create maps for field key and field type lookup
-  const fieldIdToKey = new Map<string, string | null>();
-  const fieldIdToType = new Map<string, string>();
-  for (const field of collectionFields) {
-    fieldIdToKey.set(field.id, field.key);
-    fieldIdToType.set(field.id, field.type);
-  }
-
-  // Apply translations for each field
-  for (const fieldId of Object.keys(itemValues)) {
-    const fieldKey = fieldIdToKey.get(fieldId);
-
-    // Build translation key: field:key:{key} or field:id:{id} when key is null
-    const contentKey = fieldKey ? `field:key:${fieldKey}` : `field:id:${fieldId}`;
-    const translationKey = `cms:${itemId}:${contentKey}`;
-    const translation = translations[translationKey];
-
-    const translatedValue = getTranslationValue(translation);
-    if (translatedValue) {
-      // Cast the translated string using the field type so rich_text values
-      // are parsed back into Tiptap document objects (matching castValue behavior)
-      const fieldType = fieldIdToType.get(fieldId);
-      translatedValues[fieldId] = fieldType
-        ? castValue(translatedValue, fieldType as any)
-        : translatedValue;
-    }
-  }
-
-  return translatedValues;
-}
-
-/**
  * Resolve reference field values by fetching referenced item data
  * Adds referenced item's fields with a prefix based on the field path
  * @param itemValues - Current item values (field_id -> value)
  * @param fields - Collection fields to check for references
  * @param isPublished - Whether to fetch published data
+ * @param translations - CMS translations applied to resolved referenced values
  * @returns Enhanced item values with resolved reference data
  */
 async function resolveReferenceFields(
@@ -1113,6 +1053,7 @@ async function resolveReferenceFields(
   isPublished: boolean,
   pathPrefix: string = '',
   visited: Set<string> = new Set(),
+  translations?: Record<string, Translation> | null,
   projectId?: string | null
 ): Promise<Record<string, string>> {
   const enhancedValues = { ...itemValues };
@@ -1139,6 +1080,10 @@ async function resolveReferenceFields(
       // Get fields for the referenced collection
       const refFields = await getFieldsByCollectionId(field.reference_collection_id, isPublished, { excludeComputed: true }, projectId);
 
+      // Translate the referenced item's values so localized pages render
+      // referenced CMS content in the active locale (not the source language)
+      const refValues = applyCmsTranslations(refItem.id, refItem.values, refFields, translations, { includeIncomplete: !isPublished });
+
       // Build the path prefix for this level
       const currentPath = pathPrefix ? `${pathPrefix}.${field.id}` : field.id;
 
@@ -1146,7 +1091,7 @@ async function resolveReferenceFields(
       // e.g., if field is "Author" with id "abc123", and referenced item has "name" field with id "xyz789"
       // the value becomes accessible as "abc123.xyz789" in the values map
       for (const refField of refFields) {
-        const refValue = refItem.values[refField.id];
+        const refValue = refValues[refField.id];
         if (refValue !== undefined) {
           // Store as: parentFieldId.refFieldId for relationship path resolution
           enhancedValues[`${currentPath}.${refField.id}`] = refValue;
@@ -1155,11 +1100,12 @@ async function resolveReferenceFields(
 
       // Recursively resolve nested reference fields
       const nestedValues = await resolveReferenceFields(
-        refItem.values,
+        refValues,
         refFields,
         isPublished,
         currentPath,
         visited,
+        translations,
         projectId
       );
 
@@ -1171,6 +1117,120 @@ async function resolveReferenceFields(
   }
 
   return enhancedValues;
+}
+
+/**
+ * Batch-resolve first-level reference fields for many items at once.
+ * Instead of N × R individual fetches (one per item per reference field),
+ * this collects all unique referenced item IDs and collection schemas
+ * upfront, fetches them in 2–3 total queries, then distributes the
+ * results — pure computation with no additional I/O.
+ *
+ * Nested references (depth > 1) are left to the per-item
+ * resolveReferenceFields which handles them with low fan-out.
+ */
+async function batchResolveReferenceFields(
+  itemsValues: Record<string, string>[],
+  fields: CollectionField[],
+  isPublished: boolean,
+  dataCache?: CollectionDataCache,
+  boundFieldPaths?: Set<string>,
+  translations?: Record<string, Translation> | null,
+  projectId?: string | null,
+): Promise<Record<string, string>[]> {
+  let referenceFields = fields.filter(
+    f => f.type === 'reference' && f.reference_collection_id
+  );
+
+  // When bound paths are known, only resolve reference fields that appear as a prefix
+  if (boundFieldPaths) {
+    referenceFields = referenceFields.filter(rf =>
+      Array.from(boundFieldPaths).some(p => p.startsWith(rf.id + '.'))
+    );
+  }
+
+  if (referenceFields.length === 0) return itemsValues;
+
+  const allRefItemIds = new Set<string>();
+  const refCollectionIds = new Set<string>();
+
+  for (const values of itemsValues) {
+    for (const field of referenceFields) {
+      const refId = values[field.id];
+      if (refId && field.reference_collection_id) {
+        allRefItemIds.add(refId);
+        refCollectionIds.add(field.reference_collection_id);
+      }
+    }
+  }
+
+  if (allRefItemIds.size === 0) return itemsValues;
+
+  let refItemsMap: Record<string, CollectionItemWithValues>;
+  let refFieldsMap: Map<string, CollectionField[]>;
+
+  if (dataCache) {
+    refItemsMap = {};
+    for (const itemId of allRefItemIds) {
+      const found = dataCache.itemsById.get(itemId);
+      if (found) refItemsMap[itemId] = found;
+    }
+    refFieldsMap = new Map();
+    for (const collId of refCollectionIds) {
+      const f = dataCache.fieldsByCollection.get(collId);
+      if (f) refFieldsMap.set(collId, f);
+    }
+  } else {
+    const [fetchedItems, ...fieldEntries] = await Promise.all([
+      getItemsWithValuesByIds(Array.from(allRefItemIds), isPublished, projectId),
+      ...Array.from(refCollectionIds).map(async (collId) => {
+        const f = await getFieldsByCollectionId(collId, isPublished, { excludeComputed: true }, projectId);
+        return [collId, f] as const;
+      }),
+    ]);
+    refItemsMap = fetchedItems;
+    refFieldsMap = new Map<string, CollectionField[]>(fieldEntries);
+  }
+
+  // Translate each referenced item's values once (reused across all rows that
+  // reference it) so localized pages render referenced CMS content in the
+  // active locale instead of the source language.
+  const translatedRefValuesById = new Map<string, Record<string, string>>();
+  const getTranslatedRefValues = (refItem: CollectionItemWithValues, refFields: CollectionField[]): Record<string, string> => {
+    let cached = translatedRefValuesById.get(refItem.id);
+    if (!cached) {
+      cached = applyCmsTranslations(refItem.id, refItem.values, refFields, translations, { includeIncomplete: !isPublished });
+      translatedRefValuesById.set(refItem.id, cached);
+    }
+    return cached;
+  };
+
+  return itemsValues.map(values => {
+    const enhanced = { ...values };
+
+    for (const field of referenceFields) {
+      const refId = values[field.id];
+      if (!refId || !field.reference_collection_id) continue;
+
+      const refItem = refItemsMap[refId];
+      if (!refItem) continue;
+
+      const refFields = refFieldsMap.get(field.reference_collection_id);
+      if (!refFields) continue;
+
+      const refValues = getTranslatedRefValues(refItem, refFields);
+
+      for (const rf of refFields) {
+        const dotKey = `${field.id}.${rf.id}`;
+        if (boundFieldPaths && !boundFieldPaths.has(dotKey)) continue;
+        if (refValues[rf.id] !== undefined) {
+          enhanced[dotKey] = refValues[rf.id];
+        }
+      }
+    }
+
+    return enhanced;
+  });
 }
 
 /**
@@ -1194,11 +1254,11 @@ async function injectCollectionData(
   timezone: string = 'UTC',
   projectId?: string | null
 ): Promise<Layer> {
-  // Resolve reference fields if we have field definitions
-  let enhancedValues = itemValues;
-  if (fields && fields.length > 0) {
-    enhancedValues = await resolveReferenceFields(itemValues, fields, isPublished, '', new Set(), projectId);
-  }
+  // Callers (resolveCollectionLayers, fetchPageByPath) already run
+  // resolveReferenceFields before passing values here. Re-resolving on
+  // every recursive child would fire O(N × D × R) redundant Supabase
+  // queries that overwhelm the connection and hang the request.
+  const enhancedValues = itemValues;
 
   const updates: Partial<Layer> = {};
   // Start with all original variables; each section overwrites only its own key
@@ -1313,6 +1373,24 @@ async function injectCollectionData(
         lightbox: {
           ...lightboxSettings,
           files: resolvedFiles,
+        },
+      };
+    }
+  }
+
+  // Link field binding — pre-resolve raw value so it survives stripSSROnlyData
+  const linkVar = layer.variables?.link;
+  if (linkVar?.type === 'field' && linkVar.field?.data?.field_id) {
+    const resolvedValue = resolveFieldValueWithRelationships(linkVar.field, enhancedValues, layerDataMap);
+    if (resolvedValue) {
+      resolvedVars.link = {
+        ...linkVar,
+        field: {
+          ...linkVar.field,
+          data: {
+            ...linkVar.field.data,
+            _resolvedValue: resolvedValue,
+          },
         },
       };
     }
@@ -1558,8 +1636,9 @@ function resolveRichTextVariables(
     const isBlockNode = (n: any) =>
       n?.type === 'paragraph' || n?.type === 'heading' ||
       n?.type === 'bulletList' || n?.type === 'orderedList' ||
-      n?.type === 'richTextComponent' || n?.type === 'richTextImage' ||
-      n?.type === 'table' || n?.type === 'richTextHtmlEmbed' || n?.type === 'horizontalRule';
+      n?.type === 'blockquote' || n?.type === 'richTextComponent' ||
+      n?.type === 'richTextImage' || n?.type === 'table' ||
+      n?.type === 'richTextHtmlEmbed' || n?.type === 'horizontalRule';
     const hasBlockChildren = result.content.some(isBlockNode);
     if (hasBlockChildren) {
       const lifted: any[] = [];
@@ -1583,63 +1662,6 @@ function resolveRichTextVariables(
   }
 
   return result;
-}
-
-/**
- * Resolve collection layers server-side by fetching their data
- * Recursively traverses the layer tree and injects collection items
- * @param layers - Layer tree to resolve
- * @param isPublished - Whether to fetch published or draft items
- * @param parentItemValues - Optional parent item values for multi-reference filtering
- * @param paginationContext - Optional pagination context with page numbers
- * @param translations - Optional translations map for CMS field translations
- * @returns Layers with collection data injected
- */
-
-/**
- * Remaps all layer IDs in a subtree to make them unique per collection item.
- * Also updates interaction tween layer_id references to match the new IDs.
- * This prevents animations from targeting only the first collection item
- * when multiple items share the same child layer IDs in the DOM.
- */
-function remapLayerIdsForCollectionItem(layer: Layer, suffix: string): Layer {
-  // First pass: collect all original IDs in the subtree
-  const originalIds = new Set<string>();
-  const collectIds = (l: Layer) => {
-    originalIds.add(l.id);
-    l.children?.forEach(collectIds);
-  };
-  collectIds(layer);
-
-  // Second pass: remap IDs and interaction tween references
-  const remapLayer = (l: Layer): Layer => {
-    const remapped: Layer = {
-      ...l,
-      id: `${l.id}${suffix}`,
-    };
-
-    if (l.interactions?.length) {
-      remapped.interactions = l.interactions.map(interaction => ({
-        ...interaction,
-        // Make interaction ID unique so AnimationInitializer caches separate timelines per item
-        id: `${interaction.id}${suffix}`,
-        tweens: interaction.tweens.map(tween => ({
-          ...tween,
-          layer_id: originalIds.has(tween.layer_id)
-            ? `${tween.layer_id}${suffix}`
-            : tween.layer_id,
-        })),
-      }));
-    }
-
-    if (l.children) {
-      remapped.children = l.children.map(remapLayer);
-    }
-
-    return remapped;
-  };
-
-  return remapLayer(layer);
 }
 
 /**
@@ -1679,20 +1701,35 @@ async function resolveTiptapComponentCollections(
     // Prevent circular resolution (component embedding itself)
     if (!ancestorComponentIds?.has(componentId)) {
       const comp = components.find(c => c.id === componentId);
-      if (comp?.layers?.length) {
+      // Pick the variant the rich-text node is bound to (falls back to the
+      // first/Default variant when no variant is selected or the requested
+      // one was deleted).
+      const compVariantLayers = comp ? getComponentVariantLayers(comp, node.attrs.componentVariantId) : [];
+      if (comp && compVariantLayers.length) {
         const childAncestors = new Set(ancestorComponentIds);
         childAncestors.add(componentId);
 
         const overrides = node.attrs.componentOverrides ?? undefined;
-        const withOverrides = applyComponentOverrides(comp.layers, overrides, comp.variables);
+        const withOverrides = applyComponentOverrides(compVariantLayers, overrides, comp.variables);
         const withComponents = resolveComponents(withOverrides, components, comp.variables, overrides);
-        const withCollections = await resolveCollectionLayers(withComponents, isPublished, undefined, undefined, translations, undefined, projectId);
+        const withCollections = await resolveCollectionLayers(withComponents, isPublished, undefined, undefined, translations, undefined, undefined, undefined, projectId);
 
         // Recursively resolve rich text components inside the resolved layers
         // (handles Component A → rich text → Component B → collection)
-        const fullyResolved = await resolveRichTextCollections(
+        let fullyResolved = await resolveRichTextCollections(
           withCollections, components, isPublished, translations, childAncestors, projectId,
         );
+
+        // Translate the embedded component's layers. Component-scope
+        // translations are keyed `component:<comp.id>:layer:...`, so the
+        // resolved component id must be passed as the master component id —
+        // otherwise the lookup falls back to page scope and never matches.
+        if (translations) {
+          fullyResolved = injectTranslatedText(fullyResolved, '', translations, {
+            includeIncomplete: !isPublished,
+            defaultMasterComponentId: comp.id,
+          });
+        }
 
         node = {
           ...node,
@@ -1767,6 +1804,460 @@ export async function resolveRichTextCollections(
   return Promise.all(layers.map(resolveLayer));
 }
 
+interface CollectionDataCache {
+  itemsByCollection: Map<string, CollectionItemWithValues[]>;
+  totalByCollection: Map<string, number>;
+  fieldsByCollection: Map<string, CollectionField[]>;
+  fieldTypeMap: Record<string, string>;
+  itemsById: Map<string, CollectionItemWithValues>;
+}
+
+/**
+ * Scan a collection layer's child template and return every CMS field ID
+ * that is actually referenced (bound) in the subtree.
+ *
+ * Returns two sets:
+ *  - fieldIds:  simple UUIDs (for DB-level WHERE field_id IN filtering)
+ *  - fieldPaths: full dot-separated paths like "refFieldId.targetFieldId"
+ *                (for filtering enhancedValues after reference expansion)
+ *
+ * Stops recursion at child layers that define their own collection scope.
+ */
+function collectBoundFieldIds(layers: Layer[]): { fieldIds: Set<string>; fieldPaths: Set<string> } {
+  const fieldIds = new Set<string>();
+  const fieldPaths = new Set<string>();
+
+  function addFieldVariable(fv: { type: 'field'; data: { field_id: string | null; relationships?: string[] } }) {
+    const fid = fv.data.field_id;
+    if (!fid) return;
+    fieldIds.add(fid);
+    const rels = fv.data.relationships || [];
+    fieldPaths.add(rels.length > 0 ? [fid, ...rels].join('.') : fid);
+  }
+
+  function scanInlineVariableTags(html: string) {
+    const regex = /<ycode-inline-variable>([\s\S]*?)<\/ycode-inline-variable>/g;
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(html)) !== null) {
+      try {
+        const parsed = JSON.parse(m[1].trim());
+        if (parsed.type === 'field' && parsed.data?.field_id) {
+          addFieldVariable(parsed);
+        }
+      } catch { /* skip malformed */ }
+    }
+  }
+
+  function scanTiptapNode(node: any) {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'dynamicVariable') {
+      const v = node.attrs?.variable;
+      if (v?.type === 'field' && v.data?.field_id) addFieldVariable(v);
+    }
+    // richTextLink marks can reference fields (attrs.field is a full FieldVariable)
+    if (Array.isArray(node.marks)) {
+      for (const mark of node.marks) {
+        if (mark.type === 'richTextLink' && mark.attrs) {
+          const fv = mark.attrs.field;
+          if (fv?.type === 'field' && fv.data?.field_id) addFieldVariable(fv);
+          // Also scan inline variables in url/email/phone dynamic text attrs
+          for (const k of ['url', 'email', 'phone']) {
+            const lv = mark.attrs[k];
+            if (lv?.type === 'dynamic_text' && lv.data?.content) {
+              scanInlineVariableTags(lv.data.content);
+            }
+          }
+        }
+      }
+    }
+    if (Array.isArray(node.content)) node.content.forEach(scanTiptapNode);
+  }
+
+  function scanDesignColorVariable(dcv: any) {
+    if (!dcv || typeof dcv !== 'object') return;
+    if (dcv.field?.type === 'field') addFieldVariable(dcv.field);
+    for (const stops of [dcv.linear?.stops, dcv.radial?.stops]) {
+      if (Array.isArray(stops)) {
+        for (const stop of stops) {
+          if (stop.field?.type === 'field') addFieldVariable(stop.field);
+        }
+      }
+    }
+  }
+
+  function scanLayer(layer: Layer) {
+    const vars = layer.variables;
+    if (!vars) {
+      if (layer.children) {
+        for (const child of layer.children) {
+          if (child.variables?.collection?.id) continue;
+          scanLayer(child);
+        }
+      }
+      return;
+    }
+
+    // --- text ---
+    const tv = vars.text;
+    if (tv?.type === 'dynamic_text') {
+      scanInlineVariableTags(tv.data.content);
+    } else if (tv?.type === 'dynamic_rich_text' && tv.data.content) {
+      scanTiptapNode(tv.data.content);
+    }
+
+    // --- image.src / image.alt ---
+    const img = vars.image;
+    if (img?.src?.type === 'field') addFieldVariable(img.src as any);
+    if (img?.alt?.type === 'dynamic_text') scanInlineVariableTags((img.alt as any).data.content);
+
+    // --- video.src / video.poster ---
+    if (vars.video?.src?.type === 'field') addFieldVariable(vars.video.src as any);
+    if (vars.video?.poster?.type === 'field') addFieldVariable(vars.video.poster as any);
+
+    // --- audio.src ---
+    if (vars.audio?.src?.type === 'field') addFieldVariable(vars.audio.src as any);
+
+    // --- backgroundImage.src ---
+    if (vars.backgroundImage?.src?.type === 'field') addFieldVariable(vars.backgroundImage.src as any);
+
+    // --- link.field ---
+    if (vars.link?.field?.type === 'field') addFieldVariable(vars.link.field);
+
+    // --- link.url / link.email / link.phone (dynamic text with inline vars) ---
+    for (const k of ['url', 'email', 'phone'] as const) {
+      const lv = (vars.link as any)?.[k];
+      if (lv?.type === 'dynamic_text') scanInlineVariableTags(lv.data.content);
+    }
+
+    // --- iframe.src ---
+    if (vars.iframe?.src?.type === 'dynamic_text') scanInlineVariableTags(vars.iframe.src.data.content);
+
+    // --- lightbox filesField ---
+    const lbf = layer.settings?.lightbox?.filesField;
+    if (lbf?.type === 'field') addFieldVariable(lbf as any);
+
+    // --- design color bindings ---
+    if (vars.design) {
+      for (const dcv of Object.values(vars.design)) {
+        scanDesignColorVariable(dcv);
+      }
+    }
+
+    // --- conditionalVisibility ---
+    if (vars.conditionalVisibility?.groups) {
+      for (const g of vars.conditionalVisibility.groups) {
+        for (const c of g.conditions) {
+          if (c.fieldId) {
+            fieldIds.add(c.fieldId);
+            fieldPaths.add(c.fieldId);
+          }
+        }
+      }
+    }
+
+    // --- collection filters & sort (on the collection layer itself) ---
+    if (vars.collection) {
+      const col = vars.collection;
+      if (col.filters?.groups) {
+        for (const g of col.filters.groups) {
+          for (const c of g.conditions) {
+            if (c.fieldId) {
+              fieldIds.add(c.fieldId);
+              fieldPaths.add(c.fieldId);
+            }
+          }
+        }
+      }
+      if (col.sort_by && col.sort_by !== 'none' && col.sort_by !== 'manual' && col.sort_by !== 'random') {
+        fieldIds.add(col.sort_by);
+        fieldPaths.add(col.sort_by);
+      }
+      if (col.source_field_id) {
+        fieldIds.add(col.source_field_id);
+        fieldPaths.add(col.source_field_id);
+      }
+    }
+
+    // --- settings.optionsSource.sortFieldId ---
+    if (layer.settings?.optionsSource?.sortFieldId) {
+      fieldIds.add(layer.settings.optionsSource.sortFieldId);
+      fieldPaths.add(layer.settings.optionsSource.sortFieldId);
+    }
+
+    // Recurse into children, but stop at layers that start a new collection scope
+    if (layer.children) {
+      for (const child of layer.children) {
+        if (child.variables?.collection?.id) continue;
+        scanLayer(child);
+      }
+    }
+  }
+
+  layers.forEach(scanLayer);
+  return { fieldIds, fieldPaths };
+}
+
+function collectAllCollectionIds(layers: Layer[]): Set<string> {
+  const ids = new Set<string>();
+  const scan = (layer: Layer) => {
+    if (layer.variables?.collection?.id) ids.add(layer.variables.collection.id);
+    if (layer.settings?.optionsSource?.collectionId) ids.add(layer.settings.optionsSource.collectionId);
+    if (layer.children) layer.children.forEach(scan);
+  };
+  layers.forEach(scan);
+  return ids;
+}
+
+async function buildCollectionCache(
+  collectionIds: Set<string>,
+  isPublished: boolean,
+  boundFieldIds?: Set<string>,
+  boundFieldPaths?: Set<string>,
+  boundCollectionIds?: Set<string>,
+  projectId?: string | null,
+): Promise<CollectionDataCache> {
+  const empty: CollectionDataCache = {
+    itemsByCollection: new Map(), totalByCollection: new Map(),
+    fieldsByCollection: new Map(), fieldTypeMap: {}, itemsById: new Map(),
+  };
+  if (collectionIds.size === 0) return empty;
+
+  const client = await getSupabaseAdmin();
+  if (!client) return empty;
+
+  // Warm direct DB connection in parallel so first-hit value queries don't pay
+  // connection setup cost on the critical path.
+  const warmKnexPromise = getKnexClient()
+    .then(knex => knex.raw('select 1'))
+    .catch(() => null);
+
+  const ids = Array.from(collectionIds);
+
+  // Phase 1: Fetch fields for all collections (needed to discover reference collections)
+  let nonComputedFieldsQuery = client
+    .from('collection_fields')
+    .select('*')
+    .in('collection_id', ids)
+    .eq('is_published', isPublished)
+    .is('deleted_at', null)
+    .eq('is_computed', false);
+  nonComputedFieldsQuery = (await applyProjectScopeToQuery(nonComputedFieldsQuery, client, 'collection_fields', projectId)).query;
+  const { data: nonComputedFieldsData } = await nonComputedFieldsQuery
+    .order('order', { ascending: true })
+    .limit(5000);
+
+  // Count fields are computed but their config is needed during render so layers
+  // bound to a count value can resolve correctly. Pull them in alongside the
+  // regular fields. Other computed types (e.g. status) are still excluded.
+  let countFieldsQuery = client
+    .from('collection_fields')
+    .select('*')
+    .in('collection_id', ids)
+    .eq('is_published', isPublished)
+    .is('deleted_at', null)
+    .eq('type', 'count');
+  countFieldsQuery = (await applyProjectScopeToQuery(countFieldsQuery, client, 'collection_fields', projectId)).query;
+  const { data: countFieldsData } = await countFieldsQuery
+    .limit(5000);
+
+  const fieldsData = [...(nonComputedFieldsData || []), ...(countFieldsData || [])];
+
+  // Discover referenced collections so we can pre-fetch their data too.
+  // When boundFieldIds is supplied, only follow reference fields that are bound.
+  const refCollectionIds: string[] = [];
+  const refFieldIdToCollectionId = new Map<string, string>();
+  for (const f of fieldsData || []) {
+    if (f.type === 'reference' && f.reference_collection_id && !collectionIds.has(f.reference_collection_id)) {
+      if (!boundFieldIds || boundFieldIds.has(f.id)) {
+        refCollectionIds.push(f.reference_collection_id);
+        refFieldIdToCollectionId.set(f.id, f.reference_collection_id);
+      }
+    }
+  }
+
+  // Build per-referenced-collection field filters from bound fieldPaths.
+  // For a path "refFieldId.targetFieldId", targetFieldId is needed from the ref collection.
+  const refCollectionBoundFieldIds = new Map<string, Set<string>>();
+  if (boundFieldPaths) {
+    for (const path of boundFieldPaths) {
+      const parts = path.split('.');
+      if (parts.length >= 2) {
+        const refFieldId = parts[0];
+        const targetFieldId = parts[1];
+        const refCollId = refFieldIdToCollectionId.get(refFieldId);
+        if (refCollId) {
+          if (!refCollectionBoundFieldIds.has(refCollId)) refCollectionBoundFieldIds.set(refCollId, new Set());
+          refCollectionBoundFieldIds.get(refCollId)!.add(targetFieldId);
+        }
+      }
+    }
+  }
+
+  // Phase 2: Fetch ref collection fields + items in parallel.
+  // Items are fetched per-collection because a single `.in('collection_id', [...])`
+  // query is bounded by Supabase/PostgREST's `db-max-rows` setting (often 1000),
+  // so a large collection can starve smaller ones in the same page.
+  // We chunk via `.range()` past the 1000-row cap, stopping once we hit
+  // PER_COLLECTION_LIMIT or run out of rows.
+  const allCollIds = [...ids, ...refCollectionIds];
+  const PER_COLLECTION_LIMIT = 5000;
+  const ITEMS_PAGE_SIZE = 1000;
+
+  const fetchItemsForCollection = async (collectionId: string) => {
+    const all: any[] = [];
+    for (let from = 0; from < PER_COLLECTION_LIMIT; from += ITEMS_PAGE_SIZE) {
+      const to = Math.min(from + ITEMS_PAGE_SIZE - 1, PER_COLLECTION_LIMIT - 1);
+      let q = client
+        .from('collection_items')
+        .select('*')
+        .eq('collection_id', collectionId)
+        .eq('is_published', isPublished)
+        .is('deleted_at', null);
+      q = (await applyProjectScopeToQuery(q, client, 'collection_items', projectId)).query;
+      q = q
+        .order('manual_order', { ascending: true })
+        .order('created_at', { ascending: false })
+        .range(from, to);
+      if (isPublished) q = q.eq('is_publishable', true);
+      const { data, error } = await q;
+      if (error) throw new Error(`Failed to fetch items: ${error.message}`);
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < (to - from + 1)) break;
+    }
+    return all;
+  };
+
+  const itemsPromise = Promise.all(allCollIds.map(fetchItemsForCollection))
+    .then(results => ({ data: results.flat(), error: null as unknown }))
+    .catch(error => ({ data: [] as any[], error }));
+
+  const refFieldsPromise = refCollectionIds.length > 0
+    ? (async () => {
+      let refFieldsQuery = client.from('collection_fields').select('*')
+        .in('collection_id', refCollectionIds)
+        .eq('is_published', isPublished)
+        .is('deleted_at', null)
+        .eq('is_computed', false);
+      refFieldsQuery = (await applyProjectScopeToQuery(refFieldsQuery, client, 'collection_fields', projectId)).query;
+      return refFieldsQuery
+        .order('order', { ascending: true })
+        .limit(5000);
+    })()
+    : Promise.resolve({ data: [] as any[] });
+
+  const [{ data: itemsData }, { data: refFieldsRaw }] = await Promise.all([itemsPromise, refFieldsPromise]);
+
+  // Build field structures
+  const allFieldsData = [...(fieldsData || []), ...(refFieldsRaw || [])];
+  const fieldsByCollection = new Map<string, CollectionField[]>();
+  const fieldTypeMap: Record<string, string> = {};
+  for (const f of allFieldsData) {
+    if (!fieldsByCollection.has(f.collection_id)) fieldsByCollection.set(f.collection_id, []);
+    fieldsByCollection.get(f.collection_id)!.push(f);
+    fieldTypeMap[f.id] = f.type;
+  }
+
+  // Phase 3: Fetch values — filter by bound field IDs when available
+  await warmKnexPromise;
+
+  // Partition items: bound primary (have field filter) vs unbound primary (optionsSource etc.) vs ref
+  const boundPrimaryItemIds: string[] = [];
+  const unboundPrimaryItemIds: string[] = [];
+  const refItemIds: string[] = [];
+  for (const item of itemsData || []) {
+    if (!collectionIds.has(item.collection_id)) {
+      refItemIds.push(item.id);
+    } else if (boundCollectionIds?.has(item.collection_id)) {
+      boundPrimaryItemIds.push(item.id);
+    } else {
+      unboundPrimaryItemIds.push(item.id);
+    }
+  }
+
+  // Slug fields are always needed for URL building
+  const slugFieldIds: string[] = [];
+  for (const [, fields] of fieldsByCollection) {
+    const slug = fields.find(f => f.key === 'slug');
+    if (slug) slugFieldIds.push(slug.id);
+  }
+
+  // Build the field filter for primary collection items
+  let primaryFieldFilter: string[] | undefined;
+  if (boundFieldIds && boundFieldIds.size > 0) {
+    const merged = new Set(boundFieldIds);
+    for (const sid of slugFieldIds) merged.add(sid);
+    primaryFieldFilter = Array.from(merged);
+  }
+
+  // Build per-ref-collection field filter and merge into a single array for the batch call
+  let refFieldFilter: string[] | undefined;
+  if (refCollectionBoundFieldIds.size > 0) {
+    const merged = new Set<string>();
+    for (const [, fids] of refCollectionBoundFieldIds) {
+      for (const fid of fids) merged.add(fid);
+    }
+    for (const sid of slugFieldIds) merged.add(sid);
+    refFieldFilter = Array.from(merged);
+  }
+
+  // Fetch values: filtered for bound collections, unfiltered for optionsSource/other collections
+  const valueFetches: Promise<Record<string, Record<string, any>>>[] = [];
+  if (boundPrimaryItemIds.length > 0) {
+    valueFetches.push(getValuesByItemIds(boundPrimaryItemIds, isPublished, fieldTypeMap, primaryFieldFilter, projectId));
+  }
+  if (unboundPrimaryItemIds.length > 0) {
+    valueFetches.push(getValuesByItemIds(unboundPrimaryItemIds, isPublished, fieldTypeMap, undefined, projectId));
+  }
+  if (refItemIds.length > 0) {
+    valueFetches.push(getValuesByItemIds(refItemIds, isPublished, fieldTypeMap, refFieldFilter, projectId));
+  }
+  const valuesByItem: Record<string, Record<string, any>> = {};
+  if (valueFetches.length > 0) {
+    const results = await Promise.all(valueFetches);
+    for (const r of results) Object.assign(valuesByItem, r);
+  }
+
+  // Build items-with-values grouped by collection + flat index
+  const itemsByCollection = new Map<string, CollectionItemWithValues[]>();
+  const totalByCollection = new Map<string, number>();
+  const itemsById = new Map<string, CollectionItemWithValues>();
+
+  for (const item of itemsData || []) {
+    const withValues: CollectionItemWithValues = { ...item, values: valuesByItem[item.id] || {} };
+    if (!itemsByCollection.has(item.collection_id)) {
+      itemsByCollection.set(item.collection_id, []);
+      totalByCollection.set(item.collection_id, 0);
+    }
+    itemsByCollection.get(item.collection_id)!.push(withValues);
+    totalByCollection.set(item.collection_id, totalByCollection.get(item.collection_id)! + 1);
+    itemsById.set(item.id, withValues);
+  }
+
+  // Ensure every requested collection has an entry
+  for (const id of allCollIds) {
+    if (!itemsByCollection.has(id)) { itemsByCollection.set(id, []); totalByCollection.set(id, 0); }
+    if (!fieldsByCollection.has(id)) fieldsByCollection.set(id, []);
+  }
+
+  return { itemsByCollection, totalByCollection, fieldsByCollection, fieldTypeMap, itemsById };
+}
+
+/** Return a shallow copy of `layer` without its `children`. */
+function stripChildren(layer: Layer): Omit<Layer, 'children'> {
+  const { children: _children, ...rest } = layer;
+  return rest;
+}
+
+/**
+ * Resolve collection layers server-side by fetching their data.
+ * Recursively traverses the layer tree and injects collection items.
+ * @param layers - Layer tree to resolve
+ * @param isPublished - Whether to fetch published or draft items
+ * @param parentItemValues - Optional parent item values for multi-reference filtering
+ * @param paginationContext - Optional pagination context with page numbers
+ * @param translations - Optional translations map for CMS field translations
+ */
 export async function resolveCollectionLayers(
   layers: Layer[],
   isPublished: boolean,
@@ -1774,10 +2265,57 @@ export async function resolveCollectionLayers(
   paginationContext?: PaginationContext,
   translations?: Record<string, Translation>,
   parentCollectionItemId?: string,
-  projectId?: string | null
+  timezone?: string,
+  // The dynamic page's collection item ID. Distinct from `parentCollectionItemId`
+  // (which advances as nested collections recurse) because `self` filters always
+  // resolve "current page item" against the outermost page item, never the
+  // nearest enclosing collection.
+  pageCollectionItemId?: string,
+  projectId?: string | null,
 ): Promise<Layer[]> {
-  // Fetch timezone setting for date formatting
-  const timezone = await getTimezoneSetting(projectId);
+  // Reuse caller-provided timezone, or fetch once for the entire tree
+  if (!timezone) {
+    timezone = await getTimezoneSetting(projectId);
+  }
+
+  // Scan all collection layers to determine which field IDs are actually used in templates
+  const allCollectionIds = collectAllCollectionIds(layers);
+  const mergedBoundFieldIds = new Set<string>();
+  const mergedBoundFieldPaths = new Set<string>();
+  const boundFieldPathsByLayerId = new Map<string, Set<string>>();
+  const scannedCollectionIds = new Set<string>();
+
+  function scanCollectionLayersForBounds(layerList: Layer[]) {
+    for (const layer of layerList) {
+      if (layer.variables?.collection?.id) {
+        const { fieldIds: fids, fieldPaths: fpaths } = collectBoundFieldIds([layer]);
+        for (const fid of fids) mergedBoundFieldIds.add(fid);
+        for (const fp of fpaths) mergedBoundFieldPaths.add(fp);
+        boundFieldPathsByLayerId.set(layer.id, fpaths);
+        scannedCollectionIds.add(layer.variables.collection.id);
+      }
+      if (layer.children) scanCollectionLayersForBounds(layer.children);
+    }
+  }
+  scanCollectionLayersForBounds(layers);
+
+  // Pre-fetch all collection data in bulk, filtered to bound fields
+  const cache = await buildCollectionCache(
+    allCollectionIds,
+    isPublished,
+    mergedBoundFieldIds.size > 0 ? mergedBoundFieldIds : undefined,
+    mergedBoundFieldPaths.size > 0 ? mergedBoundFieldPaths : undefined,
+    scannedCollectionIds.size > 0 ? scannedCollectionIds : undefined,
+    projectId,
+  );
+
+  // Inject computed count field values into the cached items so layers bound
+  // to a count field render the live number on SSR. Counts always reflect
+  // published child items, regardless of the surrounding `isPublished` mode.
+  for (const [collId, items] of cache.itemsByCollection) {
+    if (items.length === 0) continue;
+    await enrichItemsWithCountValues(items, collId, isPublished);
+  }
 
   const resolveLayer = async (
     layer: Layer,
@@ -1843,17 +2381,35 @@ export async function resolveCollectionLayers(
                   )
                 );
 
+                // Inject the cloned layer's OWN field variables (e.g. a slide's
+                // backgroundImage bound to the virtual __asset_url field). The
+                // React renderer resolves these at render time from
+                // _collectionItemValues, but static HTML export expects them
+                // pre-resolved — so resolve them here against this asset's values.
+                // Strip children first to avoid re-injecting the already-resolved
+                // per-asset children, then reattach them.
+                const layerWithOwnData = await injectCollectionData(
+                  {
+                    ...layer,
+                    variables: { ...layer.variables, collection: undefined },
+                    children: [],
+                  },
+                  virtualValues,
+                  undefined,
+                  isPublished,
+                  updatedLayerDataMap,
+                  undefined,
+                  timezone,
+                  projectId
+                );
+
                 // Build the cloned layer with original IDs first
                 const clonedLayer: Layer = {
-                  ...layer,
+                  ...layerWithOwnData,
                   attributes: {
                     ...layer.attributes,
                     'data-collection-item-id': assetId,
                   } as Record<string, any>,
-                  variables: {
-                    ...layer.variables,
-                    collection: undefined,
-                  },
                   children: injectedChildren,
                   _collectionItemValues: virtualValues,
                   _collectionItemId: assetId,
@@ -1906,100 +2462,89 @@ export async function resolveCollectionLayers(
             offset = collectionVariable.offset;
           }
 
-          // When field-based sorting is active, fetch ALL items so we sort the
-          // full set before applying limit/offset. DB-level pagination uses
-          // manual_order which would give us the wrong subset.
-          const isFieldSort = sortBy && sortBy !== 'none' && sortBy !== 'manual' && sortBy !== 'random';
-
-          // Build filters for the query
-          const filters: any = {};
-          if (!isFieldSort) {
-            if (limit) filters.limit = limit;
-            if (offset) filters.offset = offset;
-          }
-
-          // For reference/multi-reference fields, get allowed item IDs BEFORE fetching
-          // This ensures pagination counts and offsets are correct for the filtered set
+          // Determine allowed item IDs for reference/inverse-reference filtering
           let allowedItemIds: string[] | undefined;
           if (sourceFieldType === 'inverse_reference' && sourceFieldId && parentItemId) {
-            // Inverse reference: find items in this collection where the reference field
-            // points back to the parent item (the field is on THIS collection, not the parent)
-            allowedItemIds = await getItemIdsByFieldValue(
-              collectionVariable.id,
-              sourceFieldId,
-              parentItemId,
-              isPublished,
-              projectId
-            );
+            const cachedItems = cache.itemsByCollection.get(collectionVariable.id) || [];
+            allowedItemIds = cachedItems
+              .filter(item => {
+                const val = item.values[sourceFieldId!];
+                if (!val) return false;
+                // Single reference: bare UUID string. Multi-reference: castValue already
+                // JSON-parses the stored array into a JS array, so check membership
+                // directly. The legacy `val.includes('"id"')` substring check is kept as
+                // a fallback for any value that arrives un-parsed.
+                if (Array.isArray(val)) return val.includes(parentItemId);
+                if (typeof val === 'string') {
+                  return val === parentItemId || val.includes(`"${parentItemId}"`);
+                }
+                return false;
+              })
+              .map(item => item.id);
           } else if (sourceFieldId && itemValues) {
             const refValue = itemValues[sourceFieldId];
             if (refValue) {
               if (sourceFieldType === 'reference') {
-                // Single reference: only one item ID
                 allowedItemIds = Array.isArray(refValue) ? refValue : [refValue];
               } else {
-                // Multi-reference: parse array (handles both array and JSON string formats)
                 allowedItemIds = parseMultiReferenceValue(refValue);
               }
             } else {
-              // No value in parent item for this field - show no items
               allowedItemIds = [];
             }
           }
 
-          // Pass allowed item IDs as filter so count and pagination are correct
+          // Use pre-fetched cache instead of per-collection DB queries
+          const collectionFields = cache.fieldsByCollection.get(collectionVariable.id) || [];
+          let filteredItems = [...(cache.itemsByCollection.get(collectionVariable.id) || [])];
+
           if (allowedItemIds !== undefined) {
-            filters.itemIds = allowedItemIds;
+            const allowedSet = new Set(allowedItemIds);
+            filteredItems = filteredItems.filter(i => allowedSet.has(i.id));
           }
 
-          // Fetch items with values - total count now reflects filtered set
-          const fetchResult = await getItemsWithValues(
-            collectionVariable.id,
-            isPublished,
-            filters,
-            projectId
-          );
-          let items = fetchResult.items;
-          const totalItems = fetchResult.total;
-
-          // Apply static collection filters (evaluate against each item's own values)
-          // Dynamic filters (conditions with inputLayerId) are handled client-side
-          // by FilterableCollection, so we strip them here during SSR
+          // Apply static collection filters early so totalItems, pagination
+          // slicing, and the `itemIds` we hand off to load_more all reflect
+          // the same constrained set. Input-linked conditions are skipped
+          // here — they run client-side via FilterableCollection.
           const collectionFilters = collectionVariable.filters;
-          if (collectionFilters?.groups?.length) {
-            const staticFilters = {
-              ...collectionFilters,
-              groups: collectionFilters.groups.map(group => ({
-                ...group,
-                conditions: group.conditions.filter(c => !c.inputLayerId),
-              })).filter(group => group.conditions.length > 0),
-            };
+          const staticFilters = collectionFilters?.groups?.length ? {
+            ...collectionFilters,
+            groups: collectionFilters.groups.map(group => ({
+              ...group,
+              conditions: group.conditions.filter(c => !c.inputLayerId),
+            })).filter(group => group.conditions.length > 0),
+          } : null;
+          const hasStaticFilters = !!staticFilters && staticFilters.groups.length > 0;
 
-            if (staticFilters.groups.length > 0) {
-              items = items.filter(item =>
-                evaluateVisibility(staticFilters, {
-                  collectionLayerData: item.values,
-                  pageCollectionData: null,
-                  pageCollectionCounts: {},
-                })
-              );
-            }
+          if (hasStaticFilters) {
+            filteredItems = filteredItems.filter(item =>
+              evaluateVisibility(staticFilters!, {
+                collectionLayerData: item.values,
+                pageCollectionData: parentItemValues ?? null,
+                pageCollectionCounts: {},
+                currentItemId: item.id,
+                pageCollectionItemId: pageCollectionItemId ?? parentCollectionItemId,
+                timezone,
+              })
+            );
           }
 
-          // Apply sorting if specified (since API doesn't handle sortBy yet)
-          let sortedItems = items;
+          // Sort the FULL filtered set BEFORE capping or paginating. The
+          // maxTotal cap and the page slice must operate on already-sorted
+          // data; otherwise (for field sorts) the cap is applied in cache
+          // order (manual_order/created_at) and can drop items that should
+          // appear first after sorting, producing a scattered/incomplete
+          // result that diverges from the canvas (which sorts at the DB level).
           if (sortBy && sortBy !== 'none') {
             if (sortBy === 'manual') {
-              sortedItems = items.sort((a, b) => a.manual_order - b.manual_order);
+              filteredItems.sort((a, b) => a.manual_order - b.manual_order);
             } else if (sortBy === 'random') {
-              sortedItems = items.sort(() => Math.random() - 0.5);
+              filteredItems.sort(() => Math.random() - 0.5);
             } else {
-              // Field-based sorting
-              sortedItems = items.sort((a, b) => {
-                const aValue = a.values[sortBy] || '';
-                const bValue = b.values[sortBy] || '';
-                const aStr = String(aValue);
-                const bStr = String(bValue);
+              filteredItems.sort((a, b) => {
+                const aStr = String(a.values[sortBy] || '');
+                const bStr = String(b.values[sortBy] || '');
                 const aNum = aStr.trim() !== '' ? Number(aStr) : NaN;
                 const bNum = bStr.trim() !== '' ? Number(bStr) : NaN;
 
@@ -2010,37 +2555,61 @@ export async function resolveCollectionLayers(
                 const comparison = aStr.localeCompare(bStr);
                 return sortOrder === 'desc' ? -comparison : comparison;
               });
-
-              // For field-based sorts we fetched all items to sort correctly,
-              // now apply limit/offset to get the right page
-              if (limit || offset) {
-                const start = offset || 0;
-                sortedItems = sortedItems.slice(start, limit ? start + limit : undefined);
-              }
             }
           }
 
-          // Fetch collection fields for reference resolution
-          const collectionFields = await getFieldsByCollectionId(collectionVariable.id, isPublished, { excludeComputed: true }, projectId);
+          // When pagination is enabled, `collectionVariable.limit` acts as a
+          // hard cap on the total — both for the displayed count and for how
+          // far `load_more` can page. Without pagination, the slice below
+          // applies it as a per-page limit instead.
+          const maxTotal = isPaginated && typeof collectionVariable.limit === 'number' && collectionVariable.limit > 0
+            ? collectionVariable.limit
+            : undefined;
+          if (maxTotal != null && filteredItems.length > maxTotal) {
+            filteredItems = filteredItems.slice(0, maxTotal);
+          }
+
+          // Static filters shrink the candidate pool — propagate the final
+          // ID list so the load_more API uses it as its candidate pool
+          // (otherwise it falls back to all collection items and bypasses
+          // the layer's static filters).
+          if (hasStaticFilters) {
+            allowedItemIds = filteredItems.map(item => item.id);
+          }
+
+          const totalItems = filteredItems.length;
+
+          // Apply limit/offset to the sorted, capped set (mirrors DB pagination).
+          let sortedItems = filteredItems;
+          if (limit || offset) {
+            const start = offset || 0;
+            sortedItems = filteredItems.slice(start, limit ? start + limit : undefined);
+          }
 
           // Find slug field for building collection item URLs
           const slugField = collectionFields.find(f => f.key === 'slug');
-          // Clone the collection layer for each item (design settings apply to each repeated item)
-          // For each item, resolve nested collection layers with that item's values
-          // Note: Pagination is now a sibling layer, not a child, so no filtering needed
-          const clonedLayers: Layer[] = await Promise.all(
-            sortedItems.map(async (item) => {
-              // Apply CMS translations to item values before using them
-              let translatedValues = applyCmsTranslations(item.id, item.values, collectionFields, translations);
-              // Preserve raw values before date formatting for custom format presets
-              const rawTranslatedValues = { ...translatedValues };
-              // Format date fields in user's timezone
-              translatedValues = formatDateFieldsInItemValues(translatedValues, collectionFields, timezone);
 
-              // Resolve reference fields BEFORE building layerDataMap
-              // This ensures relationship paths (e.g., "refFieldId.targetFieldId") are available
-              const enhancedValues = await resolveReferenceFields(translatedValues, collectionFields, isPublished, '', new Set(), projectId);
-              // Overlay raw values on enhanced to preserve relationship paths while keeping unformatted dates
+          // Pre-process all items: translations + date formatting (pure computation)
+          const preprocessed = sortedItems.map(item => {
+            let translatedValues = applyCmsTranslations(item.id, item.values, collectionFields, translations, { includeIncomplete: !isPublished });
+            const rawTranslatedValues = { ...translatedValues };
+            translatedValues = formatDateFieldsInItemValues(translatedValues, collectionFields, timezone);
+            return { item, translatedValues, rawTranslatedValues };
+          });
+
+          const layerBoundPaths = boundFieldPathsByLayerId.get(layer.id);
+          const allEnhancedValues = await batchResolveReferenceFields(
+            preprocessed.map(p => p.translatedValues),
+            collectionFields,
+            isPublished,
+            cache,
+            layerBoundPaths,
+            translations,
+            projectId,
+          );
+          const clonedLayers: Layer[] = await Promise.all(
+            preprocessed.map(async ({ item, rawTranslatedValues }, index) => {
+              const enhancedValues = allEnhancedValues[index];
               const rawEnhancedValues = { ...enhancedValues, ...rawTranslatedValues };
 
               // Extract slug for URL building
@@ -2067,24 +2636,32 @@ export async function resolveCollectionLayers(
                 )
               );
 
+              // Filter _collectionItemValues to only bound paths (reduces payload in draft/preview)
+              let filteredValues = enhancedValues;
+              if (layerBoundPaths && layerBoundPaths.size > 0) {
+                filteredValues = {};
+                for (const key of Object.keys(enhancedValues)) {
+                  if (layerBoundPaths.has(key)) {
+                    filteredValues[key] = enhancedValues[key];
+                  }
+                }
+              }
+
               // Build the cloned layer with original IDs first
               const clonedLayer: Layer = {
-                ...layer,  // Clone all properties including classes, design, name, etc.
+                ...layer,
                 attributes: {
                   ...layer.attributes,
                   'data-collection-item-id': item.id,
                 } as Record<string, any>,
                 variables: {
                   ...layer.variables,
-                  collection: undefined,  // Remove collection binding from clone
+                  collection: undefined,
                 },
                 children: injectedChildren,
-                // Store enhanced item values (with resolved references) for visibility filtering (SSR only, not serialized to client)
-                _collectionItemValues: enhancedValues,
-                // Store item ID and slug for URL building in link resolution (SSR only)
+                _collectionItemValues: filteredValues,
                 _collectionItemId: item.id,
                 _collectionItemSlug: itemSlug,
-                // Store layer data map for layer-specific field resolution
                 _layerDataMap: updatedLayerDataMap,
               };
 
@@ -2093,7 +2670,6 @@ export async function resolveCollectionLayers(
               return remapLayerIdsForCollectionItem(clonedLayer, `-item-${item.id}`);
             })
           );
-
           // Build pagination metadata if pagination is enabled
           let paginationMeta: CollectionPaginationMeta | undefined;
           if (isPaginated && paginationConfig) {
@@ -2109,6 +2685,13 @@ export async function resolveCollectionLayers(
               itemIds: allowedItemIds, // For multi-reference filtering in load_more
               // Store the original layer template for load_more client-side rendering
               layerTemplate: paginationConfig.mode === 'load_more' ? layer.children : undefined,
+              collectionLayer: paginationConfig.mode === 'load_more'
+                ? stripChildren(layer)
+                : undefined,
+              isPublished,
+              sortBy: collectionVariable.sort_by,
+              sortOrder: collectionVariable.sort_order,
+              maxTotal,
             };
           }
 
@@ -2155,6 +2738,10 @@ export async function resolveCollectionLayers(
               collectionLayerClasses: Array.isArray(layer.classes) ? layer.classes : (layer.classes ? [layer.classes] : []),
               collectionLayerTag: layer.name || 'div',
               isPublished,
+              // Full collection layer (sans children) — used to rebuild the
+              // proper wrapper (link/action/attributes) when items are
+              // re-rendered client-side via filter/load-more.
+              collectionLayer: stripChildren(layer),
             } : undefined,
           };
         } catch (error) {
@@ -2171,8 +2758,8 @@ export async function resolveCollectionLayers(
     if (layer.name === 'select' && layer.settings?.optionsSource?.collectionId) {
       try {
         const sourceCollectionId = layer.settings.optionsSource.collectionId;
-        let { items: sourceItems } = await getItemsWithValues(sourceCollectionId, isPublished, undefined, projectId);
-        const sourceFields = await getFieldsByCollectionId(sourceCollectionId, isPublished, undefined, projectId);
+        let sourceItems = [...(cache.itemsByCollection.get(sourceCollectionId) || [])];
+        const sourceFields = cache.fieldsByCollection.get(sourceCollectionId) || [];
         const opts = layer.settings.optionsSource;
 
         const displayField = findDisplayField(sourceFields);
@@ -2212,7 +2799,8 @@ export async function resolveCollectionLayers(
         };
 
         const generatedOptions: Layer[] = sourceItems.map(item => {
-          const label = displayField ? (item.values[displayField.id] || 'Untitled') : 'Untitled';
+          const translatedValues = applyCmsTranslations(item.id, item.values, sourceFields, translations, { includeIncomplete: !isPublished });
+          const label = displayField ? (translatedValues[displayField.id] || 'Untitled') : 'Untitled';
           return {
             id: `${layer.id}-opt-${item.id}`,
             name: 'option',
@@ -2282,7 +2870,8 @@ export async function resolveCollectionLayers(
       const { type: _t, name: _n, value: _v, checked: _c, ...inheritedInputAttrs } = templateInput?.attributes || {};
 
       const generatedChildren: Layer[] = items.map(item => {
-        const label = displayField ? (item.values[displayField.id] || 'Untitled') : 'Untitled';
+        const translatedValues = applyCmsTranslations(item.id, item.values, fields as CollectionField[], translations, { includeIncomplete: !isPublished });
+        const label = displayField ? (translatedValues[displayField.id] || 'Untitled') : 'Untitled';
         const isDefault = inputType === 'checkbox'
           ? (opts.defaultItemIds || []).includes(item.id)
           : opts.defaultItemId === item.id;
@@ -2341,8 +2930,8 @@ export async function resolveCollectionLayers(
       if (inputType) {
         try {
           const sourceCollectionId = layer.settings.optionsSource.collectionId;
-          const { items } = await getItemsWithValues(sourceCollectionId, isPublished, undefined, projectId);
-          const fields = await getFieldsByCollectionId(sourceCollectionId, isPublished, undefined, projectId);
+          const items = cache.itemsByCollection.get(sourceCollectionId) || [];
+          const fields = cache.fieldsByCollection.get(sourceCollectionId) || [];
           return buildInputGroupFragment(inputType, items, fields);
         } catch (error) {
           console.error(`Failed to resolve collection-sourced ${inputType} options for layer ${layer.id}:`, error);
@@ -2405,7 +2994,7 @@ export async function resolveCollectionLayers(
   // Third pass: Filter layers by conditional visibility
   // We need to compute collection counts first, then filter
   // parentItemValues is the page collection data for dynamic pages
-  const filteredResult = filterByVisibility(resultWithPagination, undefined, parentItemValues);
+  const filteredResult = filterByVisibility(resultWithPagination, undefined, parentItemValues, pageCollectionItemId ?? parentCollectionItemId, timezone);
 
   return filteredResult;
 }
@@ -2494,21 +3083,26 @@ function getFilterableCollectionTarget(
  * @param layers - Layer tree to filter
  * @param collectionLayerData - Current collection layer item values for field conditions
  * @param pageCollectionData - Page collection data for dynamic pages
+ * @param pageCollectionItemId - ID of the dynamic page's collection item, when on a dynamic page
  * @returns Filtered layer tree with hidden layers removed
  */
 function filterByVisibility(
   layers: Layer[],
   collectionLayerData?: Record<string, string>,
-  pageCollectionData?: Record<string, string> | null
+  pageCollectionData?: Record<string, string> | null,
+  pageCollectionItemId?: string | null,
+  timezone: string = 'UTC',
 ): Layer[] {
   const pageCollectionCounts = computeCollectionCounts(layers);
   const filterableCollectionIds = findFilterableCollectionIds(layers);
 
   function filterLayer(
     layer: Layer,
-    currentCollectionLayerData?: Record<string, string>
+    currentCollectionLayerData?: Record<string, string>,
+    currentItemId?: string,
   ): Layer | null {
     const effectiveCollectionLayerData = layer._collectionItemValues || currentCollectionLayerData;
+    const effectiveCurrentItemId = layer._collectionItemId || currentItemId;
 
     const conditionalVisibility = layer.variables?.conditionalVisibility;
     if (conditionalVisibility && conditionalVisibility.groups?.length > 0) {
@@ -2516,6 +3110,9 @@ function filterByVisibility(
         collectionLayerData: effectiveCollectionLayerData,
         pageCollectionData,
         pageCollectionCounts,
+        currentItemId: effectiveCurrentItemId,
+        pageCollectionItemId,
+        timezone,
       });
       const filterTarget = getFilterableCollectionTarget(conditionalVisibility, filterableCollectionIds);
       if (filterTarget) {
@@ -2540,7 +3137,64 @@ function filterByVisibility(
           attributes,
           children: layer.children
             ? layer.children
-              .map(child => filterLayer(child, effectiveCollectionLayerData))
+              .map(child => filterLayer(child, effectiveCollectionLayerData, effectiveCurrentItemId))
+              .filter((child): child is Layer => child !== null)
+            : undefined,
+        };
+      }
+      // Layers whose visibility depends on a date preset ($today, etc.)
+      // are kept in the tree even when the export-time evaluation is false,
+      // so the static-export client-side runtime can re-evaluate against
+      // the current date and reveal/hide them as time passes. Only the
+      // date-preset conditions are re-evaluated on the client; every other
+      // condition (text, number, reference, presence, page_collection, …)
+      // is evaluated once here and its result baked in — so the runtime
+      // never has to reimplement the full visibility engine. layerToHtml
+      // serializes this onto a data attribute, gated on
+      // pageLinkContext.isStaticExport — live SSR sees the layer present
+      // but display:none, which renders identically to a removed layer.
+      if (hasDynamicDateRule(conditionalVisibility)) {
+        const visibilityContext = {
+          collectionLayerData: effectiveCollectionLayerData,
+          pageCollectionData,
+          pageCollectionCounts,
+          currentItemId: effectiveCurrentItemId,
+          pageCollectionItemId,
+          timezone,
+        };
+        const groups = conditionalVisibility.groups.map(group => ({
+          conditions: (group.conditions || []).map((condition): DynamicVisibilityCondition => {
+            if (isDynamicDateCondition(condition) && condition.fieldId) {
+              const v = resolveFieldFromSources(
+                condition.fieldId,
+                undefined,
+                effectiveCollectionLayerData,
+                pageCollectionData,
+              );
+              return {
+                dynamic: true,
+                operator: condition.operator,
+                value: String(condition.value ?? ''),
+                fieldValue: String(v ?? ''),
+                dateOnly: condition.fieldType === 'date_only',
+              };
+            }
+            return {
+              dynamic: false,
+              result: evaluateCondition(condition, visibilityContext),
+            };
+          }),
+        }));
+        return {
+          ...layer,
+          _dynamicStyles: {
+            ...(layer._dynamicStyles || {}),
+            display: isVisible ? '' : 'none',
+          },
+          _dynamicVisibilityRule: { timezone, groups },
+          children: layer.children
+            ? layer.children
+              .map(child => filterLayer(child, effectiveCollectionLayerData, effectiveCurrentItemId))
               .filter((child): child is Layer => child !== null)
             : undefined,
         };
@@ -2552,7 +3206,7 @@ function filterByVisibility(
 
     if (layer.children) {
       const filteredChildren = layer.children
-        .map(child => filterLayer(child, effectiveCollectionLayerData))
+        .map(child => filterLayer(child, effectiveCollectionLayerData, effectiveCurrentItemId))
         .filter((child): child is Layer => child !== null);
 
       return {
@@ -2565,7 +3219,7 @@ function filterByVisibility(
   }
 
   return layers
-    .map(layer => filterLayer(layer, collectionLayerData))
+    .map(layer => filterLayer(layer, collectionLayerData, pageCollectionItemId ?? undefined))
     .filter((layer): layer is Layer => layer !== null);
 }
 
@@ -2581,9 +3235,16 @@ function updatePaginationLayerWithMeta(layer: Layer, meta: CollectionPaginationM
   // Deep clone to avoid mutation
   const updatedLayer: Layer = JSON.parse(JSON.stringify(layer));
 
+  // No results: hide the entire pagination wrapper rather than rendering
+  // controls with empty/zero text.
+  if (totalItems <= 0) {
+    updatedLayer.classes = Array.isArray(updatedLayer.classes)
+      ? [...updatedLayer.classes, 'hidden']
+      : `${updatedLayer.classes || ''} hidden`.trim();
+  }
+
   // Helper to recursively update layers
   function updateLayerRecursive(l: Layer): void {
-    // Update page info text (for 'pages' mode)
     if (l.id?.endsWith('-pagination-info')) {
       l.variables = {
         ...l.variables,
@@ -2594,7 +3255,6 @@ function updatePaginationLayerWithMeta(layer: Layer, meta: CollectionPaginationM
       };
     }
 
-    // Update items count text (for 'load_more' mode)
     if (l.id?.endsWith('-pagination-count')) {
       const shownItems = Math.min(itemsPerPage, totalItems);
       l.variables = {
@@ -2749,6 +3409,27 @@ export function generatePaginationWrapper(
 }
 
 /**
+ * Fetch slugs for collection items referenced by link field values in other collections.
+ * Enriches the provided slugs map in-place.
+ */
+async function enrichSlugsFromLinkFields(
+  items: CollectionItemWithValues[],
+  collectionFields: CollectionField[],
+  existingSlugs: Record<string, string>,
+  isPublished: boolean,
+  projectId?: string | null,
+): Promise<void> {
+  const linkFieldIds = collectionFields.filter(f => f.type === 'link').map(f => f.id);
+  if (linkFieldIds.length === 0) return;
+
+  const missingItemIds = extractCrossCollectionItemIds(items, linkFieldIds, existingSlugs);
+  if (missingItemIds.length === 0) return;
+
+  const refSlugs = await getSlugsByItemIds(missingItemIds, isPublished, projectId);
+  Object.assign(existingSlugs, refSlugs);
+}
+
+/**
  * Render collection items to HTML string for "Load More" pagination
  * Takes the original layer template and renders each item with injected data
  * @param items - Collection items with values
@@ -2774,31 +3455,64 @@ export async function renderCollectionItemsToHtml(
   tenantId?: string,
   collectionLayerClasses?: string[],
   collectionLayerTag?: string,
+  pageLinkContext?: PageLinkContext,
+  // When provided, items are rendered as full clones of the collection layer
+  // (matching SSR exactly), so link/action wrappers and layer-level
+  // attributes are preserved. Falls back to a generic wrapper otherwise.
+  collectionLayer?: Omit<Layer, 'children'>,
   projectId?: string | null,
 ): Promise<string> {
-  // Fetch collection fields for field resolution
-  const collectionFields = await getFieldsByCollectionId(collectionId, isPublished, { excludeComputed: true }, projectId);
+  // Fetch collection fields, timezone, and map tokens in parallel
+  const [collectionFields, htmlTimezone] = await Promise.all([
+    getFieldsByCollectionId(collectionId, isPublished, { excludeComputed: true }, projectId),
+    getTimezoneSetting(projectId),
+    ensureMapTokens(),
+  ]);
 
-  // Get timezone setting for date formatting
-  const htmlTimezone = await getTimezoneSetting(projectId);
+  // Enrich slugs with cross-collection link field references
+  const enrichedSlugs = { ...collectionItemSlugs };
+  await enrichSlugsFromLinkFields(items, collectionFields, enrichedSlugs, isPublished, projectId);
 
-  // Pre-fetch map provider tokens for map layers in HTML export
-  await ensureMapTokens();
+  // Pre-process: translations + date formatting (pure computation)
+  const preprocessed = items.map(item => {
+    const rawValues = { ...item.values };
+    const formattedValues = formatDateFieldsInItemValues(item.values, collectionFields, htmlTimezone);
+    return { item, rawValues, formattedValues };
+  });
+
+  // Batch-resolve reference fields for ALL items (2–3 queries total)
+  const allEnhancedValues = await batchResolveReferenceFields(
+    preprocessed.map(p => p.formattedValues),
+    collectionFields,
+    isPublished,
+    undefined,
+    undefined,
+    translations,
+    projectId,
+  );
 
   // Render each item using the template
   const renderedItems = await Promise.all(
-    items.map(async (item, index) => {
-      // Format date fields in user's timezone
-      const rawValues = { ...item.values };
-      const formattedValues = formatDateFieldsInItemValues(item.values, collectionFields, htmlTimezone);
+    preprocessed.map(async ({ item, rawValues }, index) => {
+      const enhancedValues = allEnhancedValues[index];
 
-      // Deep clone the template for each item
-      const clonedTemplate = JSON.parse(JSON.stringify(layerTemplate));
+      // Deep clone the template for each item. ID remapping is deferred:
+      // - When `collectionLayer` is provided (preferred path), we'll rebuild
+      //   the full layer first and remap the entire subtree once at the end,
+      //   so SSR-equivalent wrappers are generated and IDs aren't doubled.
+      // - Otherwise we pre-remap children with the `-fc-${itemId}` suffix
+      //   used by the legacy generic-wrapper path. The `-fc-` namespace
+      //   prevents collisions with SSR clones (which use `-item-`).
+      const idSuffix = `-fc-${item.id}`;
+      const clonedTemplateRaw: Layer[] = JSON.parse(JSON.stringify(layerTemplate)) as Layer[];
+      const clonedTemplate: Layer[] = collectionLayer
+        ? clonedTemplateRaw
+        : clonedTemplateRaw.map(layer => remapLayerIdsForCollectionItem(layer, idSuffix));
 
       // Inject collection data into each layer of the template (text, images, etc.)
       const injectedLayers = await Promise.all(
         clonedTemplate.map((layer: Layer) =>
-          injectCollectionDataForHtml(layer, formattedValues, collectionFields, isPublished, rawValues, htmlTimezone, projectId)
+          injectCollectionDataForHtml(layer, enhancedValues, collectionFields, isPublished, rawValues, htmlTimezone, projectId)
         )
       );
 
@@ -2811,7 +3525,9 @@ export async function renderCollectionItemsToHtml(
         undefined, // No pagination context for Load More rendering
         undefined, // TODO: Add translation support for Load More pagination
         item.id, // Parent item ID for inverse reference resolution
-        projectId
+        htmlTimezone,
+        pageLinkContext?.pageCollectionItemId,
+        projectId,
       );
 
       // Resolve all AssetVariables to URLs server-side
@@ -2829,10 +3545,20 @@ export async function renderCollectionItemsToHtml(
         const scan = (layer: Layer) => {
           const fieldType = layer.variables?.link?.field?.data?.field_type;
           const fieldId = layer.variables?.link?.field?.data?.field_id;
-          if (fieldType && assetFieldTypes.includes(fieldType) && fieldId) {
-            const assetId = item.values[fieldId];
-            if (assetId && !assetMap[assetId]) {
-              assetIds.push(assetId);
+          if (fieldType && fieldId) {
+            if (assetFieldTypes.includes(fieldType)) {
+              const assetId = item.values[fieldId];
+              if (assetId && !assetMap[assetId]) {
+                assetIds.push(assetId);
+              }
+            } else if (fieldType === 'link') {
+              const rawValue = item.values[fieldId];
+              if (rawValue) {
+                const linkValue = parseCollectionLinkValue(rawValue);
+                if (linkValue?.type === 'asset' && linkValue.asset?.id && !assetMap[linkValue.asset.id]) {
+                  assetIds.push(linkValue.asset.id);
+                }
+              }
             }
           }
           layer.children?.forEach(scan);
@@ -2857,17 +3583,47 @@ export async function renderCollectionItemsToHtml(
       }
 
       // Apply conditional visibility based on this item's field values
-      resolvedLayers = filterByVisibility(resolvedLayers, item.values);
+      resolvedLayers = filterByVisibility(resolvedLayers, item.values, undefined, pageLinkContext?.pageCollectionItemId, htmlTimezone);
 
-      // Convert layers to HTML (handles fragments from resolved collections)
+      // Preferred path: rebuild a full clone of the collection layer just
+      // like SSR does (link/action/attributes preserved). Renders one HTML
+      // node via layerToHtml so wrappers like <a> are emitted properly.
+      // IDs aren't pre-remapped (see clonedTemplate above), so the whole
+      // subtree gets a single remap pass here.
+      if (collectionLayer) {
+        const slugField = collectionFields.find(f => f.key === 'slug');
+        const itemSlug = slugField ? (rawValues[slugField.id] || item.values[slugField.id]) : undefined;
+
+        const clonedLayer: Layer = {
+          ...collectionLayer,
+          attributes: {
+            ...(collectionLayer.attributes || {}),
+            'data-collection-item-id': item.id,
+          },
+          variables: {
+            ...(collectionLayer.variables || {}),
+            collection: undefined,
+          },
+          children: resolvedLayers,
+          _collectionItemValues: enhancedValues,
+          _collectionItemId: item.id,
+          _collectionItemSlug: itemSlug,
+        };
+
+        const remapped = remapLayerIdsForCollectionItem(clonedLayer, idSuffix);
+        return layerToHtml(remapped, item.id, pages, folders, enrichedSlugs, locale, translations, anchorMap, item.values, undefined, assetMap, undefined, undefined, undefined, undefined, pageLinkContext);
+      }
+
+      // Fallback: render children and wrap with a generic container. Used
+      // when the caller didn't pass the full collection layer (older API
+      // contracts). Loses link/action wrappers but keeps content rendering.
       const itemHtml = resolvedLayers
         .map((layer) =>
-          layerToHtml(layer, item.id, pages, folders, collectionItemSlugs, locale, translations, anchorMap, item.values, undefined, assetMap, undefined, undefined)
+          layerToHtml(layer, item.id, pages, folders, enrichedSlugs, locale, translations, anchorMap, item.values, undefined, assetMap, undefined, undefined, undefined, undefined, pageLinkContext)
         )
         .join('');
 
-      // Wrap in collection item container matching the SSR clone structure
-      const itemWrapperId = `${collectionLayerId}-item-${item.id}`;
+      const itemWrapperId = `${collectionLayerId}-fc-${item.id}`;
       const wrapperTag = collectionLayerTag || 'div';
       const wrapperClassStr = Array.isArray(collectionLayerClasses) && collectionLayerClasses.length > 0
         ? ` class="${collectionLayerClasses.join(' ')}"`
@@ -2892,11 +3648,18 @@ async function injectCollectionDataForHtml(
   timezone: string = 'UTC',
   projectId?: string | null
 ): Promise<Layer> {
-  // Resolve reference fields if we have field definitions
-  let enhancedValues = itemValues;
-  if (fields && fields.length > 0) {
-    enhancedValues = await resolveReferenceFields(itemValues, fields, isPublished, '', new Set(), projectId);
+  // Nested collection layers are resolved separately by resolveCollectionLayers,
+  // which clones them per referenced item and injects each item's own values.
+  // Injecting here with the parent item's values would resolve their inner
+  // variables against the wrong context and clobber them (emptying nested fields).
+  if (layer.variables?.collection?.id) {
+    return layer;
   }
+
+  // Reference fields are resolved once per item by the caller
+  // (renderCollectionItemsToHtml). Re-resolving on every recursive
+  // child would cause redundant Supabase queries.
+  const enhancedValues = itemValues;
 
   const updates: Partial<Layer> = {};
   const resolvedVars: Record<string, unknown> = { ...layer.variables };
@@ -3035,7 +3798,7 @@ async function injectCollectionDataForHtml(
  * @param isPublished - Whether to fetch published (true) or draft (false) assets
  * @param components - Available components, needed to resolve assets from rich-text embedded components
  */
-async function resolveAllAssets(
+export async function resolveAllAssets(
   layers: Layer[],
   isPublished: boolean = true,
   components?: Component[],
@@ -3104,7 +3867,7 @@ function resolveLayerAssets(
       if (asset?.public_url) {
         resolvedUrl = asset.public_url;
       } else if (asset?.content) {
-        resolvedUrl = `data:image/svg+xml,${encodeURIComponent(asset.content)}`;
+        resolvedUrl = buildSvgDataUrl(asset.content, asset.width, asset.height);
       }
       variableUpdates.image = {
         src: createDynamicTextVariable(resolvedUrl),
@@ -3161,7 +3924,7 @@ function resolveLayerAssets(
       if (asset?.public_url) {
         resolvedUrl = asset.public_url;
       } else if (asset?.content) {
-        resolvedUrl = `data:image/svg+xml,${encodeURIComponent(asset.content)}`;
+        resolvedUrl = buildSvgDataUrl(asset.content, asset.width, asset.height);
       }
     } else {
       resolvedUrl = DEFAULT_ASSETS.IMAGE;
@@ -3238,7 +4001,7 @@ function resolveRichTextImageAssets(
 /**
  * Build a map of layerId -> anchor value (attributes.id) for O(1) anchor resolution
  */
-function buildAnchorMap(layers: Layer[]): Record<string, string> {
+export function buildAnchorMap(layers: Layer[]): Record<string, string> {
   const map: Record<string, string> = {};
 
   const traverse = (layerList: Layer[]) => {
@@ -3531,10 +4294,23 @@ function renderTiptapToHtml(
  * cloned collection layer or current item), so layer-level link resolution
  * can produce next/previous-style URLs and respect preview prefixes.
  */
-interface PageLinkContext {
+export interface PageLinkContext {
   pageCollectionItemId?: string;
   pageCollectionSortedItemIds?: string[];
   isPreview?: boolean;
+  /**
+   * ID of the page being rendered. Links that target this page receive
+   * `aria-current="page"`, which activates their `current:` styles — the
+   * "active page" indicator used in navigation menus.
+   */
+  currentPageId?: string;
+  /**
+   * Set by the static export to opt out of the iframe-wrapped htmlEmbed
+   * SSR fallback. The live site relies on React hydration to replace the
+   * SSR iframe with an inline `HtmlEmbedRenderer`; the static export has
+   * no hydration, so an iframe with no `height` clips the user's content.
+   */
+  isStaticExport?: boolean;
 }
 
 /** Build an `assetMap`-backed `getAsset` callback compatible with `generateLinkHref`. */
@@ -3549,7 +4325,7 @@ function makeAssetMapResolver(
  * Convert a Layer to HTML string
  * Handles common layer types and their attributes
  */
-function layerToHtml(
+export function layerToHtml(
   layer: Layer,
   collectionItemId?: string,
   pages?: Page[],
@@ -3584,6 +4360,29 @@ function layerToHtml(
 
   // Build layer data map with stored collection layer data
   const effectiveLayerDataMap = layer._layerDataMap || layerDataMap;
+
+  // A link targeting the page currently being rendered is marked with
+  // `aria-current="page"` so its `current:` styles apply (active-page state).
+  // Uses the same resolution context as `generateLinkHref` so page, url and CMS
+  // (field) links are all matched correctly.
+  const isCurrentPageLink = !!pageLinkContext?.currentPageId
+    && isLinkToCurrentPage(layer.variables?.link, {
+      pages,
+      folders,
+      collectionItemSlugs,
+      collectionItemId: effectiveCollectionItemId,
+      pageCollectionItemId: pageLinkContext.pageCollectionItemId,
+      collectionItemData: effectiveCollectionItemData,
+      pageCollectionItemData,
+      isPreview: pageLinkContext.isPreview,
+      locale,
+      translations,
+      getAsset: makeAssetMapResolver(assetMap),
+      anchorMap,
+      layerDataMap: effectiveLayerDataMap,
+      pageCollectionSortedItemIds: pageLinkContext.pageCollectionSortedItemIds,
+      pageId: pageLinkContext.currentPageId,
+    });
 
   // Get the HTML tag
   let tag = getLayerHtmlTag(layer);
@@ -3690,6 +4489,15 @@ function layerToHtml(
     }
   }
 
+  // Serialize a date-preset visibility rule for the static-export
+  // client-side runtime. Live SSR ignores this entirely — the layer just
+  // renders with its `_dynamicStyles.display` (none / unset) as usual.
+  if (pageLinkContext?.isStaticExport && layer._dynamicVisibilityRule) {
+    attrs.push(
+      `data-ycode-vis-rule="${escapeHtml(JSON.stringify(layer._dynamicVisibilityRule))}"`,
+    );
+  }
+
   // Add data attributes for slider nav/pagination elements (used by SliderInitializer)
   if (SWIPER_DATA_ATTR_MAP[layer.name]) {
     attrs.push(SWIPER_DATA_ATTR_MAP[layer.name]);
@@ -3783,6 +4591,19 @@ function layerToHtml(
     inlineStyles['--bg-img'] = combineBgValues(existingImg, cmsGradient);
   }
 
+  // Icons render their SVG at 100% of the container, so an icon with only one
+  // of width/height set collapses on the other (auto) axis. Derive an
+  // aspect-ratio from the icon's viewBox so the missing axis resolves to the
+  // icon's true proportions. It stays inert when both dimensions are set.
+  if (layer.name === 'icon' && !inlineStyles['aspect-ratio'] && !inlineStyles['aspectRatio']) {
+    const iconSrcForAspect = layer.variables?.icon?.src;
+    const iconContentForAspect = iconSrcForAspect ? (getVariableStringValue(iconSrcForAspect) || '') : '';
+    const iconAspectRatio = getSvgAspectRatioStyle(iconContentForAspect || DEFAULT_ASSETS.ICON);
+    if (iconAspectRatio) {
+      inlineStyles['aspect-ratio'] = iconAspectRatio;
+    }
+  }
+
   if (Object.keys(inlineStyles).length > 0) {
     const styleStr = Object.entries(inlineStyles)
       .map(([prop, val]) => {
@@ -3804,16 +4625,33 @@ function layerToHtml(
       } else if (imageSrc.type === 'asset') {
         resolvedSrcValue = undefined;
       }
-      if (resolvedSrcValue && resolvedSrcValue.trim()) {
-        const transformQuality = getImageTransformQualityForLayer(layer);
-        const optimizedSrc = getOptimizedImageUrl(resolvedSrcValue, getFallbackImageWidthForLayer(layer), transformQuality);
-        attrs.push(`src="${escapeHtml(optimizedSrc)}"`);
+    }
 
-        const srcset = generateImageSrcset(resolvedSrcValue, getImageSrcsetWidthsForLayer(layer), transformQuality);
-        if (srcset) {
-          attrs.push(`srcset="${escapeHtml(srcset)}"`);
-          attrs.push(`sizes="${escapeHtml(getImageSizesForLayer(layer))}"`);
-        }
+    // Resolve intrinsic width/height up front: needed both for the width/
+    // height attributes (CLS prevention) and to cap srcset descriptors so
+    // they don't exceed the source's natural size.
+    let imgWidth = layer.attributes?.width as string | undefined;
+    let imgHeight = layer.attributes?.height as string | undefined;
+    if ((!imgWidth || !imgHeight) && resolvedSrcValue && assetMap) {
+      const matchedAsset = Object.values(assetMap).find(a => a.public_url === resolvedSrcValue);
+      if (matchedAsset?.width && matchedAsset?.height) {
+        if (!imgWidth) imgWidth = String(matchedAsset.width);
+        if (!imgHeight) imgHeight = String(matchedAsset.height);
+      }
+    }
+
+    const intrinsicWidth = parseImageDimension(imgWidth);
+    const intrinsicHeight = parseImageDimension(imgHeight);
+
+    if (resolvedSrcValue && resolvedSrcValue.trim()) {
+      const transformQuality = getImageTransformQualityForLayer(layer);
+      const optimizedSrc = getOptimizedImageUrl(resolvedSrcValue, getFallbackImageWidthForLayer(layer), transformQuality);
+      attrs.push(`src="${escapeHtml(optimizedSrc)}"`);
+
+      const srcset = generateImageSrcset(resolvedSrcValue, getImageSrcsetWidthsForLayer(layer), transformQuality, intrinsicWidth);
+      if (srcset) {
+        attrs.push(`srcset="${escapeHtml(srcset)}"`);
+        attrs.push(`sizes="${escapeHtml(getImageSizesForLayer(layer))}"`);
       }
     }
     attrs.push('data-layer-type="image"');
@@ -3824,18 +4662,8 @@ function layerToHtml(
       attrs.push(`alt="${escapeHtml(resolvedAlt)}"`);
     }
 
-    // Set width/height from explicit attributes or intrinsic asset dimensions (prevents CLS)
-    let imgWidth = layer.attributes?.width as string | undefined;
-    let imgHeight = layer.attributes?.height as string | undefined;
-    if ((!imgWidth || !imgHeight) && resolvedSrcValue && assetMap) {
-      const matchedAsset = Object.values(assetMap).find(a => a.public_url === resolvedSrcValue);
-      if (matchedAsset?.width && matchedAsset?.height) {
-        if (!imgWidth) imgWidth = String(matchedAsset.width);
-        if (!imgHeight) imgHeight = String(matchedAsset.height);
-      }
-    }
-    if (imgWidth) attrs.push(`width="${escapeHtml(imgWidth)}"`);
-    if (imgHeight) attrs.push(`height="${escapeHtml(imgHeight)}"`);
+    if (intrinsicWidth) attrs.push(`width="${intrinsicWidth}"`);
+    if (intrinsicHeight) attrs.push(`height="${intrinsicHeight}"`);
 
     const imgLoadingAttr = layer.attributes?.loading || getImageLoadingAttribute(layer);
     if (imgLoadingAttr) attrs.push(`loading="${escapeHtml(String(imgLoadingAttr))}"`);
@@ -3973,6 +4801,18 @@ function layerToHtml(
   if (layer.name === 'htmlEmbed') {
     const htmlEmbedCode = layer.settings?.htmlEmbed?.code || '<div>Add your custom code here</div>';
 
+    // Static export has no React hydration to replace the SSR iframe with
+    // an inline HtmlEmbedRenderer mount, and iframes default to ~150px
+    // tall with no `height` set — clipping the user's content. Emit the
+    // code inline so it renders at natural height, matching the editor.
+    // <script> tags in initial document HTML are executed by the browser,
+    // so user-pasted scripts run exactly as authored.
+    if (pageLinkContext?.isStaticExport) {
+      attrs.push('data-html-embed="true"');
+      const inlineAttrsStr = attrs.length > 0 ? ' ' + attrs.join(' ') : '';
+      return `<div${inlineAttrsStr}>${htmlEmbedCode}</div>`;
+    }
+
     // Create a complete HTML document for iframe srcdoc
     const iframeContent = `<!DOCTYPE html>
 <html>
@@ -4032,6 +4872,9 @@ function layerToHtml(
 
       if (hrefValue) {
         attrs.push(`href="${escapeHtml(hrefValue)}"`);
+        if (isCurrentPageLink) {
+          attrs.push('aria-current="page"');
+        }
       } else if (isLinkAtCollectionBoundary(linkSettings, {
         pageCollectionItemId: pageLinkContext?.pageCollectionItemId,
         pageCollectionSortedItemIds: pageLinkContext?.pageCollectionSortedItemIds,
@@ -4138,6 +4981,7 @@ function layerToHtml(
               locale,
               translations,
               isPreview: false,
+              getAsset: makeAssetMapResolver(assetMap),
             },
             assetMap,
           });
@@ -4197,15 +5041,21 @@ function layerToHtml(
         ? (componentId, overrides, preResolvedLayers) => {
           if (ancestorComponentIds?.has(componentId)) return '';
           const comp = components.find(c => c.id === componentId);
-          if (!comp?.layers?.length) return '';
+          if (!comp) return '';
           const childAncestors = new Set(ancestorComponentIds);
           childAncestors.add(componentId);
           // Use pre-resolved layers (with collections) when available from resolveRichTextCollections
-          const resolved = preResolvedLayers
-            ?? resolveComponents(
+          let resolved: Layer[];
+          if (preResolvedLayers) {
+            resolved = preResolvedLayers;
+          } else if (comp.layers?.length) {
+            resolved = resolveComponents(
               applyComponentOverrides(comp.layers, overrides, comp.variables),
               components, comp.variables, overrides,
             );
+          } else {
+            return '';
+          }
           const withAssets = assetMap
             ? resolved.map(l => resolveLayerAssets(l, assetMap))
             : resolved;
@@ -4275,6 +5125,9 @@ function layerToHtml(
         const linkAttrs: string[] = [];
         if (linkHref) {
           linkAttrs.push(`href="${escapeHtml(linkHref)}"`);
+          if (isCurrentPageLink) {
+            linkAttrs.push('aria-current="page"');
+          }
         } else {
           linkAttrs.push('aria-disabled="true"', 'data-link-disabled="true"');
         }
@@ -4358,6 +5211,7 @@ function layerToHtml(
               locale,
               translations,
               isPreview: false,
+              getAsset: makeAssetMapResolver(assetMap),
             },
             assetMap,
           });
@@ -4379,6 +5233,10 @@ function layerToHtml(
     // Wrap content in <a> tag if we have a valid href
     if (linkHref) {
       const linkAttrs: string[] = [`href="${escapeHtml(linkHref)}"`];
+
+      if (isCurrentPageLink) {
+        linkAttrs.push('aria-current="page"');
+      }
 
       if (linkSettings.target) {
         linkAttrs.push(`target="${escapeHtml(linkSettings.target)}"`);

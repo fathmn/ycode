@@ -1,14 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@supabase/ssr';
-import { credentials } from '@/lib/credentials';
-import { parseSupabaseConfig } from '@/lib/supabase-config-parser';
-import type { SupabaseConfig } from '@/types';
+import { createRouteClient } from '@/lib/supabase-route-client';
 
 /**
  * GET /ycode/api/auth/callback
- * 
+ *
  * Handle OAuth callback from Supabase Auth
- * (For future OAuth implementation)
  */
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url);
@@ -20,41 +16,14 @@ export async function GET(request: NextRequest) {
 
   if (code) {
     try {
-      // Get Supabase config
-      const config = await credentials.get<SupabaseConfig>('supabase_config');
+      const supabase = await createRouteClient();
 
-      if (!config) {
+      if (!supabase) {
         return NextResponse.redirect(
           new URL('/ycode?auth_error=config', request.url)
         );
       }
 
-      const parsed = parseSupabaseConfig(config);
-      const redirectUrl = new URL('/ycode', request.url);
-      if (authFlow) {
-        redirectUrl.searchParams.set('auth_flow', authFlow);
-      }
-      const response = NextResponse.redirect(redirectUrl);
-
-      // Create Supabase client
-      const supabase = createServerClient(
-        parsed.projectUrl,
-        parsed.anonKey,
-        {
-          cookies: {
-            getAll() {
-              return request.cookies.getAll();
-            },
-            setAll(cookiesToSet) {
-              cookiesToSet.forEach(({ name, value, options }) => {
-                response.cookies.set(name, value, options);
-              });
-            },
-          },
-        }
-      );
-
-      // Exchange code for session
       const { error } = await supabase.auth.exchangeCodeForSession(code);
 
       if (error) {
@@ -64,7 +33,11 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      return response;
+      const redirectUrl = new URL('/ycode', request.url);
+      if (authFlow) {
+        redirectUrl.searchParams.set('auth_flow', authFlow);
+      }
+      return NextResponse.redirect(redirectUrl);
     } catch (error) {
       console.error('Auth callback failed:', error);
       return NextResponse.redirect(

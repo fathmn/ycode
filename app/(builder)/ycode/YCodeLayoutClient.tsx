@@ -1,12 +1,18 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { Suspense, useMemo } from 'react';
+import { Suspense, useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import BuilderLoading from '@/components/BuilderLoading';
 import { ycodePathnameFromStudioProjectPath } from '@/lib/studio-project-path';
 import StudioAuthGate from './components/StudioAuthGate';
+import {
+  startLockExpirationCheck,
+  stopLockExpirationCheck,
+  startNotificationCleanup,
+  stopNotificationCleanup,
+} from '@/stores/useCollaborationPresenceStore';
 
 const YCodeBuilder = dynamic(() => import('./components/YCodeBuilderMain'), {
   ssr: false,
@@ -44,9 +50,21 @@ function YCodeLayoutInner({ children }: { children: ReactNode }) {
     projectRootIsYcode: true,
   }), [pathname]);
 
+  // Reap expired collaboration locks and stale notifications for the lifetime
+  // of the editor session. Both stores are global, so a single mount here
+  // covers every builder route.
+  useEffect(() => {
+    startLockExpirationCheck();
+    startNotificationCleanup();
+    return () => {
+      stopLockExpirationCheck();
+      stopNotificationCleanup();
+    };
+  }, []);
+
   // Exclude standalone routes from YCodeBuilder
   // These routes should render independently without the editor UI
-  const prefixRoutes = ['/ycode/preview', '/ycode/devtools/'];
+  const prefixRoutes = ['/ycode/preview', '/ycode/devtools/', '/ycode/oauth/'];
   const exactRoutes = ['/ycode/welcome', '/ycode/accept-invite'];
   const isStandaloneRoute = Boolean(
     prefixRoutes.some(route => editorPathname.startsWith(route))

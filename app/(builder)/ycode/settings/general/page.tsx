@@ -89,6 +89,10 @@ export default function GeneralSettingsPage() {
   const [timezone, setTimezone] = useState(storedTimezone ?? 'UTC');
   const timezoneOptions = useMemo(() => getTimezoneOptions(), []);
 
+  // Initialize project (site) name from store.
+  const storedSiteName = getSettingByKey('site_name') as string | null;
+  const [siteName, setSiteName] = useState(storedSiteName || '');
+
   // Initialize favicon and web clip from store
   const storedFaviconAssetId = getSettingByKey('favicon_asset_id') as string | null;
   const storedWebClipAssetId = getSettingByKey('web_clip_asset_id') as string | null;
@@ -98,6 +102,16 @@ export default function GeneralSettingsPage() {
   // File manager dialog state
   const [fileManagerOpen, setFileManagerOpen] = useState(false);
   const [fileManagerMode, setFileManagerMode] = useState<'favicon' | 'webclip'>('favicon');
+
+  // Stable category filter — favicon accepts both raster images and SVG icons.
+  // Memoized to avoid creating a new array on every render, which would cause
+  // the file manager to reload its asset list in a loop.
+  const fileManagerCategory = useMemo(
+    () => fileManagerMode === 'favicon'
+      ? [ASSET_CATEGORIES.IMAGES, ASSET_CATEGORIES.ICONS]
+      : ASSET_CATEGORIES.IMAGES,
+    [fileManagerMode],
+  );
 
   // Assets store for getting asset details
   const assetsById = useAssetsStore((state) => state.assetsById);
@@ -182,15 +196,32 @@ export default function GeneralSettingsPage() {
 
   // Save website settings
   const saveWebsiteSettings = useCallback(async () => {
+    const trimmedName = siteName.trim();
+    if (!trimmedName) {
+      toast.error('Projektname ist erforderlich');
+      return;
+    }
+
     setIsSavingWebsite(true);
-    await saveSettings({
-      ycode_badge: ycodeBadge,
-      timezone,
-      favicon_asset_id: faviconAssetId || null,
-      web_clip_asset_id: webClipAssetId || null,
-    });
-    setIsSavingWebsite(false);
-  }, [saveSettings, ycodeBadge, timezone, faviconAssetId, webClipAssetId]);
+    try {
+      const success = await saveSettings({
+        site_name: trimmedName,
+        ycode_badge: ycodeBadge,
+        timezone,
+        favicon_asset_id: faviconAssetId || null,
+        web_clip_asset_id: webClipAssetId || null,
+      });
+
+      if (!success) {
+        toast.error(useSettingsStore.getState().error || 'Einstellungen konnten nicht gespeichert werden. Bitte versuchen Sie es erneut.');
+        return;
+      }
+
+      toast.success('Einstellungen wurden erfolgreich gespeichert');
+    } finally {
+      setIsSavingWebsite(false);
+    }
+  }, [siteName, saveSettings, ycodeBadge, timezone, faviconAssetId, webClipAssetId]);
 
   const handleDetectTimezone = useCallback(() => {
     const detected = getDetectedTimezone();
@@ -214,17 +245,21 @@ export default function GeneralSettingsPage() {
       return false;
     }
 
-    // Validate dimensions
-    if (!asset.width || !asset.height) {
-      toast.error('Bildabmessungen konnten nicht ermittelt werden');
-      return false;
-    }
+    // SVGs scale without quality loss; skip dimension checks entirely
+    const isSvg = asset.mime_type === 'image/svg+xml';
 
-    if (asset.width < minSize || asset.height < minSize) {
-      toast.error(`${label} muss mindestens ${minSize}x${minSize} Pixel groß sein`, {
-        description: `Ausgewähltes Bild: ${asset.width}x${asset.height} Pixel`,
-      });
-      return false;
+    if (!isSvg) {
+      if (!asset.width || !asset.height) {
+        toast.error('Bildabmessungen konnten nicht ermittelt werden');
+        return false;
+      }
+
+      if (asset.width < minSize || asset.height < minSize) {
+        toast.error(`${label} muss mindestens ${minSize}x${minSize} Pixel groß sein`, {
+          description: `Ausgewähltes Bild: ${asset.width}x${asset.height} Pixel`,
+        });
+        return false;
+      }
     }
 
     // Set the asset ID
@@ -297,33 +332,20 @@ export default function GeneralSettingsPage() {
               </div>
 
               <div className="col-span-2 grid grid-cols-2 gap-5">
-                {isCloudVersion() && (
-                  <>
-                    <Field>
-                      <FieldLabel htmlFor="project-name">
-                        Projektname
-                      </FieldLabel>
-                      <Input
-                        id="project-name"
-                        placeholder="Meine Website"
-                        required
-                      />
-                    </Field>
+                <Field className="col-span-2">
+                  <FieldLabel htmlFor="project-name">
+                    Projektname
+                  </FieldLabel>
+                  <Input
+                    id="project-name"
+                    placeholder="Meine Website"
+                    value={siteName}
+                    onChange={(e) => setSiteName(e.target.value)}
+                    required
+                  />
+                </Field>
 
-                    <Field>
-                      <FieldLabel htmlFor="subdomain">
-                        Subdomain
-                      </FieldLabel>
-                      <Input
-                        id="subdomain"
-                        placeholder="website"
-                        required
-                      />
-                    </Field>
-
-                    <FieldSeparator className="col-span-2" />
-                  </>
-                )}
+                <FieldSeparator className="col-span-2" />
 
                 <div className="col-span-2 flex items-center gap-6">
                   <div className="size-28 bg-secondary/20 rounded-lg flex items-center justify-center shrink-0 overflow-hidden">
@@ -773,7 +795,7 @@ export default function GeneralSettingsPage() {
         onOpenChange={setFileManagerOpen}
         onAssetSelect={handleAssetSelect}
         assetId={fileManagerMode === 'favicon' ? faviconAssetId || null : webClipAssetId || null}
-        category={ASSET_CATEGORIES.IMAGES}
+        category={fileManagerCategory}
       />
 
       {/* Reset Project Confirmation Dialog */}

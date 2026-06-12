@@ -74,6 +74,33 @@ export async function PUT(
       );
     }
 
+    // Validate count config when updating a count field. The field type can't
+    // change after creation but the count source could be re-pointed.
+    if (existingField.type === 'count' && body.data?.count) {
+      const cfg = body.data.count;
+      if (!cfg.collectionId || !cfg.fieldId) {
+        return noCache(
+          { error: 'Count fields require data.count.collectionId and data.count.fieldId' },
+          400,
+        );
+      }
+
+      const sourceField = await getFieldById(cfg.fieldId, false);
+      if (!sourceField || sourceField.collection_id !== cfg.collectionId) {
+        return noCache({ error: 'Count source field not found in the chosen collection' }, 400);
+      }
+      if (sourceField.type !== 'reference' && sourceField.type !== 'multi_reference') {
+        return noCache({ error: 'Count source field must be a reference or multi_reference field' }, 400);
+      }
+      if (sourceField.reference_collection_id !== existingField.collection_id) {
+        return noCache({ error: 'Count source field must reference this collection' }, 400);
+      }
+
+      // Count fields are always computed and never directly editable.
+      body.is_computed = true;
+      body.fillable = false;
+    }
+
     // Detect option renames and removals (by stable id) for option-type
     // fields. Item values store the option name, so we propagate renames and
     // clear any item value whose option was removed from the field config.

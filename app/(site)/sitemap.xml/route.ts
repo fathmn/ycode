@@ -117,7 +117,7 @@ export async function GET(request: NextRequest) {
 
         // Fetch values for these items (returns Record<itemId, Record<fieldId, value>>)
         const itemIds = items.map(i => i.id);
-        const valuesByItem = await getValuesByItemIds(itemIds, true, projectId);
+        const valuesByItem = await getValuesByItemIds(itemIds, true, undefined, undefined, projectId);
 
         // Build itemValues map: itemId -> fieldId -> value
         const itemValues = new Map<string, Map<string, string>>();

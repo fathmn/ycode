@@ -58,6 +58,8 @@ interface EditorUrlState {
   view?: EditorViewportMode | null; // Viewport mode
   rightTab?: 'design' | 'settings' | 'interactions' | null; // Right sidebar tab
   layerId?: string | null; // Selected layer ID
+  /** Selected component variant id while editing a component. */
+  variantId?: string | null;
 }
 
 function normalizeViewportMode(value: string | null | undefined): EditorViewportMode | null {
@@ -220,6 +222,7 @@ export function useEditorUrl() {
     if (componentMatch) {
       const rightTabParam = searchParams?.get('tab');
       const layerParam = searchParams?.get('layer');
+      const variantParam = searchParams?.get('variant');
 
       return {
         type: 'component',
@@ -229,6 +232,7 @@ export function useEditorUrl() {
         sidebarTab: 'layers', // Inferred: components show layers sidebar
         rightTab: rightTabParam as 'design' | 'settings' | 'interactions' | null,
         layerId: layerParam,
+        variantId: variantParam,
       };
     }
 
@@ -367,7 +371,7 @@ export function useEditorUrl() {
   );
 
   const navigateToComponent = useCallback(
-    (componentId: string, rightTab?: string, layerId?: string) => {
+    (componentId: string, rightTab?: string, layerId?: string, variantId?: string | null) => {
       const currentParams = new URLSearchParams(window.location.search);
       const params = new URLSearchParams();
 
@@ -376,6 +380,10 @@ export function useEditorUrl() {
       params.set('tab', tabToUse);
 
       if (layerId) params.set('layer', layerId);
+      // Preserve the active variant on the URL so reloads land back on the
+      // same variant the user was editing.
+      const variantToUse = variantId !== undefined ? variantId : currentParams.get('variant');
+      if (variantToUse) params.set('variant', variantToUse);
 
       const query = params.toString();
       router.push(`/ycode/components/${componentId}${query ? `?${query}` : ''}`);
@@ -393,6 +401,7 @@ export function useEditorUrl() {
       tab?: string;
       layer?: string;
       preview?: string | undefined;
+      variant?: string | null;
     }) => {
       const currentSearchParams = new URLSearchParams(window.location.search);
       const newSearchParams = new URLSearchParams(currentSearchParams);
@@ -428,6 +437,15 @@ export function useEditorUrl() {
           hasChanges = true;
           if (params.preview) newSearchParams.set('preview', params.preview);
           else newSearchParams.delete('preview');
+        }
+      }
+      if ('variant' in params) {
+        const currentVariant = currentSearchParams.get('variant');
+        const nextVariant = params.variant ?? null;
+        if (nextVariant !== currentVariant) {
+          hasChanges = true;
+          if (nextVariant) newSearchParams.set('variant', nextVariant);
+          else newSearchParams.delete('variant');
         }
       }
 
@@ -473,9 +491,9 @@ export function useEditorUrl() {
  */
 export function useEditorActions() {
   const { navigateToLayers, navigateToPage, navigateToPageEdit, navigateToPageLayers, navigateToCollection, navigateToCollections, navigateToCollectionItem, navigateToNewCollectionItem, navigateToComponent, updateQueryParams, urlState } = useEditorUrl();
-  const { setCurrentPageId } = useEditorStore();
-  const { setSelectedCollectionId } = useCollectionsStore();
-  const { setEditingComponentId } = useEditorStore();
+  const setCurrentPageId = useEditorStore((s) => s.setCurrentPageId);
+  const setSelectedCollectionId = useCollectionsStore((s) => s.setSelectedCollectionId);
+  const setEditingComponentId = useEditorStore((s) => s.setEditingComponentId);
 
   // Combined action: Open page (updates state + URL)
   const openPage = useCallback(
@@ -532,9 +550,9 @@ export function useEditorActions() {
   // Combined action: Open component edit mode (updates state + URL)
   // returnToLayerId is the page/parent layer to restore on exit — NOT the component's layer for the URL
   const openComponent = useCallback(
-    (componentId: string, returnPageId: string | null, rightTab?: string, returnToLayerId?: string) => {
+    (componentId: string, returnPageId: string | null, rightTab?: string, returnToLayerId?: string, variantId?: string | null) => {
       setEditingComponentId(componentId, returnPageId, returnToLayerId);
-      navigateToComponent(componentId, rightTab);
+      navigateToComponent(componentId, rightTab, undefined, variantId ?? undefined);
     },
     [setEditingComponentId, navigateToComponent]
   );

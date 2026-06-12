@@ -1,15 +1,57 @@
 /**
  * Localisation Publishing Service
  * Handles publishing of locales and translations
+ *
+ * Returns precise change diffs and a pre-upsert slug snapshot so the publish
+ * route can compute exact locale-scoped cache invalidation, including the
+ * OLD URL when a slug or locale code is renamed.
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { SUPABASE_WRITE_BATCH_SIZE } from '@/lib/supabase-constants';
+import { getAllTranslationRows } from '@/lib/repositories/translationRepository';
 import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
-import type { Locale, Translation } from '@/types';
+import type { Locale, Translation, TranslationSourceType } from '@/types';
+
+export interface ChangedLocale {
+  id: string;
+  oldCode: string | null;       // null = newly added
+  newCode: string | null;       // null = removed (soft-deleted)
+  oldIsDefault: boolean | null;
+  newIsDefault: boolean | null;
+}
+
+export interface ChangedTranslation {
+  locale_id: string;
+  source_type: TranslationSourceType;
+  source_id: string;
+  content_key: string;
+  oldValue: string | null;      // null = newly added
+  newValue: string | null;      // null = removed (soft-deleted)
+}
+
+/**
+ * Snapshot of pre-upsert locale/slug state. Lets us reconstruct OLD URLs
+ * for changed locale codes and slug-rename translations without trying to
+ * read them out of the database after they've been overwritten.
+ */
+export interface SlugSnapshot {
+  /** Pre-upsert published locale state, keyed by locale id. */
+  localesById: Map<string, { code: string; is_default: boolean }>;
+  /** Pre-upsert published folder slug translations: locale_id → folder_id → slug. */
+  folderSlugsByLocale: Map<string, Map<string, string>>;
+  /** Pre-upsert published page slug translations: locale_id → page_id → slug. */
+  pageSlugsByLocale: Map<string, Map<string, string>>;
+  /** Pre-upsert published CMS item slug translations: locale_id → item_id → slug. */
+  cmsSlugsByLocale: Map<string, Map<string, string>>;
+}
 
 export interface PublishLocalisationResult {
   locales: number;
   translations: number;
+  changedLocales: ChangedLocale[];
+  changedTranslations: ChangedTranslation[];
+  slugSnapshot: SlugSnapshot;
   timing: {
     localesDurationMs: number;
     translationsDurationMs: number;
@@ -17,8 +59,73 @@ export interface PublishLocalisationResult {
 }
 
 /**
- * Publish all draft locales and translations
- * Creates/updates published versions while keeping drafts unchanged
+ * Compare a draft row to its currently-published counterpart and return
+ * true if any field that affects rendering or URLs has changed.
+ *
+ * Ignores `updated_at` and `created_at` (timestamps don't drive renders).
+ */
+function localeDiffers(draft: Locale, published: Locale): boolean {
+  return (
+    draft.code !== published.code ||
+    draft.is_default !== published.is_default ||
+    Boolean(draft.deleted_at) !== Boolean(published.deleted_at)
+  );
+}
+
+function translationDiffers(draft: Translation, published: Translation): boolean {
+  return (
+    draft.content_value !== published.content_value ||
+    draft.is_completed !== published.is_completed ||
+    Boolean(draft.deleted_at) !== Boolean(published.deleted_at)
+  );
+}
+
+/**
+ * Build the pre-upsert slug snapshot from the currently-published rows.
+ * Captures only slug-bearing translation rows (`source:slug` and
+ * `cms:field:key:slug`) because those are the only ones that affect URLs.
+ */
+function buildSlugSnapshot(
+  publishedLocales: Locale[],
+  publishedTranslations: Translation[],
+): SlugSnapshot {
+  const localesById = new Map<string, { code: string; is_default: boolean }>();
+  for (const l of publishedLocales) {
+    if (l.deleted_at) continue;
+    localesById.set(l.id, { code: l.code, is_default: l.is_default });
+  }
+
+  const folderSlugsByLocale = new Map<string, Map<string, string>>();
+  const pageSlugsByLocale = new Map<string, Map<string, string>>();
+  const cmsSlugsByLocale = new Map<string, Map<string, string>>();
+
+  for (const t of publishedTranslations) {
+    if (t.deleted_at) continue;
+    const isPageSlug = t.source_type === 'page' && t.content_key === 'slug';
+    const isFolderSlug = t.source_type === 'folder' && t.content_key === 'slug';
+    const isCmsSlug = t.source_type === 'cms' && t.content_key === 'field:key:slug';
+    if (!isPageSlug && !isFolderSlug && !isCmsSlug) continue;
+
+    const target = isFolderSlug
+      ? folderSlugsByLocale
+      : isPageSlug
+        ? pageSlugsByLocale
+        : cmsSlugsByLocale;
+
+    if (!target.has(t.locale_id)) target.set(t.locale_id, new Map());
+    target.get(t.locale_id)!.set(t.source_id, t.content_value);
+  }
+
+  return { localesById, folderSlugsByLocale, pageSlugsByLocale, cmsSlugsByLocale };
+}
+
+/**
+ * Publish all draft locales and translations.
+ *
+ * Computes exact `changedLocales` / `changedTranslations` diffs by comparing
+ * each draft row to its currently-published counterpart BEFORE the upsert.
+ * Returns those diffs plus a `slugSnapshot` of pre-upsert published state so
+ * downstream cache invalidation can reconstruct OLD URLs for slug renames.
  */
 export async function publishLocalisation(projectId?: string | null): Promise<PublishLocalisationResult> {
   const client = await getSupabaseAdmin();
@@ -27,11 +134,52 @@ export async function publishLocalisation(projectId?: string | null): Promise<Pu
     throw new Error('Supabase not configured');
   }
 
+  const localesHaveProjectScope = await resolveProjectScopeForWrite(client, 'locales', projectId);
+  const translationsHaveProjectScope = await resolveProjectScopeForWrite(client, 'translations', projectId);
   const deletedAt = new Date().toISOString();
   let publishedLocalesCount = 0;
   let publishedTranslationsCount = 0;
   let localesDurationMs = 0;
   let translationsDurationMs = 0;
+  const changedLocales: ChangedLocale[] = [];
+  const changedTranslations: ChangedTranslation[] = [];
+
+  // ──────────────────────────────────────────────────────────────────────
+  // SNAPSHOT: Capture all currently-published locales and translations
+  // BEFORE any upsert. This is what we'll diff against and what
+  // `buildSlugSnapshot` reads to compute OLD URLs for slug renames.
+  // ──────────────────────────────────────────────────────────────────────
+
+  // Translations regularly exceed the 1000-row PostgREST default, so page
+  // through both the existing-published snapshot and the draft fetch below.
+  // A single-shot SELECT silently truncated the publish set, leaving rows
+  // 1001..N permanently in draft.
+  let existingPublishedLocalesQuery = client
+    .from('locales')
+    .select('*')
+    .eq('is_published', true);
+  existingPublishedLocalesQuery = (await applyProjectScopeToQuery(existingPublishedLocalesQuery, client, 'locales', projectId)).query;
+  const [existingPublishedLocalesRes, allExistingPublishedTranslations] = await Promise.all([
+    existingPublishedLocalesQuery,
+    // Single direct-DB read of the whole published catalogue instead of
+    // paginated PostgREST round-trips.
+    getAllTranslationRows<Translation>(true),
+  ]);
+
+  const existingPublishedLocales: Locale[] = existingPublishedLocalesRes.data || [];
+  const existingPublishedTranslations = translationsHaveProjectScope && projectId
+    ? allExistingPublishedTranslations.filter((translation) => (
+      (translation as Translation & { project_id?: string | null }).project_id === projectId
+    ))
+    : allExistingPublishedTranslations;
+
+  const publishedLocalesById = new Map<string, Locale>();
+  for (const l of existingPublishedLocales) publishedLocalesById.set(l.id, l);
+
+  const publishedTranslationsById = new Map<string, Translation>();
+  for (const t of existingPublishedTranslations) publishedTranslationsById.set(t.id, t);
+
+  const slugSnapshot = buildSlugSnapshot(existingPublishedLocales, existingPublishedTranslations);
 
   // === LOCALES ===
   const localesStart = performance.now();
@@ -46,6 +194,52 @@ export async function publishLocalisation(projectId?: string | null): Promise<Pu
 
   if (localesError) {
     throw new Error(`Failed to fetch draft locales: ${localesError.message}`);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // DIFF: Compare each draft locale to its published counterpart.
+  // ──────────────────────────────────────────────────────────────────────
+  if (allDraftLocales) {
+    for (const draft of allDraftLocales as Locale[]) {
+      const published = publishedLocalesById.get(draft.id);
+
+      if (!published || published.deleted_at) {
+        // Newly added (or undeleted) — only counts as a change if the
+        // draft itself isn't soft-deleted.
+        if (!draft.deleted_at) {
+          changedLocales.push({
+            id: draft.id,
+            oldCode: null,
+            newCode: draft.code,
+            oldIsDefault: null,
+            newIsDefault: draft.is_default,
+          });
+        }
+        continue;
+      }
+
+      if (draft.deleted_at) {
+        // Soft-deleted in draft → will be removed from published.
+        changedLocales.push({
+          id: draft.id,
+          oldCode: published.code,
+          newCode: null,
+          oldIsDefault: published.is_default,
+          newIsDefault: null,
+        });
+        continue;
+      }
+
+      if (localeDiffers(draft, published)) {
+        changedLocales.push({
+          id: draft.id,
+          oldCode: published.code,
+          newCode: draft.code,
+          oldIsDefault: published.is_default,
+          newIsDefault: draft.is_default,
+        });
+      }
+    }
   }
 
   if (allDraftLocales && allDraftLocales.length > 0) {
@@ -69,66 +263,28 @@ export async function publishLocalisation(projectId?: string | null): Promise<Pu
       }
     }
 
-    // Step 3: Insert or update published locales
+    // Step 3: Upsert published locales
     if (activeDraftLocales.length > 0) {
-      // First, fetch existing published locales to determine insert vs update
-      let existingPublishedQuery = client
+      const publishedLocales = activeDraftLocales.map((locale: Locale) => ({
+        id: locale.id,
+        code: locale.code,
+        label: locale.label,
+        is_default: locale.is_default,
+        is_published: true,
+        created_at: locale.created_at,
+        updated_at: locale.updated_at,
+        deleted_at: null,
+        ...(localesHaveProjectScope && projectId ? { project_id: projectId } : {}),
+      }));
+
+      const { error: upsertError } = await client
         .from('locales')
-        .select('id')
-        .eq('is_published', true)
-        .in('id', activeDraftLocales.map((l: Locale) => l.id));
-      existingPublishedQuery = (await applyProjectScopeToQuery(existingPublishedQuery, client, 'locales', projectId)).query;
-      const { data: existingPublished } = await existingPublishedQuery;
+        .upsert(publishedLocales, {
+          onConflict: 'id,is_published',
+        });
 
-      const existingPublishedIds = new Set(existingPublished?.map(l => l.id) || []);
-
-      const localesToInsert: any[] = [];
-      const localesToUpdate: any[] = [];
-
-      const localesHaveProjectScope = await resolveProjectScopeForWrite(client, 'locales', projectId);
-      for (const locale of activeDraftLocales) {
-        const publishedData = {
-          id: locale.id,
-          code: locale.code,
-          label: locale.label,
-          is_default: locale.is_default,
-          is_published: true,
-          created_at: locale.created_at,
-          updated_at: locale.updated_at,
-          deleted_at: null,
-          ...(localesHaveProjectScope && projectId ? { project_id: projectId } : {}),
-        };
-
-        if (existingPublishedIds.has(locale.id)) {
-          localesToUpdate.push(publishedData);
-        } else {
-          localesToInsert.push(publishedData);
-        }
-      }
-
-      // Insert new published locales
-      if (localesToInsert.length > 0) {
-        const { error: insertError } = await client
-          .from('locales')
-          .insert(localesToInsert);
-
-        if (insertError) {
-          throw new Error(`Failed to insert published locales: ${insertError.message}`);
-        }
-      }
-
-      // Update existing published locales (batch operation)
-      if (localesToUpdate.length > 0) {
-        // Use upsert for updates since we know these records exist
-        const { error: updateError } = await client
-          .from('locales')
-          .upsert(localesToUpdate, {
-            onConflict: 'id,is_published',
-          });
-
-        if (updateError) {
-          throw new Error(`Failed to update published locales: ${updateError.message}`);
-        }
+      if (upsertError) {
+        throw new Error(`Failed to upsert published locales: ${upsertError.message}`);
       }
 
       publishedLocalesCount = activeDraftLocales.length;
@@ -140,16 +296,71 @@ export async function publishLocalisation(projectId?: string | null): Promise<Pu
   // === TRANSLATIONS ===
   const translationsStart = performance.now();
 
-  // Step 4: Fetch all draft translations (including soft-deleted)
-  let draftTranslationsQuery = client
-    .from('translations')
-    .select('*')
-    .eq('is_published', false);
-  draftTranslationsQuery = (await applyProjectScopeToQuery(draftTranslationsQuery, client, 'translations', projectId)).query;
-  const { data: allDraftTranslations, error: translationsError } = await draftTranslationsQuery;
+  // Step 4: Fetch all draft translations (including soft-deleted) in a single
+  // direct-DB read instead of paginated PostgREST round-trips.
+  let allDraftTranslations: Translation[];
+  try {
+    allDraftTranslations = await getAllTranslationRows<Translation>(false);
+    if (translationsHaveProjectScope && projectId) {
+      allDraftTranslations = allDraftTranslations.filter((translation) => (
+        (translation as Translation & { project_id?: string | null }).project_id === projectId
+      ));
+    }
+  } catch (translationsError) {
+    const message = translationsError instanceof Error ? translationsError.message : String(translationsError);
+    throw new Error(`Failed to fetch draft translations: ${message}`);
+  }
 
-  if (translationsError) {
-    throw new Error(`Failed to fetch draft translations: ${translationsError.message}`);
+  // ──────────────────────────────────────────────────────────────────────
+  // DIFF: Compare each draft translation to its published counterpart.
+  // Also records which draft IDs are new/changed so Step 6 upserts only
+  // those — re-upserting every draft row (tens of thousands) on each publish
+  // was the dominant cost of localisation publishing.
+  // ──────────────────────────────────────────────────────────────────────
+  const changedTranslationIds = new Set<string>();
+  if (allDraftTranslations) {
+    for (const draft of allDraftTranslations as Translation[]) {
+      const published = publishedTranslationsById.get(draft.id);
+
+      if (!published || published.deleted_at) {
+        if (!draft.deleted_at) {
+          changedTranslationIds.add(draft.id);
+          changedTranslations.push({
+            locale_id: draft.locale_id,
+            source_type: draft.source_type,
+            source_id: draft.source_id,
+            content_key: draft.content_key,
+            oldValue: null,
+            newValue: draft.content_value,
+          });
+        }
+        continue;
+      }
+
+      if (draft.deleted_at) {
+        changedTranslations.push({
+          locale_id: published.locale_id,
+          source_type: published.source_type,
+          source_id: published.source_id,
+          content_key: published.content_key,
+          oldValue: published.content_value,
+          newValue: null,
+        });
+        continue;
+      }
+
+      if (translationDiffers(draft, published)) {
+        changedTranslationIds.add(draft.id);
+        changedTranslations.push({
+          locale_id: draft.locale_id,
+          source_type: draft.source_type,
+          source_id: draft.source_id,
+          content_key: draft.content_key,
+          oldValue: published.content_value,
+          newValue: draft.content_value,
+        });
+      }
+    }
   }
 
   if (allDraftTranslations && allDraftTranslations.length > 0) {
@@ -173,73 +384,43 @@ export async function publishLocalisation(projectId?: string | null): Promise<Pu
       }
     }
 
-    // Step 6: Insert or update published translations
-    if (activeDraftTranslations.length > 0) {
-      // First, fetch existing published translations to determine insert vs update
-      let existingPublishedQuery = client
-        .from('translations')
-        .select('id')
-        .eq('is_published', true)
-        .in('id', activeDraftTranslations.map((t: Translation) => t.id));
-      existingPublishedQuery = (await applyProjectScopeToQuery(existingPublishedQuery, client, 'translations', projectId)).query;
-      const { data: existingPublished } = await existingPublishedQuery;
+    // Step 6: Upsert only the translations that are new or changed (the diff
+    // above). Unchanged rows already have an identical published counterpart,
+    // so re-upserting them is wasted work. Batched to keep each PostgREST
+    // payload well under URL/body limits.
+    const translationsToPublish = activeDraftTranslations.filter(
+      (t: Translation) => changedTranslationIds.has(t.id)
+    );
 
-      const existingPublishedIds = new Set(existingPublished?.map(t => t.id) || []);
+    if (translationsToPublish.length > 0) {
+      const publishedTranslations = translationsToPublish.map((translation: Translation) => ({
+        id: translation.id,
+        locale_id: translation.locale_id,
+        source_type: translation.source_type,
+        source_id: translation.source_id,
+        content_key: translation.content_key,
+        content_type: translation.content_type,
+        content_value: translation.content_value,
+        is_completed: translation.is_completed,
+        is_published: true,
+        created_at: translation.created_at,
+        updated_at: translation.updated_at,
+        deleted_at: null,
+        ...(translationsHaveProjectScope && projectId ? { project_id: projectId } : {}),
+      }));
 
-      const translationsToInsert: any[] = [];
-      const translationsToUpdate: any[] = [];
-
-      const translationsHaveProjectScope = await resolveProjectScopeForWrite(client, 'translations', projectId);
-      for (const translation of activeDraftTranslations) {
-        const publishedData = {
-          id: translation.id,
-          locale_id: translation.locale_id,
-          source_type: translation.source_type,
-          source_id: translation.source_id,
-          content_key: translation.content_key,
-          content_type: translation.content_type,
-          content_value: translation.content_value,
-          is_completed: translation.is_completed,
-          is_published: true,
-          created_at: translation.created_at,
-          updated_at: translation.updated_at,
-          deleted_at: null,
-          ...(translationsHaveProjectScope && projectId ? { project_id: projectId } : {}),
-        };
-
-        if (existingPublishedIds.has(translation.id)) {
-          translationsToUpdate.push(publishedData);
-        } else {
-          translationsToInsert.push(publishedData);
-        }
-      }
-
-      // Insert new published translations
-      if (translationsToInsert.length > 0) {
-        const { error: insertError } = await client
+      for (let i = 0; i < publishedTranslations.length; i += SUPABASE_WRITE_BATCH_SIZE) {
+        const batch = publishedTranslations.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
+        const { error: upsertError } = await client
           .from('translations')
-          .insert(translationsToInsert);
+          .upsert(batch, { onConflict: 'id,is_published' });
 
-        if (insertError) {
-          throw new Error(`Failed to insert published translations: ${insertError.message}`);
+        if (upsertError) {
+          throw new Error(`Failed to upsert published translations: ${upsertError.message}`);
         }
       }
 
-      // Update existing published translations (batch operation)
-      if (translationsToUpdate.length > 0) {
-        // Use upsert for updates since we know these records exist
-        const { error: updateError } = await client
-          .from('translations')
-          .upsert(translationsToUpdate, {
-            onConflict: 'id,is_published',
-          });
-
-        if (updateError) {
-          throw new Error(`Failed to update published translations: ${updateError.message}`);
-        }
-      }
-
-      publishedTranslationsCount = activeDraftTranslations.length;
+      publishedTranslationsCount = translationsToPublish.length;
     }
   }
 
@@ -248,6 +429,9 @@ export async function publishLocalisation(projectId?: string | null): Promise<Pu
   return {
     locales: publishedLocalesCount,
     translations: publishedTranslationsCount,
+    changedLocales,
+    changedTranslations,
+    slugSnapshot,
     timing: {
       localesDurationMs,
       translationsDurationMs,

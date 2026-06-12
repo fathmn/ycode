@@ -123,6 +123,7 @@ export interface EffectsDesign {
   backdropBlur?: string;
   filter?: string;
   backdropFilter?: string;
+  mixBlendMode?: string;
 }
 
 export interface PositioningDesign {
@@ -167,7 +168,19 @@ export interface DesignProperties {
   transitions?: TransitionsDesign;
 }
 
+export type FormType = 'standard' | 'password_protected';
+
+export type PasswordProtectionContext = {
+  pageId?: string;
+  folderId?: string;
+  redirectUrl: string;
+  isPublished: boolean;
+};
+
 export interface FormSettings {
+  // 'password_protected' wires the form to the page-auth verify endpoint and gates access to
+  // password-protected pages; 'standard' (default) submits to /ycode/api/form-submissions.
+  form_type?: FormType;
   success_action?: 'message' | 'redirect'; // What happens on successful submission (default: 'message')
   success_message?: string; // Message shown on successful submission (deprecated - now uses alert child)
   error_message?: string; // Message shown on failed submission (deprecated - now uses alert child)
@@ -280,6 +293,8 @@ export interface LayerStyle {
   id: string;
   name: string;
   group?: string; // Element category (e.g. "text", "block", "button") for scoped filtering
+  /** Role within a combo-class stack. Used for UI affordances (base vs combo vs synced global). */
+  kind?: 'base' | 'combo' | 'global';
 
   // Style data
   classes: string;
@@ -328,7 +343,7 @@ export interface InteractionTween {
 
 export type ApplyStyles = 'on-load' | 'on-trigger';
 
-export type TweenPropertyKey = 'x' | 'y' | 'rotation' | 'scale' | 'skewX' | 'skewY' | 'autoAlpha' | 'display' | 'width' | 'height';
+export type TweenPropertyKey = 'x' | 'y' | 'rotation' | 'scale' | 'skewX' | 'skewY' | 'autoAlpha' | 'display' | 'width' | 'height' | 'backgroundColor' | 'filterBlur' | 'filterBrightness' | 'filterGrayscale';
 
 export type InteractionApplyStyles = Partial<Record<TweenPropertyKey, ApplyStyles>>;
 
@@ -393,14 +408,49 @@ export interface Layer {
   settings?: LayerSettings;
 
   // Layer Styles (reusable design system)
-  styleId?: string; // Reference to applied LayerStyle
+  /**
+   * @deprecated Use `styleIds`. A single applied LayerStyle. Still read for
+   * backward compatibility via `getStyleIds()` and migrated to `styleIds` on
+   * the next write.
+   */
+  styleId?: string;
+  /**
+   * Ordered stack of applied LayerStyles, low to high priority (base class
+   * first, combo classes after). Mirrors Webflow's combo-class chain. The flat
+   * `classes` string is derived from this stack (plus `styleOverrides`) via
+   * `resolveLayerClasses`.
+   */
+  styleIds?: string[];
   styleOverrides?: {
     classes?: string;
     design?: DesignProperties;
-  }; // Tracks local changes after style applied
+    /**
+     * @deprecated Per-chip overrides now live in `styleOverridesByStyle`. This
+     * single highest-priority blob is kept for backward compatibility (legacy
+     * layers/imports) and is still applied last by `resolveLayerClasses`.
+     */
+    styleId?: string;
+  }; // Legacy: local changes after style applied (highest priority)
+  /**
+   * Per-style local overrides, keyed by the `LayerStyle` id in the stack. Each
+   * entry REPLACES that style's classes for THIS layer only (the rest of the
+   * stack still cascades around it). This is what makes customization unique to
+   * the selected chip: editing while "Heading 3" is active writes
+   * `styleOverridesByStyle["heading-3-id"]`, shows "Customized" on that chip
+   * only, and "Update" folds just that entry back into the shared style.
+   */
+  styleOverridesByStyle?: Record<string, { classes?: string; design?: DesignProperties }>;
 
   // Components (reusable layer trees)
   componentId?: string; // Reference to applied Component
+  // Selected variant id within the referenced component. When undefined or
+  // pointing to a missing variant, the first variant ("Default") is used.
+  componentVariantId?: string;
+  // When set, the variant for this nested component instance is driven by the
+  // parent component's variable (by id). Resolved during
+  // `applyComponentOverrides` and written back to `componentVariantId` before
+  // the component tree is expanded.
+  componentVariantVariableId?: string;
   componentOverrides?: {
     text?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (text)
     rich_text?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (rich text)
@@ -409,6 +459,7 @@ export interface Layer {
     audio?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (audio)
     video?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (video)
     icon?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (icon)
+    variant?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (variant)
     variableLinks?: Record<string, string>; // childVariableId → parentVariableId (pass-through from nested component to parent)
   };
 
@@ -436,6 +487,17 @@ export interface Layer {
   _paginationMeta?: CollectionPaginationMeta;
   // SSR-only property for dynamic inline styles from CMS color field bindings
   _dynamicStyles?: Record<string, string>;
+  // SSR-only property: when a conditionalVisibility rule references a date
+  // preset (e.g. `$today`), the layer is kept in the tree even if the
+  // export-time eval is false, and this metadata is attached so layerToHtml
+  // can serialize it for the static-export client-side runtime to re-eval.
+  // Non-date conditions are baked to a boolean at export time; only
+  // date-preset conditions are re-evaluated client-side against the current date.
+  _dynamicVisibilityRule?: {
+    /** Project timezone (IANA) for resolving date presets on the client. */
+    timezone?: string;
+    groups: Array<{ conditions: DynamicVisibilityCondition[] }>;
+  };
   // SSR-only property for filterable collection config (when collection has linked filter inputs)
   _filterConfig?: {
     collectionId: string;
@@ -451,6 +513,11 @@ export interface Layer {
     collectionLayerClasses?: string[];
     collectionLayerTag?: string;
     isPublished?: boolean;
+    // Full collection layer (sans children) used by the client to rebuild
+    // proper item wrappers (anchor/link/attribute) when injecting filtered
+    // or load-more items. Without this, the wrapper would be a plain <div>
+    // and lose link/action behavior.
+    collectionLayer?: Omit<Layer, 'children'>;
   };
 }
 
@@ -520,7 +587,7 @@ export interface DesignColorVariable {
 export type LinkType = 'url' | 'email' | 'phone' | 'asset' | 'page' | 'field';
 
 // Collection link field types (simplified for CMS fields)
-export type CollectionLinkType = 'url' | 'page';
+export type CollectionLinkType = 'url' | 'page' | 'asset';
 
 // Collection Link Field Value (stored as JSON in collection item values)
 // Note: Link behavior (target, rel) is set on the layer, not in the CMS value
@@ -535,6 +602,11 @@ export interface CollectionLinkValue {
     id: string; // Page ID
     collection_item_id?: string | null; // Static collection item ID (no current-page/current-collection)
     anchor_layer_id?: string | null; // Optional layer ID for anchor links
+  };
+
+  // Asset link - link to a downloadable asset
+  asset?: {
+    id: string | null;
   };
 }
 
@@ -600,9 +672,17 @@ export interface BlockTemplate {
 export interface ComponentVariable {
   id: string;        // Unique variable ID
   name: string;      // Display name (e.g., "Button title")
-  type?: 'text' | 'rich_text' | 'image' | 'link' | 'audio' | 'video' | 'icon'; // Variable type (defaults to 'text' for backwards compatibility)
+  type?: 'text' | 'rich_text' | 'image' | 'link' | 'audio' | 'video' | 'icon' | 'variant'; // Variable type (defaults to 'text' for backwards compatibility)
   placeholder?: string; // Placeholder text shown in text override inputs
   default_value?: ComponentVariableValue; // Default value
+}
+
+// A named layer tree variant of a component (e.g. "Default", "Small", "Large").
+// All variants share the same component-level `variables`.
+export interface ComponentVariant {
+  id: string;
+  name: string;
+  layers: Layer[];
 }
 
 // Component Types (Reusable Layer Trees)
@@ -610,10 +690,16 @@ export interface Component {
   id: string;
   name: string;
 
-  // Component data - complete layer tree
+  // Component data - complete layer tree.
+  // Mirrors `variants[0].layers` for backwards compatibility; new code should
+  // read from `variants` via `getComponentVariantLayers()`.
   layers: Layer[];
 
-  // Component variables - exposed properties for overrides
+  // Named layer tree variants. Always has at least one entry ("Default")
+  // after the variants migration runs. Treat this as the source of truth.
+  variants?: ComponentVariant[];
+
+  // Component variables - exposed properties for overrides (shared across variants)
   variables?: ComponentVariable[];
 
   // Versioning fields
@@ -641,6 +727,9 @@ export interface Page {
   settings: PageSettings; // Page settings (CMS, auth, seo, custom code)
   content_hash?: string; // SHA-256 hash of page metadata for change detection
   is_published: boolean;
+  is_publishable: boolean; // Whether the page goes live on publish (false = draft)
+  has_published_version?: boolean; // Computed (builder listing only): a live row exists
+  is_modified?: boolean; // Computed (builder listing only): draft differs from live
   created_at: string;
   updated_at: string;
   deleted_at: string | null; // Soft delete timestamp
@@ -856,6 +945,7 @@ export interface SupabaseConfig {
   serviceRoleKey: string;
   connectionUrl: string; // With [YOUR-PASSWORD] placeholder
   dbPassword: string; // Actual password to replace [YOUR-PASSWORD]
+  supabaseUrl?: string; // Explicit API URL for self-hosted instances (e.g. https://supabase.my-company.com)
 }
 
 // Internal credentials structure (derived from SupabaseConfig)
@@ -866,7 +956,7 @@ export interface SupabaseCredentials {
   dbPassword: string;
   // Derived properties
   projectId: string;
-  projectUrl: string; // API URL: https://[PROJECT_ID].supabase.co
+  projectUrl: string; // API URL — explicit or derived from project ID
   dbHost: string;
   dbPort: number;
   dbName: string;
@@ -965,7 +1055,7 @@ export interface ActivityNotification {
 }
 
 // Collection Types (EAV Architecture)
-export type CollectionFieldType = 'text' | 'number' | 'boolean' | 'date' | 'date_only' | 'color' | 'reference' | 'multi_reference' | 'rich_text' | 'image' | 'audio' | 'video' | 'document' | 'link' | 'email' | 'phone' | 'option' | 'status';
+export type CollectionFieldType = 'text' | 'number' | 'boolean' | 'date' | 'date_only' | 'color' | 'reference' | 'multi_reference' | 'rich_text' | 'image' | 'audio' | 'video' | 'document' | 'link' | 'email' | 'phone' | 'option' | 'count' | 'status';
 export type CollectionSortDirection = 'asc' | 'desc' | 'manual';
 
 export interface CollectionSorting {
@@ -1004,6 +1094,8 @@ export interface UpdateCollectionData {
 export interface CollectionFieldData {
   multiple?: boolean; // For asset fields - allow multiple files
   options?: { id: string; name: string }[]; // For option fields - selectable values
+  // For count fields: which child collection / reference field to count back from
+  count?: { collectionId: string; fieldId: string };
 }
 
 export interface CreateCollectionFieldData {
@@ -1092,7 +1184,7 @@ export interface CollectionImport {
   processed_rows: number;
   failed_rows: number;
   column_mapping: Record<string, string>; // csvColumn -> fieldId
-  csv_data: Record<string, string>[]; // Array of row objects
+  csv_data: { storage_path: string } | Record<string, string>[] | null;
   errors: string[] | null;
   created_at: string;
   updated_at: string;
@@ -1135,6 +1227,8 @@ export interface FieldVariable extends VariableType {
     source?: 'page' | 'collection';
     /** ID of the collection layer this field belongs to (for nested collections) */
     collection_layer_id?: string;
+    /** Pre-resolved raw value from injectCollectionData (survives stripSSROnlyData) */
+    _resolvedValue?: string;
   };
 }
 
@@ -1218,8 +1312,17 @@ export interface IconSettingsValue {
   src?: AssetVariable | StaticTextVariable;
 }
 
-// Component variable value type (text, image, link, audio, video, and icon variables)
-export type ComponentVariableValue = DynamicTextVariable | DynamicRichTextVariable | ImageSettingsValue | LinkSettingsValue | AudioSettingsValue | VideoSettingsValue | IconSettingsValue;
+// Variant settings value for component variables. Stored on
+// `componentOverrides.variant[<variableId>]` and as `default_value` on a
+// `'variant'`-typed ComponentVariable. The variant_id is matched against the
+// referenced nested component's variants at resolve time; a missing match
+// silently falls back to the layer's own `componentVariantId`.
+export interface VariantSettingsValue {
+  variant_id: string;
+}
+
+// Component variable value type (text, image, link, audio, video, icon, and variant variables)
+export type ComponentVariableValue = DynamicTextVariable | DynamicRichTextVariable | ImageSettingsValue | LinkSettingsValue | AudioSettingsValue | VideoSettingsValue | IconSettingsValue | VariantSettingsValue;
 
 // Pagination Layer Definition (partial Layer for styling pagination controls)
 export interface PaginationLayerConfig {
@@ -1265,6 +1368,22 @@ export interface CollectionPaginationMeta {
   mode?: 'pages' | 'load_more'; // Pagination mode
   itemIds?: string[]; // For multi-reference filtering in load_more mode
   layerTemplate?: Layer[]; // Layer template for rendering new items in load_more mode
+  // Full collection layer (sans children) — used by load-more (and filter)
+  // to rebuild proper item wrappers (link/action/attributes) when items are
+  // re-rendered client-side.
+  collectionLayer?: Omit<Layer, 'children'>;
+  // Whether SSR rendered this collection from published data. The client
+  // must fetch load-more items from the same source so draft previews
+  // don't accidentally append published rows (or vice versa).
+  isPublished?: boolean;
+  // Sort applied by SSR — load-more must mirror it or offset-based
+  // paging will return overlapping (duplicate) items.
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  // Optional cap from `collectionVariable.limit` when pagination is enabled.
+  // Treated as a max total: clamps `totalItems` and stops `load_more` once
+  // reached, even if the underlying collection has more matching rows.
+  maxTotal?: number;
 }
 
 // Conditional Visibility Types
@@ -1277,6 +1396,9 @@ export type BooleanOperator = 'is';
 export type ReferenceOperator = 'is_one_of' | 'is_not_one_of' | 'exists' | 'does_not_exist';
 export type MultiReferenceOperator = 'is_one_of' | 'is_not_one_of' | 'contains_all_of' | 'contains_exactly' | 'item_count' | 'has_items' | 'has_no_items';
 export type PageCollectionOperator = 'item_count' | 'has_items' | 'has_no_items';
+// Self filter: compare the item's own ID against a set of IDs (statically picked
+// and/or the current dynamic page item). Mirrors reference field semantics.
+export type SelfOperator = 'is_one_of' | 'is_not_one_of';
 
 export type VisibilityOperator =
   | TextOperator
@@ -1285,11 +1407,12 @@ export type VisibilityOperator =
   | BooleanOperator
   | ReferenceOperator
   | MultiReferenceOperator
-  | PageCollectionOperator;
+  | PageCollectionOperator
+  | SelfOperator;
 
 export interface VisibilityCondition {
   id: string;
-  source: 'collection_field' | 'page_collection';
+  source: 'collection_field' | 'page_collection' | 'self';
   // For collection_field source
   fieldId?: string;
   fieldType?: CollectionFieldType;
@@ -1302,9 +1425,29 @@ export interface VisibilityCondition {
   collectionLayerName?: string; // Display name for the layer
   compareOperator?: 'eq' | 'lt' | 'lte' | 'gt' | 'gte'; // For 'item_count' operator
   compareValue?: number; // For 'item_count' operator
+  // For self source: when true, the current dynamic page item ID is injected
+  // into the comparison set alongside any statically picked IDs in `value`.
+  includesCurrentPageItem?: boolean;
+  // How the compare value is sourced. Defaults to 'static' (uses `value`).
+  // 'current_page' binds the compare value to the current dynamic page item:
+  //   - reference/multi_reference fields compare against the page item's own ID
+  //     (the "Current Category/Tag" pattern)
+  //   - scalar fields compare against the value of `currentPageFieldId` on the
+  //     current page item
+  valueMode?: 'static' | 'current_page';
+  // For scalar fields with valueMode 'current_page': the field on the current
+  // dynamic page item whose value is used as the compare value.
+  currentPageFieldId?: string;
   // For linking filter value to an input layer inside a Filter
   inputLayerId?: string;
   inputLayerId2?: string; // For second bound (e.g. 'is_between')
+  // Date fields only: marks the value as sourced from a filter form input
+  // (vs. a preset or custom date). Persisted so the UI stays in input mode
+  // even before an input is linked. Absent on conditions created before this
+  // existed — those fall back to linked-state/custom inference.
+  dateInput?: boolean;
+  // Same as `dateInput`, but for the second bound (`is_between`).
+  dateInput2?: boolean;
 }
 
 export interface VisibilityConditionGroup {
@@ -1315,6 +1458,15 @@ export interface VisibilityConditionGroup {
 export interface ConditionalVisibility {
   groups: VisibilityConditionGroup[];
 }
+
+/**
+ * A single condition in a serialized dynamic-date visibility rule (static export).
+ * Date-preset conditions are re-evaluated against the current date on the client;
+ * all other conditions carry their export-time result, baked in.
+ */
+export type DynamicVisibilityCondition =
+  | { dynamic: true; operator: VisibilityOperator; value: string; fieldValue: string; dateOnly?: boolean }
+  | { dynamic: false; result: boolean };
 
 // Localisation Types
 

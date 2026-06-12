@@ -5,18 +5,16 @@
 import { studioFetch } from '@/lib/api';
 import { Layer, FieldVariable, CollectionVariable, CollectionItemWithValues, CollectionField, Component, ComponentVariable, Breakpoint, LayerVariables, DesignColorVariable, BoundColorStop } from '@/types';
 import { generateId } from '@/lib/utils';
-import { iconExists, IconProps } from '@/components/ui/icon';
-import { getBlockIcon, getBlockName } from '@/lib/templates/blocks';
-import { isSliderLayerName } from '@/lib/templates/utilities';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
 import { DEFAULT_TEXT_STYLES } from '@/lib/text-format-utils';
 import { getCmsFieldBinding } from '@/lib/tiptap-utils';
 import { applyComponentOverrides } from '@/lib/resolve-components';
+import { getComponentVariantLayers } from '@/lib/component-variant-utils';
 import { resolveFieldFromSources } from '@/lib/cms-variables-utils';
-import { isDatePreset, resolveDateFilterValue } from '@/lib/collection-field-utils';
-import { parseMultiReferenceValue } from '@/lib/collection-utils';
+import { compareDateFilter, isDateFieldType, isDatePreset, parseItemIdList, resolveDateFilterValue } from '@/lib/collection-field-utils';
+import { parseMultiReferenceValue, normalizeBooleanValue } from '@/lib/collection-utils';
 import { getInheritedValue } from '@/lib/tailwind-class-mapper';
-import { cloneDeep } from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
 import { layerHasLink, hasLinkInTree, hasRichTextLinks } from '@/lib/link-utils';
 
 // Alias for backwards compatibility within this file
@@ -122,6 +120,24 @@ export function canCopyLayer(layer: Layer): boolean {
  */
 export function canDeleteLayer(layer: Layer): boolean {
   return layer.restrictions?.delete !== false;
+}
+
+/**
+ * Recursively check if a layer tree contains a password-protected form layer.
+ * Used by PageRenderer to decide whether to inject the hardcoded PasswordForm
+ * fallback when the 401 page has been customised without a password form.
+ */
+export function hasPasswordFormLayer(layers: Layer[] | undefined | null): boolean {
+  if (!layers || layers.length === 0) return false;
+  for (const layer of layers) {
+    if (layer.name === 'form' && layer.settings?.form?.form_type === 'password_protected') {
+      return true;
+    }
+    if (layer.children && hasPasswordFormLayer(layer.children)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1078,6 +1094,17 @@ export function getText(layer: Layer): string | undefined {
 }
 
 /**
+ * Best-effort label for a layer used in builder error messages emitted from
+ * this template-free module. The full pretty-name resolution lives in
+ * `lib/layer-display-utils.ts`; consumers that want it can call
+ * `getLayerName()` directly with the layer info.
+ */
+function layerLabelFallback(layer: Layer): string {
+  if (layer.id === 'body') return 'Body';
+  return layer.customName || layer.name;
+}
+
+/**
  * Check if a layer can have a link added
  * @param layer - The layer to check
  * @param allLayers - All layers in the current context (page or component)
@@ -1109,7 +1136,7 @@ export function canLayerHaveLink(
     if (hasAncestorWithLink) {
       return {
         canHaveLinks: false,
-        issue: { type: 'ancestor', layerName: getLayerName(hasAncestorWithLink) }
+        issue: { type: 'ancestor', layerName: layerLabelFallback(hasAncestorWithLink) }
       };
     }
 
@@ -1132,7 +1159,7 @@ export function canLayerHaveLink(
   if (hasLinkSettings(layer)) {
     return {
       canHaveLinks: false,
-      issue: { type: 'self', layerName: getLayerName(layer) }
+      issue: { type: 'self', layerName: layerLabelFallback(layer) }
     };
   }
 
@@ -1146,7 +1173,7 @@ export function canLayerHaveLink(
   if (hasAncestorWithLink) {
     return {
       canHaveLinks: false,
-      issue: { type: 'ancestor', layerName: getLayerName(hasAncestorWithLink) }
+      issue: { type: 'ancestor', layerName: layerLabelFallback(hasAncestorWithLink) }
     };
   }
 
@@ -1177,6 +1204,31 @@ export function canAddChild(parent: Layer, child: Layer): boolean {
   }
 
   if (layerHasLink(child) && layerHasLink(parent)) {
+    return false;
+  }
+
+  return true;
+}
+
+export const LINK_NESTING_ERROR = {
+  title: 'Links cannot be nested',
+  description: 'The pasted layer contains a link and cannot be placed inside a link.',
+} as const;
+
+/**
+ * Check if a layer can be pasted as a child of a target parent,
+ * considering both the direct parent and ancestor link nesting.
+ */
+export function canPasteIntoParent(layers: Layer[], parentId: string, childToPaste: Layer): boolean {
+  const parent = findLayerById(layers, parentId);
+  if (!parent) return true;
+
+  if (!canAddChild(parent, childToPaste)) {
+    return false;
+  }
+
+  const hasLinkAncestor = findAncestor(layers, parentId, (ancestor) => layerHasLink(ancestor));
+  if (hasLinkAncestor && hasLinkInTree(childToPaste)) {
     return false;
   }
 
@@ -1559,134 +1611,10 @@ export function getLayoutTypeName(layoutType: LayoutType): string | null {
   }
 }
 
-// Layout custom names that should use breakpoint-aware icons/names
-const LAYOUT_CUSTOM_NAMES = ['Columns', 'Rows', 'Grid'];
-
-/**
- * Get the icon name (for `components/ui/Icon.tsx`) for a layer
- *
- * @param layer - The layer to get the icon for
- * @param defaultIcon - Fallback icon (default: 'box')
- * @param breakpoint - Optional breakpoint for layout-aware icons
- */
-export function getLayerIcon(
-  layer: Layer,
-  defaultIcon: IconProps['name'] = 'box',
-  breakpoint?: Breakpoint
-): IconProps['name'] {
-  // Body layers
-  if (layer.id === 'body') return 'layout';
-
-  // Component layers
-  if (layer.componentId) return 'component';
-
-  // Collection layers (skip when optionsSource manages the binding, e.g. checkbox groups)
-  if (getCollectionVariable(layer) && !layer.settings?.optionsSource) {
-    return 'database';
-  }
-
-  // Heading layers
-  if (layer.name === 'heading') return 'heading';
-
-  // Rich text layers
-  if (layer.name === 'richText') return 'rich-text';
-
-  // Text layers (backward compat: text with h1-h6 tag still shows heading icon)
-  if (layer.name === 'text') {
-    return ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(layer.settings?.tag || '') ? 'heading' : 'text';
-  }
-
-  // Layout layers (Columns, Rows, Grid) - breakpoint-aware icons
-  if (layer.customName && LAYOUT_CUSTOM_NAMES.includes(layer.customName)) {
-    if (breakpoint) {
-      const layoutType = getLayoutTypeForBreakpoint(layer, breakpoint);
-      if (layoutType === 'columns') return 'columns';
-      if (layoutType === 'rows') return 'rows';
-      if (layoutType === 'grid') return 'grid';
-      if (layoutType === 'hidden') return 'eye-off';
-    }
-    // Fallback to custom name when no breakpoint
-    if (layer.customName === 'Columns') return 'columns';
-    if (layer.customName === 'Rows') return 'rows';
-    if (layer.customName === 'Grid') return 'grid';
-  }
-
-  // Other named layers
-  if (layer.customName === 'Container') return 'container';
-
-  // Checkbox wrapper div (contains a checkbox input child)
-  if (layer.name === 'div' && layer.children?.some(c => c.name === 'input' && c.attributes?.type === 'checkbox')) {
-    return 'checkbox';
-  }
-
-  // Radio wrapper div (contains a radio input child)
-  if (layer.name === 'div' && layer.children?.some(c => c.name === 'input' && c.attributes?.type === 'radio')) {
-    return 'radio';
-  }
-
-  // Fallback to block icon (based on name)
-  return getBlockIcon(layer.name, defaultIcon);
-}
-
-/**
- * Get the label for a layer (for display in the UI)
- *
- * @param layer - The layer to get the name for
- * @param context - Optional context (component_name, collection_name, source_field_name)
- * @param breakpoint - Optional breakpoint for layout-aware names
- */
-export function getLayerName(
-  layer: Layer,
-  context?: {
-    component_name?: string | undefined | null;
-    collection_name?: string | undefined | null;
-    /** When collection is bound to a field (reference/multi-reference/multi-asset), the field name */
-    source_field_name?: string | undefined | null;
-  },
-  breakpoint?: Breakpoint
-): string {
-  // Special case for Body layer
-  if (layer.id === 'body') {
-    return 'Body';
-  }
-
-  // Use component name if this is a component instance
-  if (layer.componentId) {
-    return context?.component_name || 'Component';
-  }
-
-  // Use field name or collection name in parentheses after "Collection" (skip when optionsSource manages the binding)
-  if (getCollectionVariable(layer) && !layer.settings?.optionsSource) {
-    const label = context?.source_field_name ?? context?.collection_name;
-    return label ? `Collection (${label})` : 'Collection';
-  }
-
-  // Layout layers (Columns, Rows, Grid) - breakpoint-aware names
-  if (breakpoint && layer.customName && LAYOUT_CUSTOM_NAMES.includes(layer.customName)) {
-    const layoutType = getLayoutTypeForBreakpoint(layer, breakpoint);
-    const layoutName = getLayoutTypeName(layoutType);
-    if (layoutName) {
-      return layoutName;
-    }
-  }
-
-  // Use custom name if available
-  if (layer.customName) {
-    return layer.customName;
-  }
-
-  // Checkbox wrapper div (contains a checkbox input child)
-  if (layer.name === 'div' && layer.children?.some(c => c.name === 'input' && c.attributes?.type === 'checkbox')) {
-    return 'Checkbox';
-  }
-
-  // Radio wrapper div (contains a radio input child)
-  if (layer.name === 'div' && layer.children?.some(c => c.name === 'input' && c.attributes?.type === 'radio')) {
-    return 'Radio';
-  }
-
-  return getBlockName(layer.name) || 'Layer';
-}
+// `getLayerIcon` / `getLayerName` were moved to `lib/layer-display-utils.ts`
+// to keep this module free of `lib/templates/*` imports — those drag the
+// entire ~1.5 MB template tree into any bundle that touches `layer-utils`,
+// including the public-site renderer.
 
 /**
  * Get the HTML tag name for a layer
@@ -2014,6 +1942,12 @@ export interface VisibilityContext {
   pageCollectionCounts?: Record<string, number>;
   /** Field definitions for type-aware comparison */
   collectionFields?: CollectionField[];
+  /** ID of the item currently being evaluated (used by `source: 'self'` conditions). */
+  currentItemId?: string;
+  /** ID of the dynamic page's collection item, when on a dynamic page. */
+  pageCollectionItemId?: string | null;
+  /** Project timezone (IANA) used for day-aware date condition comparisons. */
+  timezone?: string;
 }
 
 /**
@@ -2022,11 +1956,29 @@ export interface VisibilityContext {
  * @param context - The context containing field values and collection counts
  * @returns True if condition is met, false otherwise
  */
-function evaluateCondition(
+export function evaluateCondition(
   condition: import('@/types').VisibilityCondition,
   context: VisibilityContext
 ): boolean {
-  const { collectionLayerData, pageCollectionData, pageCollectionCounts } = context;
+  const { collectionLayerData, pageCollectionData, pageCollectionCounts, currentItemId, pageCollectionItemId } = context;
+  const timezone = context.timezone || 'UTC';
+
+  // Self conditions: compare the item being evaluated against a set of item
+  // IDs (statically picked and/or the current dynamic page item). Used for
+  // patterns like "only show the current item" or "exclude the current item
+  // from a related list". If we don't know the current item, the condition
+  // can't be evaluated meaningfully — fall through to `true` to avoid hiding
+  // everything by accident (matches the default behaviour of unset conditions).
+  if (condition.source === 'self') {
+    if (!currentItemId) return true;
+    const compareIds = new Set<string>();
+    for (const id of parseItemIdList(condition.value)) compareIds.add(id);
+    if (condition.includesCurrentPageItem && pageCollectionItemId) {
+      compareIds.add(pageCollectionItemId);
+    }
+    const matches = compareIds.has(currentItemId);
+    return condition.operator === 'is_not_one_of' ? !matches : matches;
+  }
 
   if (condition.source === 'page_collection') {
     // Page collection conditions
@@ -2059,16 +2011,61 @@ function evaluateCondition(
     const fieldId = condition.fieldId;
     if (!fieldId) return true;
 
-    // Use source-aware resolution (collection layer data first, then page data)
+    // Use source-aware resolution (collection layer data first, then page data).
+    // Multi-reference / multi-asset values can arrive already parsed as arrays
+    // (e.g. from the SSR collection cache). `String([...])` would comma-join them
+    // into an unparseable string, so serialize arrays back to JSON — the form
+    // every downstream parser (parseMultiReferenceValue, JSON.parse, `[`-prefix
+    // checks) expects.
     const rawValue = resolveFieldFromSources(fieldId, undefined, collectionLayerData, pageCollectionData);
-    const value = String(rawValue ?? '');
+    const value = Array.isArray(rawValue) ? JSON.stringify(rawValue) : String(rawValue ?? '');
+    const fieldType = condition.fieldType || 'text';
+    const isDateOnly = fieldType === 'date_only';
+
+    // Resolve the compare value. In 'current_page' mode it is bound to the
+    // current dynamic page item instead of the static `condition.value`:
+    //   - reference fields inject the page item's own ID into the compared ID
+    //     set (alongside any statically picked IDs), so reference operators parse
+    //     it normally — this is the "Current Category/Tag" pattern
+    //   - scalar fields compare against the page item's `currentPageFieldId` value
+    // Reference detection also keys off the operator so it stays correct even if
+    // `fieldType` was not persisted on the condition.
     let compareValue = String(condition.value ?? '');
+    if (condition.valueMode === 'current_page') {
+      const isReferenceField = fieldType === 'reference'
+        || fieldType === 'multi_reference'
+        || ['is_one_of', 'is_not_one_of', 'contains_all_of', 'contains_exactly'].includes(condition.operator);
+
+      // When the page item context is unavailable (e.g. the editor preview before
+      // a CMS item is selected), skip the condition instead of filtering everything
+      // out — mirrors the `self` source returning true when there is no current item.
+      if (isReferenceField && !pageCollectionItemId) return true;
+      if (!isReferenceField && !pageCollectionData) return true;
+
+      if (isReferenceField) {
+        const ids = parseItemIdList(condition.value);
+        if (pageCollectionItemId && !ids.includes(pageCollectionItemId)) {
+          ids.push(pageCollectionItemId);
+        }
+        compareValue = JSON.stringify(ids);
+      } else if (condition.currentPageFieldId) {
+        compareValue = String(pageCollectionData?.[condition.currentPageFieldId] ?? '');
+      }
+    }
     let compareValue2 = condition.value2;
     let effectiveOperator = condition.operator;
-    const fieldType = condition.fieldType || 'text';
 
-    if (fieldType === 'date' && isDatePreset(compareValue)) {
-      const resolved = resolveDateFilterValue(effectiveOperator, compareValue, compareValue2);
+    // In 'current_page' mode the compare set is a single injected page-item id, so
+    // 'contains exactly' (exact set equality) can essentially never match a real
+    // multi-reference field — it would only keep items whose entire reference set is
+    // just the current item. The intent of the "Current X" pattern is "contains the
+    // current item", so treat it as 'contains_all_of'.
+    if (condition.valueMode === 'current_page' && effectiveOperator === 'contains_exactly') {
+      effectiveOperator = 'contains_all_of';
+    }
+
+    if (isDateFieldType(fieldType) && isDatePreset(compareValue)) {
+      const resolved = resolveDateFilterValue(effectiveOperator, compareValue, compareValue2, timezone);
       if (resolved) {
         effectiveOperator = resolved.operator as typeof effectiveOperator;
         compareValue = resolved.value;
@@ -2083,16 +2080,28 @@ function evaluateCondition(
       // Text operators
       case 'is':
         if (fieldType === 'boolean') {
-          return value.toLowerCase() === compareValue.toLowerCase();
+          // Booleans may be stored as 'true'/'false', '1'/'0', or '' (depending
+          // on import source — UI, Airtable sync, CSV, etc.). Normalize both
+          // sides so the comparison is source-agnostic.
+          return normalizeBooleanValue(value) === normalizeBooleanValue(compareValue);
         }
         if (fieldType === 'number') {
           return parseFloat(value) === parseFloat(compareValue);
         }
+        if (isDateFieldType(fieldType)) {
+          return compareDateFilter(value, 'is', compareValue, undefined, timezone, isDateOnly);
+        }
         return value === compareValue;
 
       case 'is_not':
+        if (fieldType === 'boolean') {
+          return normalizeBooleanValue(value) !== normalizeBooleanValue(compareValue);
+        }
         if (fieldType === 'number') {
           return parseFloat(value) !== parseFloat(compareValue);
+        }
+        if (isDateFieldType(fieldType)) {
+          return !compareDateFilter(value, 'is', compareValue, undefined, timezone, isDateOnly);
         }
         return value !== compareValue;
 
@@ -2121,25 +2130,16 @@ function evaluateCondition(
       case 'gte':
         return parseFloat(value) >= parseFloat(compareValue);
 
-      // Date operators
-      case 'is_before': {
-        const dateValue = new Date(value);
-        const compareDateValue = new Date(compareValue);
-        return dateValue < compareDateValue;
-      }
+      // Date operators (day-aware: `YYYY-MM-DD` filter values span the full day
+      // in the project timezone; `date_only` fields compare in UTC)
+      case 'is_before':
+        return compareDateFilter(value, 'is_before', compareValue, undefined, timezone, isDateOnly);
 
-      case 'is_after': {
-        const dateValue = new Date(value);
-        const compareDateValue = new Date(compareValue);
-        return dateValue > compareDateValue;
-      }
+      case 'is_after':
+        return compareDateFilter(value, 'is_after', compareValue, undefined, timezone, isDateOnly);
 
-      case 'is_between': {
-        const dateValue = new Date(value);
-        const startDate = new Date(compareValue);
-        const endDate = new Date(compareValue2 ?? '');
-        return dateValue >= startDate && dateValue <= endDate;
-      }
+      case 'is_between':
+        return compareDateFilter(value, 'is_between', compareValue, compareValue2, timezone, isDateOnly);
 
       case 'is_not_empty':
         return isPresent;
@@ -2349,6 +2349,21 @@ function remapInteractionLayerIds(
 }
 
 /**
+ * Recursively tag a layer subtree with `_masterComponentId` so translation
+ * lookups in `injectTranslatedText` resolve to component-scoped keys.
+ * Mirrors `tagLayersWithComponentId` in `lib/resolve-components.ts`.
+ */
+function tagLayerSubtreeWithComponentId(layer: Layer, componentId: string): Layer {
+  return {
+    ...layer,
+    _masterComponentId: componentId,
+    children: layer.children
+      ? layer.children.map(child => tagLayerSubtreeWithComponentId(child, componentId))
+      : layer.children,
+  };
+}
+
+/**
  * Transform component layers with instance-specific IDs
  * This ensures each component instance has unique layer IDs for proper targeting
  */
@@ -2378,6 +2393,9 @@ function transformLayersForInstance(
     const transformedLayer: Layer = {
       ...layer,
       id: newId,
+      // Preserve the original layer ID so injectTranslatedText can resolve
+      // component-scoped translation keys (which use the template layer ID).
+      _originalLayerId: layer._originalLayerId || layer.id,
     };
 
     // Remap interaction IDs and tween layer_id references
@@ -2434,12 +2452,16 @@ function resolveComponentsInLayers(
 
       const component = components.find(c => c.id === layer.componentId);
 
-      if (component && component.layers && component.layers.length > 0) {
+      // Pick the variant layer tree this instance is bound to (silent fallback
+      // to the first variant when the requested one was deleted).
+      const variantLayers = component ? getComponentVariantLayers(component, layer.componentVariantId) : [];
+
+      if (component && variantLayers.length > 0) {
         const innerVisited = new Set(visited);
         innerVisited.add(layer.componentId);
 
-        // The component's first layer is the actual content (Section, etc.)
-        const componentContent = component.layers[0];
+        // The variant's first layer is the actual content (Section, etc.)
+        const componentContent = variantLayers[0];
 
         // Transform all component children with instance-specific IDs
         // This ensures unique layer IDs when multiple instances of the same component exist
@@ -2484,8 +2506,20 @@ function resolveComponentsInLayers(
           component.variables,
         );
 
+        // Tag children with the master component ID so injectTranslatedText
+        // resolves component-scoped translation keys (component:{componentId}:...)
+        // instead of falling back to page scope. Mirrors the server-side
+        // resolveComponents pipeline so the canvas matches what the published
+        // page renders.
+        const taggedChildren = overriddenChildren.map(child =>
+          tagLayerSubtreeWithComponentId(child, component.id)
+        );
+
         // Return the wrapper with the component's content merged in
         // IMPORTANT: Keep componentId so LayerRenderer knows this is a component instance
+        // _originalLayerId is the component's root template ID — translations on the
+        // root wrapper itself are stored under that ID, while the runtime ID is the
+        // page-instance ID.
         const resolved = {
           ...layer,
           ...componentContent, // Merge the component's properties (classes, design, etc.)
@@ -2493,7 +2527,9 @@ function resolveComponentsInLayers(
           componentId: layer.componentId, // Keep the original componentId for selection
           componentOverrides: layer.componentOverrides, // Keep instance overrides
           interactions: remappedInteractions, // Use remapped interactions
-          children: overriddenChildren,
+          children: taggedChildren,
+          _masterComponentId: component.id,
+          _originalLayerId: componentContent.id,
         };
 
         return resolved;
@@ -2521,15 +2557,12 @@ export function serializeLayers(
   components: Component[] = [],
   editingComponentVariables?: ComponentVariable[],
 ): { layers: Layer[]; componentMap: Record<string, string> } {
-  // First build the component map (before resolving)
   const componentMap = buildComponentMap(layers);
-
-  // Then resolve component instances
   const resolvedLayers = resolveComponentsInLayers(layers, components, editingComponentVariables);
+  const cloned = JSON.parse(JSON.stringify(resolvedLayers));
 
-  // Deep clone to avoid mutations
   return {
-    layers: JSON.parse(JSON.stringify(resolvedLayers)),
+    layers: cloned,
     componentMap,
   };
 }
@@ -4277,4 +4310,28 @@ export function updateLayerProps(
     }
     return layer;
   });
+}
+
+/**
+ * Find all layers with a custom anchor ID (settings.id takes priority over attributes.id).
+ * Used by link settings to populate anchor selection dropdowns.
+ */
+export function findLayersWithAnchorId(layers: Layer[]): Array<{ layer: Layer; id: string }> {
+  const result: Array<{ layer: Layer; id: string }> = [];
+  const stack: Layer[] = [...layers];
+
+  while (stack.length > 0) {
+    const layer = stack.pop()!;
+
+    const layerId = layer.settings?.id || layer.attributes?.id;
+    if (layerId) {
+      result.push({ layer, id: layerId });
+    }
+
+    if (layer.children) {
+      stack.push(...layer.children);
+    }
+  }
+
+  return result;
 }

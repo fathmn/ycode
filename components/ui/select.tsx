@@ -8,6 +8,7 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 import Icon from '@/components/ui/icon';
 import { Input } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
 
 function Select({
   ...props
@@ -108,15 +109,22 @@ function SelectContent({
   searchValue,
   onSearchChange,
   searchPlaceholder,
+  searchLoading,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content> & {
   searchable?: boolean;
   searchValue?: string;
   onSearchChange?: (value: string) => void;
   searchPlaceholder?: string;
+  searchLoading?: boolean;
 }) {
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const isSearchFocusedRef = React.useRef(false);
+  // Timestamp of the last keyboard-navigation key on the search input.
+  // Used to distinguish a user-initiated focus transfer to an item (arrow
+  // keys) from a programmatic one (e.g. Radix re-focusing after items
+  // re-render when search results stream in).
+  const lastNavKeyAtRef = React.useRef(0);
 
   return (
     <SelectPrimitive.Portal>
@@ -139,22 +147,53 @@ function SelectContent({
             onPointerDown={(e) => e.stopPropagation()}
             onPointerUp={(e) => e.stopPropagation()}
           >
-            <Input
-              ref={searchInputRef}
-              size="xs"
-              placeholder={searchPlaceholder || 'Search...'}
-              value={searchValue}
-              onChange={(e) => onSearchChange?.(e.target.value)}
-              onKeyDown={(e) => e.stopPropagation()}
-              onFocus={() => { isSearchFocusedRef.current = true; }}
-              onBlur={() => {
-                requestAnimationFrame(() => {
-                  if (isSearchFocusedRef.current) {
-                    searchInputRef.current?.focus();
+            <div className="relative">
+              <Input
+                ref={searchInputRef}
+                size="xs"
+                placeholder={searchPlaceholder || 'Search...'}
+                value={searchValue}
+                onChange={(e) => onSearchChange?.(e.target.value)}
+                disableKeyboardStep
+                onKeyDown={(e) => {
+                  // Let arrow keys / Enter / Escape bubble up so Radix can
+                  // move the highlighted item and confirm selection; stop
+                  // everything else from hijacking the Select's typeahead.
+                  if (
+                    e.key === 'ArrowUp' ||
+                    e.key === 'ArrowDown' ||
+                    e.key === 'Home' ||
+                    e.key === 'End' ||
+                    e.key === 'PageUp' ||
+                    e.key === 'PageDown'
+                  ) {
+                    lastNavKeyAtRef.current = Date.now();
+                  } else if (e.key !== 'Enter' && e.key !== 'Escape') {
+                    e.stopPropagation();
                   }
-                });
-              }}
-            />
+                }}
+                onFocus={() => { isSearchFocusedRef.current = true; }}
+                onBlur={(e) => {
+                  // Only allow focus transfer to an item when the user just
+                  // pressed a navigation key. Otherwise (e.g. Radix
+                  // re-focusing after the items list updates as search
+                  // results stream in) refocus the search input so typing
+                  // is uninterrupted.
+                  const next = e.relatedTarget as HTMLElement | null;
+                  const isUserNav = Date.now() - lastNavKeyAtRef.current < 150;
+                  if (isUserNav && next?.closest('[role="option"]')) return;
+                  requestAnimationFrame(() => {
+                    if (isSearchFocusedRef.current) {
+                      searchInputRef.current?.focus();
+                    }
+                  });
+                }}
+                className={cn(searchLoading && 'pr-7')}
+              />
+              {searchLoading && (
+                <Spinner className="absolute right-2 top-1/2 -translate-y-1/2 size-3.5" />
+              )}
+            </div>
           </div>
         )}
         <SelectScrollUpButton />
@@ -187,7 +226,12 @@ function SelectLabel({
   )
 }
 
-function SelectItem({
+// Memoized so the dozens of right-sidebar `<Select>`s (which keep their items
+// mounted in a hidden DocumentFragment even when closed, for Radix keyboard
+// typeahead) don't re-render every item on every layer-selection cascade.
+// Most call sites pass primitive `value` + string `children`, so the shallow
+// prop compare bails cheaply.
+const SelectItem = React.memo(function SelectItem({
   className,
   children,
   ...props
@@ -218,7 +262,7 @@ function SelectItem({
       </span>
     </SelectPrimitive.Item>
   )
-}
+});
 
 function SelectSeparator({
   className,

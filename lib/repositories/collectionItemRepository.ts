@@ -1,13 +1,15 @@
-import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
-import type { CollectionItem, CollectionItemWithValues } from '@/types';
+import { getSupabaseAdmin, getTenantIdFromHeaders } from '@/lib/supabase-server';
+import { getKnexClient } from '@/lib/knex-client';
+import { SUPABASE_IN_FILTER_CHUNK_SIZE, SUPABASE_QUERY_LIMIT, SUPABASE_WRITE_BATCH_SIZE } from '@/lib/supabase-constants';
+import type { CollectionField, CollectionItem, CollectionItemWithValues } from '@/types';
 import { randomUUID } from 'crypto';
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
-import { getValuesByFieldId, getValuesByItemIds, getValuesByItemId } from '@/lib/repositories/collectionItemValueRepository';
+import { getValuesByFieldId, getValuesByItemIds, getValuesByItemId, getValueRowsForItems } from '@/lib/repositories/collectionItemValueRepository';
 import { generateCollectionItemContentHash } from '@/lib/hash-utils';
 import { castValue } from '../collection-utils';
 import { findStatusFieldId, buildStatusValue } from '@/lib/collection-field-utils';
 import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired, resolveProjectScopeForWrite, tableHasProjectScopeColumn } from '@/lib/project-scope';
+import { chunk } from '@/lib/utils';
 
 /**
  * Collection Item Repository
@@ -216,7 +218,7 @@ export async function getItemsByCollectionId(
     filterIds = matchingItemIds;
   }
 
-  // Build base query for counting
+  // Build count query
   let countQuery = client
     .from('collection_items')
     .select('*', { count: 'exact', head: true })
@@ -224,17 +226,12 @@ export async function getItemsByCollectionId(
     .eq('is_published', is_published);
   countQuery = (await applyProjectScopeToQuery(countQuery, client, 'collection_items', projectId)).query;
 
-  // For published queries, only include publishable items
   if (is_published) {
     countQuery = countQuery.eq('is_publishable', true);
   }
-
-  // Apply item ID filter to count query (from itemIds filter and/or search)
   if (filterIds !== null) {
     countQuery = countQuery.in('id', filterIds);
   }
-
-  // Apply deleted filter to count query
   if (filters && 'deleted' in filters) {
     if (filters.deleted === false) {
       countQuery = countQuery.is('deleted_at', null);
@@ -245,14 +242,7 @@ export async function getItemsByCollectionId(
     countQuery = countQuery.is('deleted_at', null);
   }
 
-  // Execute count query
-  const { count, error: countError } = await countQuery;
-
-  if (countError) {
-    throw new Error(`Failed to count collection items: ${countError.message}`);
-  }
-
-  // Build query for fetching items
+  // Build data query
   let query = client
     .from('collection_items')
     .select('*')
@@ -262,30 +252,21 @@ export async function getItemsByCollectionId(
     .order('created_at', { ascending: false });
   query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
 
-  // For published queries, only include publishable items
   if (is_published) {
     query = query.eq('is_publishable', true);
   }
-
-  // Apply item ID filter (from itemIds filter and/or search)
   if (filterIds !== null) {
     query = query.in('id', filterIds);
   }
-
-  // Apply filters - only filter deleted_at when explicitly specified
   if (filters && 'deleted' in filters) {
     if (filters.deleted === false) {
       query = query.is('deleted_at', null);
     } else if (filters.deleted === true) {
       query = query.not('deleted_at', 'is', null);
     }
-    // If deleted is explicitly undefined, include all items (no filter)
   } else {
-    // No filters provided: default to excluding deleted items
     query = query.is('deleted_at', null);
   }
-
-  // Apply pagination
   if (filters?.limit !== undefined) {
     query = query.limit(filters.limit);
   }
@@ -293,58 +274,69 @@ export async function getItemsByCollectionId(
     query = query.range(filters.offset, filters.offset + (filters.limit || 25) - 1);
   }
 
-  const { data, error } = await query;
+  // Run count and data queries in parallel
+  const [countResult, dataResult] = await Promise.all([countQuery, query]);
 
-  if (error) {
-    throw new Error(`Failed to fetch collection items: ${error.message}`);
+  if (countResult.error) {
+    throw new Error(`Failed to count collection items: ${countResult.error.message}`);
+  }
+  if (dataResult.error) {
+    throw new Error(`Failed to fetch collection items: ${dataResult.error.message}`);
   }
 
-  return { items: data || [], total: count || 0 };
+  return { items: dataResult.data || [], total: countResult.count || 0 };
 }
 
 /**
- * Enrich draft items with computed status values for the Status field.
- * Injects `{ is_publishable, is_published, is_modified }` JSON into each item's
- * values map under the status field's ID, matching the old project's format.
+ * Fetch the published-counterpart content hash for a set of draft item IDs.
+ * Backfills any rows missing a hash so subsequent calls are cheap. Exposed
+ * so callers (e.g. the batch endpoint) can fetch once for many collections.
  */
-export async function enrichItemsWithStatus(
-  items: CollectionItemWithValues[],
-  collectionId: string,
-  statusFieldId: string | null,
+export async function fetchPublishedHashMap(
+  itemIds: string[],
   projectId?: string | null,
-): Promise<void> {
-  if (!statusFieldId || items.length === 0) return;
+): Promise<Map<string, string | null>> {
+  const publishedHashMap = new Map<string, string | null>();
+  if (itemIds.length === 0) return publishedHashMap;
 
   const client = await getSupabaseAdmin();
   if (!client) throw new Error('Supabase client not configured');
 
-  const itemIds = items.map(item => item.id);
-
-  // Fetch published counterparts (id + content_hash) in one query
   let publishedRows: Array<{ id: string; content_hash: string | null }> | null = null;
   try {
-    let publishedQuery = client
-      .from('collection_items')
-      .select('id, content_hash')
-      .in('id', itemIds)
-      .eq('is_published', true)
-      .is('deleted_at', null);
-    publishedQuery = (await applyProjectScopeToQuery(publishedQuery, client, 'collection_items', projectId)).query;
-    const { data, error } = await publishedQuery;
+    // Chunk the ID list: a single large `.in()` overflows the request URL length
+    // limit and returns 400 Bad Request. Fetch chunks in parallel and merge.
+    const chunkResults = await Promise.all(
+      chunk(itemIds, SUPABASE_IN_FILTER_CHUNK_SIZE).map(async (idsChunk) => {
+        let publishedQuery = client
+          .from('collection_items')
+          .select('id, content_hash')
+          .in('id', idsChunk)
+          .eq('is_published', true)
+          .is('deleted_at', null);
+        publishedQuery = (await applyProjectScopeToQuery(publishedQuery, client, 'collection_items', projectId)).query;
+        const { data, error } = await publishedQuery;
 
-    if (error) {
-      console.error('Failed to fetch published items for status:', error.message);
-    } else {
-      publishedRows = data;
+        if (error) {
+          console.error('Failed to fetch published items for status:', error.message);
+          return null;
+        }
+        return data;
+      }),
+    );
+
+    // If every chunk failed, keep publishedRows null; otherwise merge successful chunks
+    if (chunkResults.some((rows) => rows !== null)) {
+      publishedRows = chunkResults.flatMap((rows) => rows ?? []);
     }
   } catch (err) {
     // Transient network errors should not break the items endpoint
     console.error('Network error fetching published items for status:', err);
   }
 
-  const publishedHashMap = new Map<string, string | null>(
-    (publishedRows || []).map(row => [row.id, row.content_hash])
-  );
+  for (const row of publishedRows || []) {
+    publishedHashMap.set(row.id, row.content_hash);
+  }
 
   // Backfill published items that have null content_hash
   const itemsMissingHash = (publishedRows || []).filter(row => row.content_hash == null);
@@ -367,8 +359,31 @@ export async function enrichItemsWithStatus(
     await Promise.all(backfillPromises);
   }
 
+  return publishedHashMap;
+}
+
+/**
+ * Enrich draft items with computed status values for the Status field.
+ * Injects `{ is_publishable, is_published, is_modified }` JSON into each item's
+ * values map under the status field's ID, matching the old project's format.
+ *
+ * Pass `publishedHashMap` (e.g. from a single batch fetch across collections)
+ * to skip the per-call DB round-trip.
+ */
+export async function enrichItemsWithStatus(
+  items: CollectionItemWithValues[],
+  collectionId: string,
+  statusFieldId: string | null,
+  publishedHashMap?: Map<string, string | null>,
+  projectId?: string | null,
+): Promise<void> {
+  if (!statusFieldId || items.length === 0) return;
+
+  const hashMap = publishedHashMap
+    ?? await fetchPublishedHashMap(items.map(item => item.id), projectId);
+
   for (const item of items) {
-    const publishedHash = publishedHashMap.get(item.id);
+    const publishedHash = hashMap.get(item.id);
     const hasPublishedVersion = publishedHash !== undefined;
     const isModified = hasPublishedVersion
       && item.content_hash != null
@@ -389,7 +404,59 @@ export async function enrichSingleItemWithStatus(
   projectId?: string | null,
 ): Promise<void> {
   const fields = await getFieldsByCollectionId(collectionId, false, undefined, projectId);
-  await enrichItemsWithStatus([item], collectionId, findStatusFieldId(fields), projectId);
+  await enrichItemsWithStatus([item], collectionId, findStatusFieldId(fields), undefined, projectId);
+}
+
+/**
+ * Get every non-deleted item across all collections in one direct-DB (Knex) read.
+ * Intended for bulk publish flows that group items by collection in memory,
+ * avoiding a per-collection round-trip. Falls back to paginated PostgREST.
+ * @param tenantId - Optional explicit tenant scope (required inside unstable_cache)
+ */
+export async function getAllItemsRaw(
+  is_published: boolean,
+  tenantId?: string
+): Promise<CollectionItem[]> {
+  try {
+    const knex = await getKnexClient();
+    const resolvedTenantId = tenantId ?? await getTenantIdFromHeaders();
+    let query = knex('collection_items')
+      .select('*')
+      .where('is_published', is_published)
+      .whereNull('deleted_at');
+    if (resolvedTenantId) {
+      query = query.where('tenant_id', resolvedTenantId);
+    }
+    return await query;
+  } catch {
+    const client = await getSupabaseAdmin(tenantId);
+    if (!client) {
+      throw new Error('Supabase client not configured');
+    }
+
+    const allItems: CollectionItem[] = [];
+    let offset = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const { data, error } = await client
+        .from('collection_items')
+        .select('*')
+        .eq('is_published', is_published)
+        .is('deleted_at', null)
+        .order('id', { ascending: true })
+        .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+
+      if (error) {
+        throw new Error(`Failed to fetch collection items: ${error.message}`);
+      }
+
+      const batch = data || [];
+      allItems.push(...batch);
+      hasMore = batch.length === SUPABASE_QUERY_LIMIT;
+      offset += batch.length;
+    }
+    return allItems;
+  }
 }
 
 /**
@@ -403,55 +470,91 @@ export async function getAllItemsByCollectionId(
   includeDeleted: boolean = false,
   projectId?: string | null
 ): Promise<CollectionItem[]> {
-  const client = await getSupabaseAdmin();
-
-  if (!client) {
-    throw new Error('Supabase client not configured');
+  let hasProjectScope = false;
+  {
+    const scopeClient = await getSupabaseAdmin();
+    if (scopeClient) {
+      hasProjectScope = await tableHasProjectScopeColumn(scopeClient, 'collection_items');
+    }
+  }
+  if (isSharedDbProjectScopeRequired() && (!hasProjectScope || !projectId)) {
+    throw new Error('Project scope is required for collection_items');
   }
 
-  const allItems: CollectionItem[] = [];
-  let offset = 0;
-  let hasMore = true;
-
-  while (hasMore) {
-    let query = client
-      .from('collection_items')
+  // Fast path: one direct-DB (Knex) query instead of paginated PostgREST reads.
+  try {
+    const knex = await getKnexClient();
+    const resolvedTenantId = await getTenantIdFromHeaders();
+    let query = knex('collection_items')
       .select('*')
-      .eq('collection_id', collection_id)
-      .eq('is_published', is_published)
-      .order('manual_order', { ascending: true })
-      .order('created_at', { ascending: false })
-      .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
-    query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
-
+      .where('collection_id', collection_id)
+      .andWhere('is_published', is_published)
+      .orderBy('manual_order', 'asc')
+      .orderBy('created_at', 'desc');
+    if (hasProjectScope && projectId) {
+      query = query.where('project_id', projectId);
+    }
     // For published queries, only include publishable items
     if (is_published) {
-      query = query.eq('is_publishable', true);
+      query = query.where('is_publishable', true);
+    }
+    if (resolvedTenantId) {
+      query = query.where('tenant_id', resolvedTenantId);
+    }
+    query = includeDeleted
+      ? query.whereNotNull('deleted_at')
+      : query.whereNull('deleted_at');
+    return await query;
+  } catch {
+    // Fallback: paginated PostgREST reads
+    const client = await getSupabaseAdmin();
+    if (!client) {
+      throw new Error('Supabase client not configured');
     }
 
-    // Apply deleted filter
-    if (includeDeleted) {
-      query = query.not('deleted_at', 'is', null);
-    } else {
-      query = query.is('deleted_at', null);
+    const allItems: CollectionItem[] = [];
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      let query = client
+        .from('collection_items')
+        .select('*')
+        .eq('collection_id', collection_id)
+        .eq('is_published', is_published)
+        .order('manual_order', { ascending: true })
+        .order('created_at', { ascending: false })
+        .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+      query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
+
+      // For published queries, only include publishable items
+      if (is_published) {
+        query = query.eq('is_publishable', true);
+      }
+
+      if (includeDeleted) {
+        query = query.not('deleted_at', 'is', null);
+      } else {
+        query = query.is('deleted_at', null);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        throw new Error(`Failed to fetch collection items: ${error.message}`);
+      }
+
+      if (data && data.length > 0) {
+        allItems.push(...data);
+        offset += data.length;
+        hasMore = data.length === SUPABASE_QUERY_LIMIT;
+      } else {
+        hasMore = false;
+      }
     }
 
-    const { data, error } = await query;
-
-    if (error) {
-      throw new Error(`Failed to fetch collection items: ${error.message}`);
-    }
-
-    if (data && data.length > 0) {
-      allItems.push(...data);
-      offset += data.length;
-      hasMore = data.length === SUPABASE_QUERY_LIMIT;
-    } else {
-      hasMore = false;
-    }
+    return allItems;
   }
-
-  return allItems;
 }
 
 /**
@@ -490,33 +593,70 @@ export async function getItemById(id: string, isPublished: boolean = false, proj
 export async function getItemsByIds(
   ids: string[],
   isPublished: boolean = false,
-  projectId?: string | null
+  projectId?: string | null,
+  tenantId?: string
 ): Promise<CollectionItem[]> {
   if (ids.length === 0) {
     return [];
   }
 
-  const client = await getSupabaseAdmin();
-
-  if (!client) {
-    throw new Error('Supabase client not configured');
+  let hasProjectScope = false;
+  {
+    const scopeClient = await getSupabaseAdmin(tenantId);
+    if (scopeClient) {
+      hasProjectScope = await tableHasProjectScopeColumn(scopeClient, 'collection_items');
+    }
+  }
+  if (isSharedDbProjectScopeRequired() && (!hasProjectScope || !projectId)) {
+    throw new Error('Project scope is required for collection_items');
   }
 
-  let query = client
-    .from('collection_items')
-    .select('*')
-    .in('id', ids)
-    .eq('is_published', isPublished)
-    .is('deleted_at', null);
-  query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
+  // Fast path: one direct-DB (Knex) query instead of chunked PostgREST `.in()`
+  // reads (100 IDs/round-trip). On large collections this collapses ~16
+  // round-trips per call into one — the dominant cost of publishing.
+  try {
+    const knex = await getKnexClient();
+    const resolvedTenantId = tenantId ?? await getTenantIdFromHeaders();
+    let query = knex('collection_items')
+      .select('*')
+      .whereIn('id', ids)
+      .andWhere('is_published', isPublished)
+      .whereNull('deleted_at');
+    if (resolvedTenantId) {
+      query = query.where('tenant_id', resolvedTenantId);
+    }
+    if (hasProjectScope && projectId) {
+      query = query.where('project_id', projectId);
+    }
+    return await query;
+  } catch {
+    // Fallback: chunked PostgREST reads
+    const client = await getSupabaseAdmin(tenantId);
+    if (!client) {
+      throw new Error('Supabase client not configured');
+    }
 
-  const { data, error } = await query;
+    const allItems: CollectionItem[] = [];
+    for (let i = 0; i < ids.length; i += SUPABASE_WRITE_BATCH_SIZE) {
+      const batchIds = ids.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
+      let query = client
+        .from('collection_items')
+        .select('*')
+        .in('id', batchIds)
+        .eq('is_published', isPublished)
+        .is('deleted_at', null);
+      query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
+      const { data, error } = await query;
 
-  if (error) {
-    throw new Error(`Failed to fetch collection items: ${error.message}`);
+      if (error) {
+        throw new Error(`Failed to fetch collection items: ${error.message}`);
+      }
+      if (data) {
+        allItems.push(...data);
+      }
+    }
+    return allItems;
   }
-
-  return data || [];
 }
 
 /**
@@ -631,6 +771,172 @@ export async function getItemIdsByFieldValue(
 }
 
 /**
+ * Sort + paginate items by a field value at the DB level using a LEFT JOIN.
+ * Avoids fetching every item for the collection: only the requested page
+ * is materialized with full values. Items with no value for the sort field
+ * appear last (ASC) or first (DESC) so the relative ordering matches what
+ * a client-side sort would produce.
+ *
+ * Pass `knownFieldTypes` to skip the extra `collection_fields` lookup when
+ * the caller has already loaded the field schema.
+ */
+export async function getItemsSortedByField(
+  collection_id: string,
+  sortFieldId: string,
+  sortOrder: 'asc' | 'desc' = 'asc',
+  is_published: boolean = false,
+  limit: number = 25,
+  offset: number = 0,
+  search?: string,
+  knownFieldTypes?: Record<string, string>,
+  projectId?: string | null,
+): Promise<{ items: CollectionItemWithValues[], total: number }> {
+  const scopeClient = await getSupabaseAdmin();
+  const hasItemsProjectScope = scopeClient
+    ? await tableHasProjectScopeColumn(scopeClient, 'collection_items')
+    : false;
+  const hasValuesProjectScope = scopeClient
+    ? await tableHasProjectScopeColumn(scopeClient, 'collection_item_values')
+    : false;
+  if (isSharedDbProjectScopeRequired() && (!hasItemsProjectScope || !hasValuesProjectScope || !projectId)) {
+    throw new Error('Project scope is required for collection_items and collection_item_values');
+  }
+
+  const knex = await getKnexClient();
+
+  const safeSortOrder = sortOrder === 'desc' ? 'DESC' : 'ASC';
+  const nullsPosition = safeSortOrder === 'ASC' ? 'NULLS LAST' : 'NULLS FIRST';
+
+  let searchItemIds: string[] | null = null;
+  if (search?.trim()) {
+    const searchTerm = `%${search.trim()}%`;
+    const matchRowsQuery = knex('collection_item_values')
+      .distinct('item_id')
+      .where('is_published', is_published)
+      .whereNull('deleted_at')
+      .andWhereILike('value', searchTerm);
+    if (hasValuesProjectScope && projectId) {
+      matchRowsQuery.andWhere('project_id', projectId);
+    }
+    const matchRows = await matchRowsQuery;
+
+    if (matchRows.length === 0) return { items: [], total: 0 };
+    searchItemIds = matchRows.map((r: { item_id: string }) => r.item_id);
+  }
+
+  let baseQuery = knex('collection_items as ci')
+    .leftJoin('collection_item_values as civ', function () {
+      this.on('civ.item_id', 'ci.id')
+        .andOn('civ.is_published', knex.raw('?', [is_published]))
+        .andOn('civ.field_id', knex.raw('?', [sortFieldId]))
+        .andOn(knex.raw('civ.deleted_at IS NULL'));
+      if (hasValuesProjectScope && projectId) {
+        this.andOn('civ.project_id', knex.raw('?', [projectId]));
+      }
+    })
+    .where('ci.collection_id', collection_id)
+    .andWhere('ci.is_published', is_published)
+    .whereNull('ci.deleted_at');
+
+  if (hasItemsProjectScope && projectId) {
+    baseQuery = baseQuery.andWhere('ci.project_id', projectId);
+  }
+  if (is_published) {
+    baseQuery = baseQuery.andWhere('ci.is_publishable', true);
+  }
+  if (searchItemIds) {
+    baseQuery = baseQuery.whereIn('ci.id', searchItemIds);
+  }
+
+  const [countResult, rows] = await Promise.all([
+    baseQuery.clone().count('ci.id as count').first(),
+    baseQuery.clone()
+      .select('ci.*')
+      .orderByRaw(`civ.value ${safeSortOrder} ${nullsPosition}`)
+      .orderBy('ci.manual_order', 'asc')
+      .limit(limit)
+      .offset(offset),
+  ]);
+
+  const total = Number(countResult?.count) || 0;
+
+  if (rows.length === 0) {
+    return { items: [], total };
+  }
+
+  const itemIds = rows.map((r: CollectionItem) => r.id);
+  const valuesByItem = await getValuesByItemIds(itemIds, is_published, knownFieldTypes, undefined, projectId);
+
+  const items: CollectionItemWithValues[] = rows.map((row: CollectionItem) => ({
+    ...row,
+    values: valuesByItem[row.id] || {},
+  }));
+
+  return { items, total };
+}
+
+/**
+ * Batch fetch items with their values by arbitrary IDs (cross-collection).
+ * Returns a map keyed by item ID for O(1) lookups.
+ * Uses 2 queries total regardless of item count.
+ */
+export async function getItemsWithValuesByIds(
+  ids: string[],
+  is_published: boolean = false,
+  projectId?: string | null,
+): Promise<Record<string, CollectionItemWithValues>> {
+  if (ids.length === 0) return {};
+
+  const items = await getItemsByIds(ids, is_published, projectId);
+  if (items.length === 0) return {};
+
+  const valuesByItem = await getValuesByItemIds(items.map(i => i.id), is_published, undefined, undefined, projectId);
+
+  const result: Record<string, CollectionItemWithValues> = {};
+  for (const item of items) {
+    result[item.id] = { ...item, values: valuesByItem[item.id] || {} };
+  }
+  return result;
+}
+
+/**
+ * Batch fetch slug values for arbitrary item IDs across collections.
+ * Returns a map keyed by item ID. Only items whose owning collection has a
+ * `slug` field with a non-empty value are included.
+ */
+export async function getSlugsByItemIds(
+  ids: string[],
+  is_published: boolean = false,
+  projectId?: string | null,
+): Promise<Record<string, string>> {
+  if (ids.length === 0) return {};
+
+  const itemsByIds = await getItemsWithValuesByIds(ids, is_published, projectId);
+  const itemList = Object.values(itemsByIds);
+  if (itemList.length === 0) return {};
+
+  const refCollectionIds = Array.from(new Set(itemList.map(i => i.collection_id)));
+  const fieldsByCollection = new Map<string, CollectionField[]>();
+  await Promise.all(
+    refCollectionIds.map(async (collId) => {
+      const fields = await getFieldsByCollectionId(collId, is_published, undefined, projectId);
+      fieldsByCollection.set(collId, fields);
+    })
+  );
+
+  const slugs: Record<string, string> = {};
+  for (const item of itemList) {
+    const fields = fieldsByCollection.get(item.collection_id);
+    const slugField = fields?.find(f => f.key === 'slug');
+    const slugValue = slugField ? item.values[slugField.id] : undefined;
+    if (slugValue) {
+      slugs[item.id] = slugValue;
+    }
+  }
+  return slugs;
+}
+
+/**
  * Get multiple items with their values
  * @param collection_id - Collection UUID
  * @param is_published - Filter for draft (false) or published (true) items and values. Defaults to false (draft).
@@ -640,6 +946,7 @@ export async function getItemsWithValues(
   collection_id: string,
   is_published: boolean = false,
   filters?: QueryFilters,
+  knownFieldTypes?: Record<string, string>,
   projectId?: string | null
 ): Promise<{ items: CollectionItemWithValues[], total: number }> {
   const { items, total } = await getItemsByCollectionId(collection_id, is_published, filters, projectId);
@@ -649,7 +956,7 @@ export async function getItemsWithValues(
   }
 
   const itemIds = items.map(item => item.id);
-  const valuesByItem = await getValuesByItemIds(itemIds, is_published, projectId);
+  const valuesByItem = await getValuesByItemIds(itemIds, is_published, knownFieldTypes, undefined, projectId);
 
   const itemsWithValues: CollectionItemWithValues[] = items.map(item => ({
     ...item,
@@ -691,7 +998,7 @@ export async function getTopItemsWithValuesPerCollection(
 
   // Query 2: Get all values for these items in one query
   const itemIds = items.map(item => item.id);
-  const valuesByItem = await getValuesByItemIds(itemIds, is_published, projectId);
+  const valuesByItem = await getValuesByItemIds(itemIds, is_published, undefined, undefined, projectId);
 
   // Combine items with their values
   const itemsWithValues: CollectionItemWithValues[] = items.map(item => ({
@@ -1265,33 +1572,47 @@ export async function getTotalPublishableItemsCount(projectId?: string | null): 
 
   const collectionIds = collections.map(c => c.id);
 
-  let draftItemsQuery = client
-    .from('collection_items')
-    .select('id, manual_order')
-    .in('collection_id', collectionIds)
-    .eq('is_published', false)
-    .eq('is_publishable', true)
-    .is('deleted_at', null);
-  draftItemsQuery = (await applyProjectScopeToQuery(draftItemsQuery, client, 'collection_items', projectId)).query;
+  // Paginate both queries to avoid PostgREST's default 1000-row limit
+  const fetchAllItems = async (isPublished: boolean): Promise<Array<{ id: string; manual_order: number }>> => {
+    const rows: Array<{ id: string; manual_order: number }> = [];
+    let offset = 0;
 
-  let publishedItemsQuery = client
-    .from('collection_items')
-    .select('id, manual_order')
-    .in('collection_id', collectionIds)
-    .eq('is_published', true);
-  publishedItemsQuery = (await applyProjectScopeToQuery(publishedItemsQuery, client, 'collection_items', projectId)).query;
+    while (true) {
+      let query = client
+        .from('collection_items')
+        .select('id, manual_order')
+        .in('collection_id', collectionIds)
+        .eq('is_published', isPublished)
+        .order('id', { ascending: true })
+        .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+      query = (await applyProjectScopeToQuery(query, client, 'collection_items', projectId)).query;
 
-  const [draftResult, publishedResult] = await Promise.all([
-    draftItemsQuery,
-    publishedItemsQuery,
+      if (!isPublished) {
+        query = query.eq('is_publishable', true).is('deleted_at', null);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        throw new Error(`Failed to fetch ${isPublished ? 'published' : 'draft'} items: ${error.message}`);
+      }
+
+      const batch = data || [];
+      rows.push(...batch);
+
+      if (batch.length < SUPABASE_QUERY_LIMIT) break;
+      offset += SUPABASE_QUERY_LIMIT;
+    }
+
+    return rows;
+  };
+
+  const [draftItems, publishedItems] = await Promise.all([
+    fetchAllItems(false),
+    fetchAllItems(true),
   ]);
 
-  if (draftResult.error) {
-    throw new Error(`Failed to fetch draft items: ${draftResult.error.message}`);
-  }
-
   const publishedMap = new Map<string, number>();
-  for (const pub of publishedResult.data || []) {
+  for (const pub of publishedItems) {
     publishedMap.set(pub.id, pub.manual_order);
   }
 
@@ -1299,7 +1620,7 @@ export async function getTotalPublishableItemsCount(projectId?: string | null): 
   let count = 0;
   const matchingOrderItemIds: string[] = [];
 
-  for (const draft of draftResult.data || []) {
+  for (const draft of draftItems) {
     const pubOrder = publishedMap.get(draft.id);
     if (pubOrder === undefined || draft.manual_order !== pubOrder) {
       count++;
@@ -1308,95 +1629,69 @@ export async function getTotalPublishableItemsCount(projectId?: string | null): 
     }
   }
 
-  // For items with matching metadata, check value changes in batches
+  // For items with matching metadata, check value changes
   if (matchingOrderItemIds.length > 0) {
-    count += await countItemsWithValueChanges(client, matchingOrderItemIds, projectId);
+    const valueChanges = await countItemsWithValueChanges(matchingOrderItemIds, projectId);
+    count += valueChanges;
   }
 
   return count;
 }
 
 /**
- * Count items that have value-level changes between draft and published.
- * Processes in batches to stay within Supabase query limits.
+ * Count items whose draft values differ from published. Reads all values via
+ * the direct-DB (Knex) path in two queries rather than paginated PostgREST
+ * batches of 50 items.
  */
-async function countItemsWithValueChanges(
-  client: Exclude<Awaited<ReturnType<typeof getSupabaseAdmin>>, null>,
-  itemIds: string[],
-  projectId?: string | null
-): Promise<number> {
-  const BATCH_SIZE = 50;
-  let changedCount = 0;
+async function countItemsWithValueChanges(itemIds: string[], projectId?: string | null): Promise<number> {
+  if (itemIds.length === 0) return 0;
 
-  for (let i = 0; i < itemIds.length; i += BATCH_SIZE) {
-    const batchIds = itemIds.slice(i, i + BATCH_SIZE);
+  let draftValueRows: Awaited<ReturnType<typeof getValueRowsForItems>> = [];
+  let publishedValueRows: Awaited<ReturnType<typeof getValueRowsForItems>> = [];
 
-    let draftValuesQuery = client
-      .from('collection_item_values')
-      .select('item_id, field_id, value')
-      .in('item_id', batchIds)
-      .eq('is_published', false)
-      .is('deleted_at', null)
-      .limit(SUPABASE_QUERY_LIMIT);
-    draftValuesQuery = (await applyProjectScopeToQuery(draftValuesQuery, client, 'collection_item_values', projectId)).query;
-
-    let publishedValuesQuery = client
-      .from('collection_item_values')
-      .select('item_id, field_id, value')
-      .in('item_id', batchIds)
-      .eq('is_published', true)
-      .is('deleted_at', null)
-      .limit(SUPABASE_QUERY_LIMIT);
-    publishedValuesQuery = (await applyProjectScopeToQuery(publishedValuesQuery, client, 'collection_item_values', projectId)).query;
-
-    const [draftValsResult, pubValsResult] = await Promise.all([
-      draftValuesQuery,
-      publishedValuesQuery,
+  try {
+    [draftValueRows, publishedValueRows] = await Promise.all([
+      getValueRowsForItems(itemIds, false, projectId),
+      getValueRowsForItems(itemIds, true, projectId),
     ]);
+  } catch {
+    return 0; // Treat read failure as "no detectable changes" for the count
+  }
 
-    if (draftValsResult.error || pubValsResult.error) {
-      continue; // Skip batch on error, don't break the count
+  const groupByItem = (
+    rows: Array<{ item_id: string; field_id: string; value: string | null }>,
+  ): Map<string, Map<string, string | null>> => {
+    const map = new Map<string, Map<string, string | null>>();
+    for (const v of rows) {
+      if (!map.has(v.item_id)) map.set(v.item_id, new Map());
+      map.get(v.item_id)!.set(v.field_id, v.value);
+    }
+    return map;
+  };
+
+  const draftValsByItem = groupByItem(draftValueRows);
+  const pubValsByItem = groupByItem(publishedValueRows);
+
+  let changedCount = 0;
+  for (const itemId of itemIds) {
+    const draftVals = draftValsByItem.get(itemId) || new Map();
+    const pubVals = pubValsByItem.get(itemId) || new Map();
+
+    if (draftVals.size !== pubVals.size) {
+      changedCount++;
+      continue;
     }
 
-    // Build published values lookup: item_id -> (field_id -> value)
-    const pubValsByItem = new Map<string, Map<string, string | null>>();
-    for (const v of pubValsResult.data || []) {
-      if (!pubValsByItem.has(v.item_id)) {
-        pubValsByItem.set(v.item_id, new Map());
+    let hasChange = false;
+    for (const [fieldId, draftValue] of draftVals) {
+      if (!pubVals.has(fieldId) || draftValue !== pubVals.get(fieldId)) {
+        hasChange = true;
+        break;
       }
-      pubValsByItem.get(v.item_id)!.set(v.field_id, v.value);
     }
 
-    // Build draft values grouped by item_id
-    const draftValsByItem = new Map<string, Map<string, string | null>>();
-    for (const v of draftValsResult.data || []) {
-      if (!draftValsByItem.has(v.item_id)) {
-        draftValsByItem.set(v.item_id, new Map());
-      }
-      draftValsByItem.get(v.item_id)!.set(v.field_id, v.value);
-    }
-
-    // Compare each item's values
-    for (const itemId of batchIds) {
-      const draftVals = draftValsByItem.get(itemId) || new Map();
-      const pubVals = pubValsByItem.get(itemId) || new Map();
-
-      if (draftVals.size !== pubVals.size) {
-        changedCount++;
-        continue;
-      }
-
-      let hasChange = false;
-      for (const [fieldId, draftValue] of draftVals) {
-        if (!pubVals.has(fieldId) || draftValue !== pubVals.get(fieldId)) {
-          hasChange = true;
-          break;
-        }
-      }
-
-      if (hasChange) {
-        changedCount++;
-      }
+    if (hasChange) {
+      changedCount++;
     }
   }
 

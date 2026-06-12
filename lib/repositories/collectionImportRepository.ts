@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { STORAGE_BUCKET } from '@/lib/asset-constants';
 import type { CollectionImport, CollectionImportStatus } from '@/types';
 
 /**
@@ -11,8 +12,8 @@ import type { CollectionImport, CollectionImportStatus } from '@/types';
 export interface CreateImportData {
   collection_id: string;
   column_mapping: Record<string, string>;
-  csv_data: Record<string, string>[];
   total_rows: number;
+  csv_storage_path: string;
 }
 
 /**
@@ -30,7 +31,7 @@ export async function createImport(data: CreateImportData): Promise<CollectionIm
     .insert({
       collection_id: data.collection_id,
       column_mapping: data.column_mapping,
-      csv_data: data.csv_data,
+      csv_data: { storage_path: data.csv_storage_path },
       total_rows: data.total_rows,
       status: 'pending',
       processed_rows: 0,
@@ -229,4 +230,51 @@ export async function getImportsByCollectionId(collectionId: string): Promise<Co
   }
 
   return data || [];
+}
+
+const STALE_IMPORT_HOURS = 2;
+
+/**
+ * Clean up stale import jobs and their CSV files from storage.
+ * Targets imports older than STALE_IMPORT_HOURS that are still pending/processing
+ * (i.e. the user closed the page or the server crashed).
+ */
+export async function cleanupStaleImports(): Promise<void> {
+  const client = await getSupabaseAdmin();
+  if (!client) return;
+
+  const cutoff = new Date(Date.now() - STALE_IMPORT_HOURS * 60 * 60 * 1000).toISOString();
+
+  const { data: staleImports, error } = await client
+    .from('collection_imports')
+    .select('id, csv_data')
+    .in('status', ['pending', 'processing'])
+    .lt('updated_at', cutoff);
+
+  if (error || !staleImports?.length) return;
+
+  // Collect storage paths to delete in one batch
+  const storagePaths: string[] = [];
+  const importIds: string[] = [];
+
+  for (const imp of staleImports) {
+    importIds.push(imp.id);
+    const csvData = imp.csv_data as { storage_path?: string } | null;
+    if (csvData?.storage_path) {
+      storagePaths.push(csvData.storage_path);
+    }
+  }
+
+  // Remove CSV files from storage
+  if (storagePaths.length > 0) {
+    try {
+      await client.storage.from(STORAGE_BUCKET).remove(storagePaths);
+    } catch { /* best-effort */ }
+  }
+
+  // Mark stale imports as failed
+  await client
+    .from('collection_imports')
+    .update({ status: 'failed' as CollectionImportStatus, updated_at: new Date().toISOString() })
+    .in('id', importIds);
 }

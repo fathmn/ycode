@@ -67,8 +67,11 @@ export function cleanSvgContent(svgContent: string): string {
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
     .replace(/\son\w+\s*=\s*["'][^"']*["']/gi, ''); // Remove event handlers like onclick, onload, etc.
 
-  // Remove potentially dangerous tags
-  const dangerousTags = ['script', 'iframe', 'embed', 'object', 'link', 'style'];
+  // Remove potentially dangerous tags. `<style>` is safe inside SVG (CSS can't
+  // execute code) and is commonly used to define class-based fills (e.g.
+  // `.cls-1 { fill: #5d5d5d; }` from Illustrator exports) — stripping it would
+  // leave path classes referencing nothing and the SVG would render all-black.
+  const dangerousTags = ['script', 'iframe', 'embed', 'object', 'link'];
   dangerousTags.forEach(tag => {
     const regex = new RegExp(`<${tag}\\b[^<]*(?:(?!<\\/${tag}>)<[^<]*)*<\\/${tag}>`, 'gi');
     cleaned = cleaned.replace(regex, '');
@@ -123,8 +126,8 @@ async function convertImageToWebP(file: File): Promise<{
   buffer: Buffer;
   mimeType: string;
   fileExtension: string;
-  width: number;
-  height: number;
+  width: number | null;
+  height: number | null;
 } | null> {
   try {
     // Only convert raster images (skip SVG, GIF with animations, etc.)
@@ -149,8 +152,8 @@ async function convertImageToWebP(file: File): Promise<{
       buffer: webpBuffer,
       mimeType: 'image/webp',
       fileExtension: 'webp',
-      width: metadata.width || 0,
-      height: metadata.height || 0,
+      width: metadata.width || null,
+      height: metadata.height || null,
     };
   } catch (error) {
     console.error('Error converting image to WebP:', error);
@@ -238,10 +241,11 @@ export async function uploadFile(
       fileExtension = webpConversion.fileExtension;
       mimeType = webpConversion.mimeType;
       fileSize = webpConversion.buffer.length;
-      dimensions = {
-        width: webpConversion.width,
-        height: webpConversion.height,
-      };
+      // Only persist dimensions when both are positive; zero/unknown values
+      // would otherwise produce invalid `width="0"` attributes on render.
+      dimensions = (webpConversion.width && webpConversion.height)
+        ? { width: webpConversion.width, height: webpConversion.height }
+        : null;
     } else {
       // Use original file
       fileToUpload = file;

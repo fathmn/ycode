@@ -48,6 +48,8 @@ import { useCollectionLayerStore } from '@/stores/useCollectionLayerStore';
 import { usePagesStore } from '@/stores/usePagesStore';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { useAssetsStore } from '@/stores/useAssetsStore';
+import { useLocalisationStore } from '@/stores/useLocalisationStore';
+import { useLocalizationMode } from '@/hooks/use-localization-mode';
 import { useLiveCollectionUpdates } from '@/hooks/use-live-collection-updates';
 import { useResourceLock } from '@/hooks/use-resource-lock';
 import { slugify, normalizeBooleanValue, parseMultiReferenceValue } from '@/lib/collection-utils';
@@ -65,7 +67,7 @@ import AssetFieldCard, { SortableAssetFieldCard } from './AssetFieldCard';
 import { DndContext, closestCenter, useSensor, useSensors, PointerSensor } from '@dnd-kit/core';
 import type { DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, rectSortingStrategy, arrayMove } from '@dnd-kit/sortable';
-import type { Asset, CollectionItemWithValues } from '@/types';
+import type { Asset, CollectionField, CollectionItemWithValues, CreateTranslationData } from '@/types';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -89,9 +91,20 @@ export default function CollectionItemSheet({
   const { collections, fields, items, updateItem, createItem, setItemStatus } = useCollectionsStore();
   const { updateItemInLayerData, invalidateLayerData, refetchLayersForCollection } = useCollectionLayerStore();
   const { updatePageCollectionItem, refetchPageCollectionItem, pages } = usePagesStore();
-  const { currentPageId, openFileManager } = useEditorStore();
+  const currentPageId = useEditorStore((state) => state.currentPageId);
+  const openFileManager = useEditorStore((state) => state.openFileManager);
   const getAsset = useAssetsStore((state) => state.getAsset);
   const timezone = useSettingsStore((state) => state.settingsByKey.timezone as string | null) ?? 'UTC';
+
+  // Localization: when the user is browsing the canvas in a non-default
+  // locale, this sheet edits CMS *translations* rather than the canonical
+  // collection item values. Reads/writes go through the translations table
+  // so canvas + preview pick up the new copy via applyCmsTranslations.
+  const { isLocalizing, currentLocale } = useLocalizationMode();
+  const selectedLocaleId = useLocalisationStore((state) => state.selectedLocaleId);
+  const createTranslation = useLocalisationStore((state) => state.createTranslation);
+  const updateTranslation = useLocalisationStore((state) => state.updateTranslation);
+  const deleteTranslation = useLocalisationStore((state) => state.deleteTranslation);
 
   // Collection collaboration sync
   const liveCollectionUpdates = useLiveCollectionUpdates();
@@ -238,18 +251,55 @@ export default function CollectionItemSheet({
     };
   }, [open, itemId]);
 
-  // Reset form when editing item changes
+  // Translatable CMS field types — must match extractCmsTranslatableItems /
+  // applyCmsTranslations so the read + write paths agree on which fields are
+  // localised vs canonical.
+  const isTranslatableField = useCallback((field: CollectionField) => {
+    return field.type === 'text' || field.type === 'rich_text';
+  }, []);
+
+  const buildCmsContentKey = useCallback((field: CollectionField) => {
+    return field.key ? `field:key:${field.key}` : `field:id:${field.id}`;
+  }, []);
+
+  // Reset form when editing item changes. In localizing mode, translatable
+  // fields seed from the saved translation (parsed for rich text); other
+  // fields keep their canonical values for read-only context. We deliberately
+  // snapshot translations once on mount/locale switch so a background refresh
+  // doesn't clobber the user's in-flight edits.
   useEffect(() => {
-    // Only include fillable/visible fields in form state to avoid
-    // sending computed fields (status, ID, timestamps) to the API
     const editableFields = collectionFields.filter(f => f.fillable);
 
     if (editingItem) {
+      const localeTranslations = isLocalizing && selectedLocaleId
+        ? useLocalisationStore.getState().translations[selectedLocaleId]
+        : undefined;
+
       const values: Record<string, any> = {};
       editableFields.forEach(field => {
-        let value = editingItem.values[field.id] ?? '';
-        if (field.type === 'boolean') {
-          value = normalizeBooleanValue(value);
+        let value: any;
+        if (isLocalizing && localeTranslations && isTranslatableField(field)) {
+          const tKey = `cms:${editingItem.id}:${buildCmsContentKey(field)}`;
+          const translation = localeTranslations[tKey];
+          const stored = translation?.content_value || '';
+          if (field.type === 'rich_text') {
+            if (stored) {
+              try {
+                value = JSON.parse(stored);
+              } catch {
+                value = '';
+              }
+            } else {
+              value = '';
+            }
+          } else {
+            value = stored;
+          }
+        } else {
+          value = editingItem.values[field.id] ?? '';
+          if (field.type === 'boolean') {
+            value = normalizeBooleanValue(value);
+          }
         }
         values[field.id] = value;
       });
@@ -265,7 +315,7 @@ export default function CollectionItemSheet({
       });
       form.reset(defaultValues);
     }
-  }, [editingItem, collectionFields, form]);
+  }, [editingItem, collectionFields, form, isLocalizing, selectedLocaleId, isTranslatableField, buildCmsContentKey]);
 
   // Handle auto-focus on sheet open
   const handleOpenAutoFocus = useCallback((e: Event) => {
@@ -313,8 +363,106 @@ export default function CollectionItemSheet({
     }
   }, [form, editingItem, collectionFields]);
 
+  // Save flow for non-default locales. Each translatable text/rich_text
+  // field is created/updated/deleted in the translations table; everything
+  // else is left untouched. Canvas + preview re-read translations from the
+  // store via applyCmsTranslations, so no extra optimistic patching of the
+  // canonical item is needed.
+  const handleLocalizedSubmit = (values: Record<string, any>) => {
+    if (!editingItem || !selectedLocaleId) {
+      toast.error('Cannot save translation', {
+        description: !editingItem
+          ? 'Translations can only be added to existing items.'
+          : 'No locale selected.',
+      });
+      return;
+    }
+
+    const localeTranslations = useLocalisationStore.getState().translations[selectedLocaleId] || {};
+    const itemId = editingItem.id;
+    const promises: Promise<unknown>[] = [];
+
+    for (const field of collectionFields) {
+      if (!field.fillable || !isTranslatableField(field)) continue;
+      const contentKey = buildCmsContentKey(field);
+      const tKey = `cms:${itemId}:${contentKey}`;
+      const existing = localeTranslations[tKey];
+
+      const raw = values[field.id];
+      let serialized: string;
+      if (field.type === 'rich_text') {
+        if (raw && typeof raw === 'object') {
+          serialized = JSON.stringify(raw);
+        } else if (typeof raw === 'string') {
+          serialized = raw.trim();
+        } else {
+          serialized = '';
+        }
+      } else {
+        serialized = typeof raw === 'string' ? raw.trim() : '';
+      }
+
+      const previous = existing?.content_value || '';
+      if (serialized === previous) continue;
+
+      if (!serialized) {
+        if (existing) {
+          promises.push(deleteTranslation(existing));
+        }
+        continue;
+      }
+
+      if (existing) {
+        promises.push(updateTranslation(existing, { content_value: serialized, is_completed: true }));
+      } else {
+        const data: CreateTranslationData = {
+          locale_id: selectedLocaleId,
+          source_type: 'cms',
+          source_id: itemId,
+          content_key: contentKey,
+          content_type: field.type === 'rich_text' ? 'richtext' : 'text',
+          content_value: serialized,
+          is_completed: true,
+        };
+        promises.push(createTranslation(data));
+      }
+    }
+
+    setEditingItem(null);
+    form.reset();
+    if (onSuccess) {
+      onSuccess();
+    } else {
+      onOpenChange(false);
+    }
+
+    if (promises.length === 0) return;
+
+    Promise.all(promises)
+      .then(() => {
+        if (isPageLevelItem && currentPageId) {
+          refetchPageCollectionItem(currentPageId);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to save translations:', error);
+        toast.error('Failed to save translations', {
+          description: 'Please try again.',
+        });
+      });
+  };
+
   const handleSubmit = (values: Record<string, any>) => {
     if (!collectionId) return;
+
+    // Localising flow runs entirely against the translations table — see
+    // the dedicated branch further down. Skip canonical-field validation
+    // (required name / unique slug) since the translation may be empty
+    // (= fall back to source) and slug uniqueness is per-locale anyway.
+    if (isLocalizing) {
+      handleLocalizedSubmit(values);
+      return;
+    }
 
     // Normalize boolean values to strings before submitting
     collectionFields.forEach(field => {
@@ -488,14 +636,22 @@ export default function CollectionItemSheet({
       <SheetContent onOpenAutoFocus={handleOpenAutoFocus} aria-describedby={undefined}>
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2 flex-wrap">
-            {editingItem ? 'Edit' : 'Create'} {collection?.name} Item
-            {!isNewItem && statusValue && (
+            {isLocalizing && currentLocale
+              ? `Translate ${collection?.name} Item`
+              : `${editingItem ? 'Edit' : 'Create'} ${collection?.name} Item`}
+            {!isNewItem && statusValue && !isLocalizing && (
               <CollectionStatusPill statusValue={statusValue} />
+            )}
+            {isLocalizing && currentLocale && (
+              <span className="text-xs text-muted-foreground font-normal">
+                Translate to {currentLocale.label}
+              </span>
             )}
           </SheetTitle>
           <SheetActions>
-            {/* More options dropdown */}
-            {editingItem && !isTempId(editingItem.id) && (
+            {/* More options dropdown — hidden while translating, the only
+                action there is Delete which doesn't apply to translations. */}
+            {editingItem && !isTempId(editingItem.id) && !isLocalizing && (
               <DropdownMenu modal={false}>
                 <DropdownMenuTrigger asChild>
                   <Button size="sm" variant="secondary">
@@ -515,58 +671,66 @@ export default function CollectionItemSheet({
               </DropdownMenu>
             )}
 
-            {/* Save button with dropdown for alternate actions */}
+            {/* Save button. The status-action dropdown (draft / publish) is
+                hidden when translating since those operate at the canonical
+                item level — translations are saved as a single unit. */}
             <div className="flex">
               <Button
                 size="sm"
                 type="submit"
                 form="collection-item-form"
-                disabled={isTempId(editingItem?.id)}
-                className="rounded-r-none"
+                disabled={isTempId(editingItem?.id) || (isLocalizing && !editingItem)}
+                className={isLocalizing ? '' : 'rounded-r-none'}
               >
-                {editingItem ? (isTempId(editingItem.id) ? 'Saving...' : 'Save') : 'Create'}
+                {isLocalizing
+                  ? 'Save translation'
+                  : editingItem
+                    ? (isTempId(editingItem.id) ? 'Saving...' : 'Save')
+                    : 'Create'}
               </Button>
-              <DropdownMenu modal={false}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    size="sm"
-                    variant="default"
-                    className="rounded-l-none border-l border-primary-foreground/20 px-1.5"
-                    disabled={isTempId(editingItem?.id)}
-                  >
-                    <Icon name="triangle-down" className="w-3 h-3" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  {!isNewItem && (
+              {!isLocalizing && (
+                <DropdownMenu modal={false}>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="default"
+                      className="rounded-l-none border-l border-primary-foreground/20 px-1.5"
+                      disabled={isTempId(editingItem?.id)}
+                    >
+                      <Icon name="triangle-down" className="w-3 h-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {!isNewItem && (
+                      <DropdownMenuItem
+                        onClick={() => {
+                          pendingStatusActionRef.current = 'stage';
+                          form.handleSubmit(handleSubmit)();
+                        }}
+                      >
+                        Save as staged for publish
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuItem
                       onClick={() => {
-                        pendingStatusActionRef.current = 'stage';
+                        pendingStatusActionRef.current = 'draft';
                         form.handleSubmit(handleSubmit)();
                       }}
                     >
-                      Save as staged for publish
+                      {isNewItem ? 'Create' : 'Save'} as draft
                     </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem
-                    onClick={() => {
-                      pendingStatusActionRef.current = 'draft';
-                      form.handleSubmit(handleSubmit)();
-                    }}
-                  >
-                    {isNewItem ? 'Create' : 'Save'} as draft
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!collection?.has_published_version}
-                    onClick={() => {
-                      pendingStatusActionRef.current = 'publish';
-                      form.handleSubmit(handleSubmit)();
-                    }}
-                  >
-                    {isNewItem ? 'Create' : 'Save'} and publish
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                    <DropdownMenuItem
+                      disabled={!collection?.has_published_version}
+                      onClick={() => {
+                        pendingStatusActionRef.current = 'publish';
+                        form.handleSubmit(handleSubmit)();
+                      }}
+                    >
+                      {isNewItem ? 'Create' : 'Save'} and publish
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
           </SheetActions>
         </SheetHeader>
@@ -582,6 +746,12 @@ export default function CollectionItemSheet({
                 .filter(f => f.fillable)
                 .map((field) => {
                   const isSynced = syncedFieldIds.has(field.id);
+                  // While translating, lock everything that isn't a
+                  // translatable text/rich_text field — the canonical value
+                  // is shown read-only so the user has context, but only
+                  // translatable fields can be edited per locale.
+                  const isLockedForLocale = isLocalizing && !isTranslatableField(field);
+                  const isFieldDisabled = isSynced || isLockedForLocale;
 
                   return (
                   <FormField
@@ -605,9 +775,14 @@ export default function CollectionItemSheet({
                               Synced from Airtable
                             </span>
                           )}
+                          {isLockedForLocale && (
+                            <span className="text-[10px] text-muted-foreground leading-none">
+                              Not translatable
+                            </span>
+                          )}
                         </div>
                         <FormControl>
-                          <div className={cn('min-w-0', isSynced && 'opacity-50 pointer-events-none')}>
+                          <div className={cn('min-w-0', isFieldDisabled && 'opacity-50 pointer-events-none')}>
                           {field.type === 'rich_text' ? (
                             <div>
                               <RichTextEditor

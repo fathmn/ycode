@@ -40,8 +40,9 @@ import { parseMultiAssetFieldValue } from '@/lib/multi-asset-utils';
 import { type FieldType, findDisplayField, getItemDisplayName, getFieldIcon, isMultipleAssetField, findStatusFieldId, isDateFieldType } from '@/lib/collection-field-utils';
 import { CollectionStatusPill, parseStatusValue } from './CollectionStatusPill';
 import { extractPlainTextFromTiptap } from '@/lib/tiptap-utils';
-import { parseCollectionLinkValue, resolveCollectionLinkValue } from '@/lib/link-utils';
+import { extractCrossCollectionItemIds, parseCollectionLinkValue, resolveCollectionLinkValue } from '@/lib/link-utils';
 import { useEditorUrl } from '@/hooks/use-editor-url';
+import { useRole } from '@/hooks/use-role';
 import FieldsDropdown from './FieldsDropdown';
 import AirtableSyncButton from './AirtableSyncButton';
 import CollectionItemContextMenu from './CollectionItemContextMenu';
@@ -198,6 +199,7 @@ interface SortableCollectionItemProps {
   renameValue: string;
   itemCount?: number;
   isItemCountLoading?: boolean;
+  canManageSchema?: boolean;
   onRenameValueChange: (value: string) => void;
   onSelect: () => void;
   onDoubleClick: () => void;
@@ -219,6 +221,7 @@ function SortableCollectionItem({
   renameValue,
   itemCount,
   isItemCountLoading,
+  canManageSchema = true,
   onRenameValueChange,
   onSelect,
   onDoubleClick,
@@ -289,6 +292,7 @@ function SortableCollectionItem({
             <span>{collection.name}</span>
           </div>
 
+          {canManageSchema && (
           <div className="group-hover:opacity-100 opacity-0">
             <DropdownMenu
               open={openDropdownId === collection.id}
@@ -317,12 +321,14 @@ function SortableCollectionItem({
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+          )}
 
-          <span className="group-hover:hidden block text-xs opacity-50">
+          <span className={cn('block text-xs opacity-50', canManageSchema && 'group-hover:hidden')}>
             {isItemCountLoading ? <Spinner className="size-3" /> : (itemCount ?? collection.draft_items_count)}
           </span>
         </div>
       </ContextMenuTrigger>
+      {canManageSchema && (
       <ContextMenuContent>
         <ContextMenuItem onClick={onRename}>
           Rename
@@ -331,6 +337,7 @@ function SortableCollectionItem({
           Delete
         </ContextMenuItem>
       </ContextMenuContent>
+      )}
     </ContextMenu>
   );
 }
@@ -375,9 +382,12 @@ const CMS = React.memo(function CMS() {
     channelName: selectedCollectionId ? `collection:${selectedCollectionId}:item_locks` : '',
   });
 
-  // Subscribe to resource locks to trigger re-renders when locks change
+  // Subscribe to resource locks only — re-render the CMS table when locks
+  // change, but NOT every time a collaborator's `last_active` heartbeat
+  // refreshes the `users` slice (that fires several times per minute and
+  // causes a ~600ms commit since CMS re-renders the entire collection table).
+  // Owner email/color is read lazily inside getItemLockInfo.
   const resourceLocks = useCollaborationPresenceStore((state) => state.resourceLocks);
-  const collaborationUsers = useCollaborationPresenceStore((state) => state.users);
   const getAsset = useAssetsStore((state) => state.getAsset);
   const pages = usePagesStore((state) => state.pages);
   const folders = usePagesStore((state) => state.folders);
@@ -386,6 +396,7 @@ const CMS = React.memo(function CMS() {
   const invalidateLayerData = useCollectionLayerStore((state) => state.invalidateLayerData);
 
   const { urlState, navigateToCollection, navigateToCollectionItem, navigateToNewCollectionItem, navigateToCollections } = useEditorUrl();
+  const { canEditStructure: canManageSchema } = useRole();
 
   // Track previous collection ID to prevent unnecessary reloads
   const prevCollectionIdRef = React.useRef<string | null>(null);
@@ -461,6 +472,53 @@ const CMS = React.memo(function CMS() {
     [selectedCollectionId, items]
   );
   const totalItems = selectedCollectionId ? (itemsTotalCount[selectedCollectionId] || 0) : 0;
+
+  // Build slug map across ALL loaded collections for cross-collection link resolution
+  const crossCollectionSlugs = useCollectionsStore((state) => state.crossCollectionSlugs);
+  const loadMissingItemSlugs = useCollectionsStore((state) => state.loadMissingItemSlugs);
+
+  const allCollectionItemSlugs = useMemo(() => {
+    const slugs: Record<string, string> = {};
+    for (const collectionId of Object.keys(items)) {
+      const colFields = fields[collectionId] || [];
+      const slugField = colFields.find(f => f.key === 'slug');
+      if (!slugField) continue;
+      for (const item of items[collectionId]) {
+        const slugValue = item.values[slugField.id];
+        if (slugValue) {
+          slugs[item.id] = slugValue;
+        }
+      }
+    }
+    // Merge in slugs resolved for items not loaded in any collection
+    // (cross-collection refs, or items on a different page of the current one).
+    for (const [itemId, slug] of Object.entries(crossCollectionSlugs)) {
+      if (slug && !slugs[itemId]) {
+        slugs[itemId] = slug;
+      }
+    }
+    return slugs;
+  }, [items, fields, crossCollectionSlugs]);
+
+  // Resolve slug values for collection items referenced by link fields in the
+  // currently displayed items but missing from `allCollectionItemSlugs`. Without
+  // this the Page-link column would render `/{slug}` placeholders until the
+  // referenced collection happens to be loaded.
+  useEffect(() => {
+    if (!selectedCollectionId) return;
+    const currentItems = items[selectedCollectionId];
+    const currentFields = fields[selectedCollectionId];
+    if (!currentItems?.length || !currentFields?.length) return;
+
+    const linkFieldIds = currentFields.filter(f => f.type === 'link').map(f => f.id);
+    if (linkFieldIds.length === 0) return;
+
+    const missingIds = extractCrossCollectionItemIds(currentItems, linkFieldIds, allCollectionItemSlugs)
+      .filter(id => !(id in crossCollectionSlugs));
+    if (missingIds.length === 0) return;
+
+    loadMissingItemSlugs(missingIds);
+  }, [selectedCollectionId, items, fields, allCollectionItemSlugs, crossCollectionSlugs, loadMissingItemSlugs]);
 
   // Drag and drop sensors
   const sensors = useSensors(
@@ -573,13 +631,18 @@ const CMS = React.memo(function CMS() {
         // Only load items if:
         // 1. No items in store, OR
         // 2. We're on page > 1 (need different page), OR
-        // 3. We have fewer items than total AND fewer than what we're requesting
+        // 3. We have fewer items than total AND fewer than what we're requesting, OR
+        // 4. The collection has computed `count` fields — they read from another
+        //    collection's references and aren't invalidated when the source items
+        //    change, so we always re-fetch on switch to keep counts fresh.
         const initialPage = urlState.page || 1;
         const initialPageSize = urlState.pageSize || 25;
+        const hasCountField = (existingFields || []).some(f => f.type === 'count');
         const needsLoad = !existingItems ||
           existingItems.length === 0 ||
           initialPage > 1 ||
-          (existingItems.length < totalCount && existingItems.length < initialPageSize);
+          (existingItems.length < totalCount && existingItems.length < initialPageSize) ||
+          hasCountField;
 
         if (needsLoad) {
           loadItems(selectedCollectionId, initialPage, initialPageSize, currentSortBy, currentSortOrder);
@@ -800,13 +863,15 @@ const CMS = React.memo(function CMS() {
       return { isLocked: false };
     }
 
-    // Check if locked by current user
-    const currentUserId = useCollaborationPresenceStore.getState().currentUserId;
-    if (lock.user_id === currentUserId) {
+    // Read currentUserId + owner lazily so the CMS doesn't subscribe to
+    // the entire `users` slice (which churns on every `last_active`
+    // heartbeat and forces this 600ms+ subtree to re-render).
+    const presenceState = useCollaborationPresenceStore.getState();
+    if (lock.user_id === presenceState.currentUserId) {
       return { isLocked: false }; // Not locked by "other" - current user can edit
     }
 
-    const owner = collaborationUsers[lock.user_id];
+    const owner = presenceState.users[lock.user_id];
     return {
       isLocked: true,
       ownerUserId: lock.user_id,
@@ -1247,6 +1312,14 @@ const CMS = React.memo(function CMS() {
         const hasOptionRemoval =
           isOptionField && previousOptions.some(prev => !nextIds.has(prev.id));
 
+        const previousCountCfg = editingField.data?.count;
+        const nextCountCfg = data.data?.count;
+        const countConfigChanged =
+          editingField.type === 'count' &&
+          (!!previousCountCfg !== !!nextCountCfg ||
+            previousCountCfg?.collectionId !== nextCountCfg?.collectionId ||
+            previousCountCfg?.fieldId !== nextCountCfg?.fieldId);
+
         await updateField(selectedCollectionId, editingField.id, {
           name: data.name,
           default: data.default || null,
@@ -1254,7 +1327,7 @@ const CMS = React.memo(function CMS() {
           data: mergedData,
         });
 
-        if (hasOptionRename || hasOptionRemoval) {
+        if (hasOptionRename || hasOptionRemoval || countConfigChanged) {
           await reloadCurrentItems();
         }
       } else {
@@ -1270,6 +1343,12 @@ const CMS = React.memo(function CMS() {
           reference_collection_id: data.reference_collection_id || null,
           data: data.data,
         });
+
+        // Count fields are computed at fetch time. Reload so the column shows
+        // real values immediately instead of the default 0 placeholder.
+        if (data.type === 'count') {
+          await reloadCurrentItems();
+        }
       }
 
       // Close dialog and reset
@@ -1501,6 +1580,7 @@ const CMS = React.memo(function CMS() {
                               </span>
                             )}
                           </button>
+                          {canManageSchema && (
                           <DropdownMenu
                             open={openDropdownId === field.id}
                             onOpenChange={(open) => !showSkeleton && setOpenDropdownId(open ? field.id : null)}
@@ -1543,10 +1623,12 @@ const CMS = React.memo(function CMS() {
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
+                          )}
                         </div>
                       </th>
                     );
                   })}
+                  {canManageSchema && (
                   <th className="px-4 py-3 text-left font-medium text-sm w-24 sticky right-0 top-0 z-20 bg-background border-b border-border">
                     <Button
                       size="sm"
@@ -1558,6 +1640,7 @@ const CMS = React.memo(function CMS() {
                       Add field
                     </Button>
                   </th>
+                  )}
                   <th className="sticky top-0 z-10 bg-background border-b border-border" />
                 </tr>
               </thead>
@@ -1819,32 +1902,28 @@ const CMS = React.memo(function CMS() {
                       // Link fields - format for display
                       if (field.type === 'link') {
                         let displayValue = '-';
+                        let isAssetLink = false;
                         if (value) {
                           try {
                             const linkValue = typeof value === 'string' ? parseCollectionLinkValue(value) : value;
                             if (linkValue) {
-                              // Build collectionItemSlugs map for dynamic page resolution
-                              const collectionItemSlugs: Record<string, string> = {};
-                              collectionItems.forEach(item => {
-                                const slugField = collectionFields.find(f => f.key === 'slug');
-                                if (slugField && item.values[slugField.id]) {
-                                  collectionItemSlugs[item.id] = item.values[slugField.id];
-                                }
-                              });
+                              if (linkValue.type === 'asset' && linkValue.asset?.id) {
+                                const asset = getAsset(linkValue.asset.id);
+                                displayValue = asset?.filename || linkValue.asset.id;
+                                isAssetLink = true;
+                              } else {
+                                const resolvedUrl = resolveCollectionLinkValue(linkValue, {
+                                  pages,
+                                  folders,
+                                  collectionItemSlugs: allCollectionItemSlugs,
+                                  isPreview: false,
+                                  locale: undefined,
+                                });
 
-                              // Resolve the link to get the actual URL
-                              const resolvedUrl = resolveCollectionLinkValue(linkValue, {
-                                pages,
-                                folders,
-                                collectionItemSlugs,
-                                isPreview: false,
-                                locale: undefined,
-                              });
-
-                              displayValue = resolvedUrl || '-';
+                                displayValue = resolvedUrl || '-';
+                              }
                             }
                           } catch {
-                            // Invalid JSON, show as-is
                             displayValue = String(value);
                           }
                         }
@@ -1854,8 +1933,14 @@ const CMS = React.memo(function CMS() {
                             className="px-4 py-5 text-muted-foreground max-w-50"
                             onClick={() => handleEditItem(item)}
                           >
-                            <span className="block truncate">
-                              {displayValue}
+                            <span className="flex items-center gap-1.5 truncate">
+                              {isAssetLink && (
+                                <Icon
+                                  name="paperclip"
+                                  className="size-3 shrink-0"
+                                />
+                              )}
+                              <span className="truncate">{displayValue}</span>
                             </span>
                           </td>
                         );
@@ -1910,11 +1995,25 @@ const CMS = React.memo(function CMS() {
                           >
                             {value ? (
                               <Badge variant="secondary" className="font-normal">
-                                <span className="line-clamp-1 truncate max-w-[200px]">{value}</span>
+                                <span className="line-clamp-1 truncate max-w-50">{value}</span>
                               </Badge>
                             ) : (
                               <span className="text-muted-foreground">-</span>
                             )}
+                          </td>
+                        );
+                      }
+
+                      // Count fields - computed numeric value, defaults to 0
+                      if (field.type === 'count') {
+                        const numeric = value != null && value !== '' ? value : '0';
+                        return (
+                          <td
+                            key={field.id}
+                            className="px-4 py-5 text-muted-foreground tabular-nums"
+                            onClick={() => handleEditItem(item)}
+                          >
+                            <span className="line-clamp-1 truncate">{numeric}</span>
                           </td>
                         );
                       }
@@ -1973,6 +2072,7 @@ const CMS = React.memo(function CMS() {
     <div className="w-64 shrink-0 bg-background border-r flex flex-col overflow-hidden px-4">
       <header className="py-5 flex items-center justify-between shrink-0">
         <span className="font-medium">Collections</span>
+        {canManageSchema && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -2005,6 +2105,7 @@ const CMS = React.memo(function CMS() {
             </DropdownMenuSub>
           </DropdownMenuContent>
         </DropdownMenu>
+        )}
       </header>
       <div className="flex-1 overflow-y-auto no-scrollbar">
         <DndContext
@@ -2024,13 +2125,14 @@ const CMS = React.memo(function CMS() {
                   isSelected={selectedCollectionId === collection.id}
                   isHovered={hoveredCollectionId === collection.id}
                   openDropdownId={collectionDropdownId}
-                  isRenaming={collectionRename.renamingId === collection.id}
+                  isRenaming={canManageSchema && collectionRename.renamingId === collection.id}
                   renameValue={collectionRename.renameValue}
                   itemCount={itemsTotalCount[collection.id]}
                   isItemCountLoading={loadingSampleCollectionId === collection.id}
+                  canManageSchema={canManageSchema}
                   onRenameValueChange={collectionRename.setRenameValue}
                   onSelect={() => handleCollectionSelect(collection.id)}
-                  onDoubleClick={() => handleCollectionDoubleClick(collection)}
+                  onDoubleClick={canManageSchema ? () => handleCollectionDoubleClick(collection) : () => {}}
                   onMouseEnter={() => setHoveredCollectionId(collection.id)}
                   onMouseLeave={() => setHoveredCollectionId(null)}
                   onDropdownOpenChange={(open) => setCollectionDropdownId(open ? collection.id : null)}
@@ -2131,6 +2233,7 @@ const CMS = React.memo(function CMS() {
             />
           )}
 
+          {canManageSchema && (
           <FieldsDropdown
             fields={collectionFields}
             searchQuery={fieldSearchQuery}
@@ -2138,6 +2241,7 @@ const CMS = React.memo(function CMS() {
             onToggleVisibility={handleToggleFieldVisibility}
             onReorder={handleReorderFields}
           />
+          )}
 
           <Button
             size="sm"
@@ -2163,7 +2267,7 @@ const CMS = React.memo(function CMS() {
 
       {/* Items Content */}
       <div className="flex-1 overflow-auto flex flex-col min-w-0">
-        {loadingSampleCollectionId === selectedCollectionId ? (
+        {loadingSampleCollectionId === selectedCollectionId || selectedCollectionId?.startsWith('temp-') ? (
           <div className="flex flex-col items-center justify-center gap-4 p-8 flex-1">
             <Spinner />
             <span className="text-sm text-muted-foreground">Creating collection...</span>
@@ -2176,10 +2280,12 @@ const CMS = React.memo(function CMS() {
                 This collection has no fields. Add fields to start managing items.
               </EmptyDescription>
             </Empty>
+            {canManageSchema && (
             <Button onClick={() => { setEditingField(null); setFieldDialogOpen(true); }}>
               <Icon name="plus" />
               Add Field
             </Button>
+            )}
           </div>
         ) : (
           <>

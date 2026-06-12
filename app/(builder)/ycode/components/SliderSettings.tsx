@@ -46,14 +46,20 @@ interface SliderSettingsProps {
   onLayerUpdate: (layerId: string, updates: Partial<Layer>) => void;
   allLayers: Layer[];
   /**
-   * Field groups (incl. ancestor + page collection fields) used to detect whether
-   * any multi-image fields are available — needed to enable/disable the CMS source.
+   * Field groups (incl. ancestor + page collection fields) used to detect
+   * whether any multi-image fields are reachable — needed to enable/disable
+   * the multi-image-field source. Regular collection source is always available.
    */
   fieldGroups?: FieldGroup[];
 }
 
-/** Slider content source: static slides or a CMS multi-image field */
-type SliderSource = 'static' | 'cms';
+/**
+ * Slider content source for the slides loop:
+ * - `static`: hand-authored slides
+ * - `collection`: loop over items of a regular collection
+ * - `multi_asset`: loop over assets of a multi-image (multi-asset) field
+ */
+type SliderSource = 'static' | 'collection' | 'multi_asset';
 
 const ANIMATION_EFFECTS: { label: string; value: SwiperAnimationEffect }[] = [
   { label: 'Slide', value: 'slide' },
@@ -99,9 +105,10 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers, fieldG
   const slidesLayer = useMemo(() => sliderLayer?.children?.find(c => c.name === 'slides') ?? null, [sliderLayer]);
   const templateSlide = useMemo(() => slidesLayer?.children?.find(c => c.name === 'slide') ?? null, [slidesLayer]);
   const templateSlideCollection = templateSlide ? getCollectionVariable(templateSlide) : null;
-  const isCmsSource = !!templateSlideCollection?.id;
+  const isMultiAssetSource = templateSlideCollection?.source_field_type === 'multi_asset';
+  const isCmsSource = !!templateSlideCollection;
 
-  // The CMS source option is only enabled if at least one multi-image field
+  // The multi-image field option is only enabled if at least one such field
   // is reachable from this slider's context (page or ancestor collections).
   const hasMultiImageFields = useMemo<boolean>(() => {
     if (!fieldGroups) return false;
@@ -122,20 +129,35 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers, fieldG
   }, [currentPageId, sliderLayer, slidesLayer, addLayerWithId, setSelectedLayerId]);
 
   /**
-   * Switch slides content source between static and CMS multi-image.
+   * Switch slides content source between static, regular collection, and CMS multi-image.
    *
-   * On 'cms': mark the template slide as a (still-unbound) multi-asset collection
-   * and pre-bind its background to the virtual `__asset_url` field. The actual
-   * multi-image field is then chosen by selecting the slide and using the standard
-   * CMS section in the right sidebar — once bound, the background renders without
-   * any extra step.
+   * On 'multi_asset': mark the template slide as a (still-unbound) multi-asset
+   * collection and pre-bind its background to the virtual `__asset_url` field.
+   * The actual multi-image field is then chosen by selecting the slide and
+   * using the standard CMS section in the right sidebar — once bound, the
+   * background renders without any extra step.
    *
-   * On 'static': clear the multi-asset collection binding and any orphaned
-   * virtual-asset background (it would have no context outside CMS mode).
+   * On 'collection': mark the template slide as a regular (still-unbound)
+   * collection layer. The actual collection is then chosen by selecting the
+   * slide and using the standard CMS section in the right sidebar; child
+   * layers are bound to fields the same way as inside any CMS list.
+   *
+   * On 'static': clear the collection binding and any orphaned virtual-asset
+   * background (it would have no context outside CMS mode).
    */
   const handleSourceChange = useCallback((source: SliderSource) => {
     if (!slidesLayer || !templateSlide) return;
-    if (source === 'cms') {
+
+    // Helper: collapse multiple slides down to just the (CMS) template.
+    const commitTemplate = (updatedTemplate: Layer) => {
+      if ((slidesLayer.children?.length ?? 0) > 1) {
+        onLayerUpdate(slidesLayer.id, { children: [updatedTemplate] });
+      } else {
+        onLayerUpdate(templateSlide.id, { variables: updatedTemplate.variables });
+      }
+    };
+
+    if (source === 'multi_asset') {
       const currentBgVar = templateSlide.variables?.backgroundImage?.src;
       const isCustomCmsBinding = !!(
         currentBgVar
@@ -166,7 +188,6 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers, fieldG
         variables: {
           ...templateSlide.variables,
           collection: {
-            ...(templateSlide.variables?.collection ?? {}),
             id: MULTI_ASSET_COLLECTION_ID,
             source_field_type: 'multi_asset',
           },
@@ -174,32 +195,48 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers, fieldG
         },
       };
 
-      // Clear any stale collection data from a previously-bound real collection
       clearLayerData(templateSlide.id);
+      commitTemplate(updatedTemplateSlide);
+      return;
+    }
 
-      // If extras exist, atomically replace the slides children with just the
-      // updated template — collapsing extras and applying the binding in one update.
-      if ((slidesLayer.children?.length ?? 0) > 1) {
-        onLayerUpdate(slidesLayer.id, { children: [updatedTemplateSlide] });
-      } else {
-        onLayerUpdate(templateSlide.id, { variables: updatedTemplateSlide.variables });
-      }
-    } else {
+    if (source === 'collection') {
+      // Drop any virtual-asset background — only valid in multi_asset mode.
       const nextVars = { ...templateSlide.variables };
-      delete nextVars.collection;
       const bgSrc = nextVars.backgroundImage?.src;
       if (bgSrc && isFieldVariable(bgSrc) && bgSrc.data.field_id && isVirtualAssetField(bgSrc.data.field_id)) {
         delete nextVars.backgroundImage;
       }
-      onLayerUpdate(templateSlide.id, {
-        variables: Object.keys(nextVars).length > 0 ? nextVars : undefined,
-      });
 
-      // Clear stale collection data and snap count so pagination dots reset
+      // Empty collection id — user picks the collection via the standard CMS section.
+      const updatedTemplateSlide: Layer = {
+        ...templateSlide,
+        variables: {
+          ...nextVars,
+          collection: { id: '' },
+        },
+      };
+
       clearLayerData(templateSlide.id);
-      if (sliderLayer) {
-        setSliderSnapCount(sliderLayer.id, 0);
-      }
+      commitTemplate(updatedTemplateSlide);
+      return;
+    }
+
+    // 'static'
+    const nextVars = { ...templateSlide.variables };
+    delete nextVars.collection;
+    const bgSrc = nextVars.backgroundImage?.src;
+    if (bgSrc && isFieldVariable(bgSrc) && bgSrc.data.field_id && isVirtualAssetField(bgSrc.data.field_id)) {
+      delete nextVars.backgroundImage;
+    }
+    onLayerUpdate(templateSlide.id, {
+      variables: Object.keys(nextVars).length > 0 ? nextVars : undefined,
+    });
+
+    // Clear stale collection data and snap count so pagination dots reset
+    clearLayerData(templateSlide.id);
+    if (sliderLayer) {
+      setSliderSnapCount(sliderLayer.id, 0);
     }
   }, [slidesLayer, templateSlide, onLayerUpdate, sliderLayer, clearLayerData, setSliderSnapCount]);
 
@@ -211,7 +248,9 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers, fieldG
   // intermediate `slides` wrapper clean and routes per-slide CMS binding to the
   // standard CMS section in the right sidebar.
   const showContentPanel = layer.name === 'slider';
-  const sourceValue: SliderSource = isCmsSource ? 'cms' : 'static';
+  const sourceValue: SliderSource = !isCmsSource
+    ? 'static'
+    : isMultiAssetSource ? 'multi_asset' : 'collection';
 
   const settings: SliderSettingsType = {
     ...DEFAULT_SLIDER_SETTINGS,
@@ -258,8 +297,11 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers, fieldG
                   <SelectItem value="static">
                     <Icon name="slides" className="size-3" /> Slides
                   </SelectItem>
-                  <SelectItem value="cms" disabled={!hasMultiImageFields}>
-                    <Icon name="database" className="size-3" /> CMS
+                  <SelectItem value="collection">
+                    <Icon name="database" className="size-3" /> Collection
+                  </SelectItem>
+                  <SelectItem value="multi_asset" disabled={!hasMultiImageFields}>
+                    <Icon name="image" className="size-3" /> Multi-image field
                   </SelectItem>
                 </SelectContent>
               </Select>

@@ -1,4 +1,4 @@
-import type { Collection, CollectionFieldType, CollectionSorting } from '@/types';
+import type { Collection, CollectionFieldType, CollectionSorting, Layer } from '@/types';
 import { sanitizeSlug } from './page-utils';
 
 /**
@@ -116,12 +116,8 @@ export function castValue(value: string | null, type: CollectionFieldType): any 
       }
 
     case 'link':
-      // Parse link settings from stored JSON
-      try {
-        return JSON.parse(value);
-      } catch {
-        return null;
-      }
+      // Keep as raw JSON string — parsed downstream by parseCollectionLinkValue
+      return value;
 
     case 'color':
       // Standard hex color string (e.g. #ff0000 or #ff0000aa with alpha)
@@ -285,7 +281,8 @@ export function resolveReferenceFieldsSync(
   fields: import('@/types').CollectionField[],
   allItems: Record<string, import('@/types').CollectionItemWithValues[]>,
   allFields: Record<string, import('@/types').CollectionField[]>,
-  visited: Set<string> = new Set()
+  visited: Set<string> = new Set(),
+  translateValues?: (itemId: string, values: Record<string, string>, fields: import('@/types').CollectionField[]) => Record<string, string>
 ): Record<string, string> {
   const enhancedValues = { ...itemValues };
 
@@ -311,9 +308,15 @@ export function resolveReferenceFieldsSync(
     // Get fields for the referenced collection
     const refFields = allFields[field.reference_collection_id] || [];
 
+    // Translate the referenced item's values so the canvas renders referenced
+    // CMS content in the active locale (matches the server-side page fetcher)
+    const refValues = translateValues
+      ? translateValues(refItem.id, refItem.values, refFields)
+      : refItem.values;
+
     // Add referenced item's values with field.id as prefix
     for (const refField of refFields) {
-      const refValue = refItem.values[refField.id];
+      const refValue = refValues[refField.id];
       if (refValue !== undefined) {
         enhancedValues[`${field.id}.${refField.id}`] = refValue;
       }
@@ -321,11 +324,12 @@ export function resolveReferenceFieldsSync(
 
     // Recursively resolve nested reference fields
     const nestedValues = resolveReferenceFieldsSync(
-      refItem.values,
+      refValues,
       refFields,
       allItems,
       allFields,
-      visited
+      visited,
+      translateValues
     );
 
     // Merge nested values with proper path prefix
@@ -338,4 +342,47 @@ export function resolveReferenceFieldsSync(
   }
 
   return enhancedValues;
+}
+
+/**
+ * Recursively suffix all layer IDs (and matching interaction tween `layer_id`
+ * references) in a subtree so each rendered collection item has unique DOM
+ * targets. Lets animations bind to the correct element per item instead of
+ * sharing one DOM node.
+ */
+export function remapLayerIdsForCollectionItem(layer: Layer, suffix: string): Layer {
+  const originalIds = new Set<string>();
+  const collectIds = (l: Layer) => {
+    originalIds.add(l.id);
+    l.children?.forEach(collectIds);
+  };
+  collectIds(layer);
+
+  const remapLayer = (l: Layer): Layer => {
+    const remapped: Layer = {
+      ...l,
+      id: `${l.id}${suffix}`,
+    };
+
+    if (l.interactions?.length) {
+      remapped.interactions = l.interactions.map(interaction => ({
+        ...interaction,
+        id: `${interaction.id}${suffix}`,
+        tweens: interaction.tweens.map(tween => ({
+          ...tween,
+          layer_id: originalIds.has(tween.layer_id)
+            ? `${tween.layer_id}${suffix}`
+            : tween.layer_id,
+        })),
+      }));
+    }
+
+    if (l.children) {
+      remapped.children = l.children.map(remapLayer);
+    }
+
+    return remapped;
+  };
+
+  return remapLayer(layer);
 }

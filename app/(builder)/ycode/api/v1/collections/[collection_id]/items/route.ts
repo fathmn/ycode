@@ -4,6 +4,7 @@ import { getCollectionById } from '@/lib/repositories/collectionRepository';
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import { getItemsWithValues, createItem, getMaxIdValue } from '@/lib/repositories/collectionItemRepository';
 import { setValues } from '@/lib/repositories/collectionItemValueRepository';
+import { invalidateForCollectionChange } from '@/lib/services/cacheService';
 import { transformItemToPublicWithRefs, parseFieldProjections } from '../../../reference-resolver';
 import { ProjectScopeAuthorizationError, resolveApiKeyRequestProjectId } from '@/lib/request-project-scope';
 
@@ -101,7 +102,7 @@ export async function GET(
       limit: needsClientPagination ? undefined : (limitParam ? limit : perPage),
       offset: needsClientPagination ? undefined : offset,
       deleted: false,
-    }, projectId);
+    }, undefined, projectId);
 
     // Apply client-side filtering (filter[field_slug]=value)
     if (Object.keys(filterParams).length > 0) {
@@ -362,6 +363,20 @@ export async function POST(
       hasProjections ? collection.name : undefined,
       projectId
     );
+
+    // Purge CDN/data caches for pages that render this collection (lists,
+    // grids, dynamic page). Without this, the new item is in the DB but
+    // every public page keeps serving cached HTML that doesn't include it.
+    // No old slug to pass — POST adds a new row, doesn't remove one.
+    try {
+      const result = await invalidateForCollectionChange(collection_id);
+      if (result.invalidatedRoutes.length > 0) {
+        console.log(`[Cache] v1 item create: invalidated ${result.invalidatedRoutes.length} route(s)`);
+      }
+    } catch (cacheError) {
+      console.error(`[Cache] v1 item create: invalidation failed:`, cacheError);
+    }
+
     return NextResponse.json(response, { status: 201 });
   } catch (error) {
     console.error('Error creating collection item:', error);

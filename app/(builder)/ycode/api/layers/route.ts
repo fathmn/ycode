@@ -98,7 +98,7 @@ export async function PUT(request: NextRequest) {
     const roleCheck = await requireStudioProjectRole(request, LAYER_WRITE_ROLES);
     if (!roleCheck.ok) return roleCheck.response;
 
-    const draft = await upsertDraftLayers(pageId, layers as Layer[], undefined, roleCheck.context.project.id);
+    const draft = await upsertDraftLayers(pageId, layers as Layer[], undefined, undefined, roleCheck.context.project.id);
     const htmlEmbedCode = collectHtmlEmbedCode(layers as Layer[]);
 
     if (htmlEmbedCode.length > 0) {

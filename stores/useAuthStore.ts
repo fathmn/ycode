@@ -11,6 +11,7 @@ import {
   clearSupabaseEmailAuthFlowIntent,
   hasSupabaseEmailAuthUrl,
 } from '../lib/supabase-email-auth-url';
+import { extractRoleFromUser } from '@/lib/roles';
 import type { User, Session } from '@supabase/supabase-js';
 
 type PasswordSetupType = 'invite' | 'recovery';
@@ -18,6 +19,7 @@ type PasswordSetupType = 'invite' | 'recovery';
 interface AuthState {
   user: User | null;
   session: Session | null;
+  role: string | null;
   loading: boolean;
   initialized: boolean;
   error: string | null;
@@ -49,6 +51,7 @@ function passwordSetupTypeFromFlow(flow: string | null): PasswordSetupType | nul
 export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
   session: null,
+  role: null,
   loading: false,
   initialized: false,
   error: null,
@@ -79,6 +82,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         set({
           user: session?.user ?? null,
           session,
+          role: extractRoleFromUser(session?.user ?? null),
           ...(event === 'PASSWORD_RECOVERY'
             ? {
               passwordSetupRequired: true,
@@ -102,6 +106,13 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
       // Validate session server-side (getUser verifies the JWT, unlike getSession)
       const { data: { user } } = await supabase.auth.getUser();
+
+      if (user) {
+        // Refresh the session so the JWT contains the latest app_metadata
+        // (role changes via Admin API don't update existing JWTs)
+        await supabase.auth.refreshSession();
+      }
+
       const { data: { session } } = await supabase.auth.getSession();
       const passwordSetupType = passwordSetupTypeFromFlow(authUrlResult.flow);
       const shouldRequirePasswordSetup = Boolean(
@@ -112,6 +123,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       set({
         user: user ?? null,
         session: user ? session : null,
+        role: extractRoleFromUser(user),
         initialized: true,
         ...(shouldRequirePasswordSetup
           ? {
@@ -170,6 +182,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       set({
         user: data.user,
         session: data.session,
+        role: extractRoleFromUser(data.user),
         loading: false,
         passwordSetupRequired: false,
         passwordSetupType: null,
@@ -211,6 +224,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       set({
         user: data.user,
         session: data.session,
+        role: extractRoleFromUser(data.user),
         loading: false,
         passwordSetupRequired: false,
         passwordSetupType: null,
@@ -276,6 +290,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         set({
           user: null,
           session: null,
+          role: null,
           loading: false,
           passwordSetupRequired: false,
           passwordSetupType: null,
@@ -294,6 +309,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       set({
         user: null,
         session: null,
+        role: null,
         loading: false,
         passwordSetupRequired: false,
         passwordSetupType: null,

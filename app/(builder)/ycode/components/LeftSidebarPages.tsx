@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, startTransition, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useRef, useImperativeHandle, startTransition, Suspense, lazy } from 'react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import Icon from '@/components/ui/icon';
@@ -20,6 +20,11 @@ import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { Separator } from '@/components/ui/separator';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { generateUniqueSlug, generateUniqueFolderSlug, getNextNumberFromNames, getParentContextFromSelection, calculateNextOrder, findNextSelection } from '@/lib/page-utils';
+import type { StatusAction } from '@/lib/collection-field-utils';
+
+export interface LeftSidebarPagesHandle {
+  checkAndCloseSettings: () => Promise<boolean>;
+}
 
 interface LeftSidebarPagesProps {
   pages: Page[];
@@ -27,15 +32,17 @@ interface LeftSidebarPagesProps {
   currentPageId: string | null;
   onPageSelect: (pageId: string) => void;
   setCurrentPageId: (pageId: string | null) => void;
+  readOnly?: boolean;
 }
 
-export default function LeftSidebarPages({
+const LeftSidebarPages = React.forwardRef<LeftSidebarPagesHandle, LeftSidebarPagesProps>(({
   pages,
   folders,
   currentPageId,
   onPageSelect,
   setCurrentPageId,
-}: LeftSidebarPagesProps) {
+  readOnly = false,
+}, ref) => {
   const { urlState } = useEditorUrl();
   const activeSidebarTab = useEditorStore((state) => state.activeSidebarTab);
   const { openPage, openPageEdit, openPageLayers, navigateToLayers, navigateToPage, navigateToPageEdit, navigateToCollections } = useEditorActions();
@@ -48,6 +55,25 @@ export default function LeftSidebarPages({
   const selectedItemIdRef = React.useRef<string | null>(currentPageId);
   const pageSettingsPanelRef = useRef<PageSettingsPanelHandle>(null);
   const folderSettingsPanelRef = useRef<FolderSettingsPanelHandle>(null);
+
+  useImperativeHandle(ref, () => ({
+    checkAndCloseSettings: async () => {
+      if (showPageSettings && pageSettingsPanelRef.current) {
+        const canProceed = await pageSettingsPanelRef.current.checkUnsavedChanges();
+        if (!canProceed) return false;
+        setShowPageSettings(false);
+        setEditingPage(null);
+      }
+      if (showFolderSettings && folderSettingsPanelRef.current) {
+        const canProceed = await folderSettingsPanelRef.current.checkUnsavedChanges();
+        if (!canProceed) return false;
+        setShowFolderSettings(false);
+        setEditingFolder(null);
+      }
+      return true;
+    },
+  }), [showPageSettings, showFolderSettings]);
+
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<{ id: string; type: 'folder' | 'page' } | null>(null);
 
@@ -109,8 +135,18 @@ export default function LeftSidebarPages({
   }, [urlState.isEditing, urlState.resourceId, selectedPage, showPageSettings]);
 
   // Get store actions
-  const { createPage, updatePage, duplicatePage, deletePage, createFolder, updateFolder, duplicateFolder, deleteFolder, batchReorderPagesAndFolders } = usePagesStore();
-  const { collections, fields } = useCollectionsStore();
+  const createPage = usePagesStore((s) => s.createPage);
+  const updatePage = usePagesStore((s) => s.updatePage);
+  const duplicatePage = usePagesStore((s) => s.duplicatePage);
+  const deletePage = usePagesStore((s) => s.deletePage);
+  const createFolder = usePagesStore((s) => s.createFolder);
+  const updateFolder = usePagesStore((s) => s.updateFolder);
+  const duplicateFolder = usePagesStore((s) => s.duplicateFolder);
+  const deleteFolder = usePagesStore((s) => s.deleteFolder);
+  const setPageStatus = usePagesStore((s) => s.setPageStatus);
+  const batchReorderPagesAndFolders = usePagesStore((s) => s.batchReorderPagesAndFolders);
+  const collections = useCollectionsStore((s) => s.collections);
+  const fields = useCollectionsStore((s) => s.fields);
 
   // Collaboration hooks
   const livePageUpdates = useLivePageUpdates();
@@ -161,6 +197,7 @@ export default function LeftSidebarPages({
       name: newPageName,
       slug: newPageSlug,
       is_published: false,
+      is_publishable: true,
       page_folder_id: parentFolderId,
       order: newOrder,
       depth: newDepth,
@@ -349,13 +386,17 @@ export default function LeftSidebarPages({
   const handleSavePage = async (data: PageFormData) => {
     if (!editingPage) return;
 
-    const pageUpdates = {
+    const pageUpdates: Partial<Page> = {
       name: data.name,
       slug: data.slug,
       page_folder_id: data.page_folder_id,
       is_index: data.is_index,
       settings: data.settings,
     };
+
+    if (data.is_publishable !== undefined) {
+      pageUpdates.is_publishable = data.is_publishable;
+    }
 
     // Update in background
     const result = await updatePage(editingPage.id, pageUpdates);
@@ -538,6 +579,10 @@ export default function LeftSidebarPages({
       }
     }
   }, [pages, folders, pendingDuplicateSelection]);
+
+  const handleStatusChange = (id: string, action: StatusAction) => {
+    void setPageStatus(id, action);
+  };
 
   const handleDuplicate = async (id: string, type: 'folder' | 'page') => {
     if (type === 'folder') {
@@ -744,52 +789,54 @@ export default function LeftSidebarPages({
     <>
       <header className="py-5 flex justify-between shrink-0 sticky top-0 bg-linear-to-b from-background to-transparent z-20">
         <span className="font-medium">Pages</span>
-        <div className="-my-1">
-          <DropdownMenu onOpenChange={setIsMenuOpen}>
-            <DropdownMenuTrigger asChild>
-              <Button size="xs" variant="secondary">
-                <Icon name="plus" className={`${isMenuOpen ? 'rotate-45' : 'rotate-0'} transition-transform duration-100`} />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="start"
-              side="bottom"
-              onCloseAutoFocus={(e) => e.preventDefault()}
-              className="max-h-125 overflow-y-auto"
-            >
-              <DropdownMenuItem onClick={() => handleAddPage()}>
-                <Icon name="page" className="size-3 opacity-60" />
-                Regular
-              </DropdownMenuItem>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <Icon name="dynamicPage" className="size-3 opacity-60" />
-                  CMS
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  {collections.length > 0 ? (
-                    collections.map(collection => (
-                      <DropdownMenuItem key={collection.id} onClick={() => handleAddPage(collection.id)}>
+        {!readOnly && (
+          <div className="-my-1">
+            <DropdownMenu onOpenChange={setIsMenuOpen}>
+              <DropdownMenuTrigger asChild>
+                <Button size="xs" variant="secondary">
+                  <Icon name="plus" className={`${isMenuOpen ? 'rotate-45' : 'rotate-0'} transition-transform duration-100`} />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                side="bottom"
+                onCloseAutoFocus={(e) => e.preventDefault()}
+                className="max-h-125 overflow-y-auto"
+              >
+                <DropdownMenuItem onClick={() => handleAddPage()}>
+                  <Icon name="page" className="size-3 opacity-60" />
+                  Regular
+                </DropdownMenuItem>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Icon name="dynamicPage" className="size-3 opacity-60" />
+                    CMS
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {collections.length > 0 ? (
+                      collections.map(collection => (
+                        <DropdownMenuItem key={collection.id} onClick={() => handleAddPage(collection.id)}>
+                          <Icon name="database" className="size-3 opacity-60" />
+                          {collection.name}
+                        </DropdownMenuItem>
+                      ))
+                    ) : (
+                      <DropdownMenuItem key={null} onClick={() => navigateToCollections()}>
                         <Icon name="database" className="size-3 opacity-60" />
-                        {collection.name}
+                        Add a collection
                       </DropdownMenuItem>
-                    ))
-                  ) : (
-                    <DropdownMenuItem key={null} onClick={() => navigateToCollections()}>
-                      <Icon name="database" className="size-3 opacity-60" />
-                      Add a collection
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleAddFolder}>
-                <Icon name="folder" className="size-3 opacity-60" />
-                Folder
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+                    )}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleAddFolder}>
+                  <Icon name="folder" className="size-3 opacity-60" />
+                  Folder
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
       </header>
 
       <div className="flex flex-col gap-3">
@@ -805,11 +852,12 @@ export default function LeftSidebarPages({
             setCurrentPageId(pageId);
             handlePageSelect(pageId); // This will also navigate
           }}
-          onReorder={handleReorder}
+          onReorder={readOnly ? undefined : handleReorder}
           onPageSettings={handleEditPage}
           onFolderSettings={handleEditFolder}
-          onDuplicate={handleDuplicate}
-          onDelete={deletePageOrFolderItem}
+          onDuplicate={readOnly ? undefined : handleDuplicate}
+          onDelete={readOnly ? undefined : deletePageOrFolderItem}
+          onStatusChange={readOnly ? undefined : handleStatusChange}
         />
 
         <div className="flex items-center gap-2 mt-2">
@@ -895,4 +943,8 @@ export default function LeftSidebarPages({
       />
     </>
   );
-}
+});
+
+LeftSidebarPages.displayName = 'LeftSidebarPages';
+
+export default LeftSidebarPages;

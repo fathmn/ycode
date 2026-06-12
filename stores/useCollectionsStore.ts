@@ -28,6 +28,13 @@ interface CollectionsState {
   itemsTotalCount: Record<string, number>; // keyed by collection_id (UUID) - total count for pagination
   lastItemsQuery: Record<string, ItemsQueryParams>; // keyed by collection_id — last loadItems params
   selectedCollectionId: string | null; // UUID
+  /**
+   * Slugs of items referenced by link fields but not present in the currently
+   * loaded `items` (e.g. cross-collection refs or items on a different page).
+   * Keyed by item ID. `null` marks an item id we already tried to resolve and
+   * found no slug for — prevents repeated fetch attempts.
+   */
+  crossCollectionSlugs: Record<string, string | null>;
   isLoading: boolean;
   error: string | null;
 }
@@ -53,6 +60,9 @@ interface CollectionsActions {
   loadItems: (collectionId: string, page?: number, limit?: number, sortBy?: string, sortOrder?: string) => Promise<void>;
   loadPublishedItems: (collectionId: string) => Promise<void>;
   getDropdownItems: (collectionId: string) => Promise<Array<{ id: string; label: string }>>;
+  searchAndMergeItems: (collectionId: string, query: string, limit?: number) => Promise<Array<{ id: string; label: string }>>;
+  ensureItemLoaded: (collectionId: string, itemId: string) => Promise<void>;
+  loadMissingItemSlugs: (itemIds: string[]) => Promise<void>;
   createItem: (collectionId: string, values: Record<string, any>, statusAction?: StatusAction) => Promise<CollectionItemWithValues>;
   updateItem: (collectionId: string, itemId: string, values: Record<string, any>) => Promise<void>;
   deleteItem: (collectionId: string, itemId: string) => Promise<void>;
@@ -82,6 +92,7 @@ export const useCollectionsStore = create<CollectionsStore>((set, get) => ({
   itemsTotalCount: {},
   lastItemsQuery: {},
   selectedCollectionId: null,
+  crossCollectionSlugs: {},
   isLoading: false,
   error: null,
 
@@ -737,7 +748,8 @@ export const useCollectionsStore = create<CollectionsStore>((set, get) => ({
     const previousItem = previousItems.find(item => item.id === itemId);
 
     // Optimistically set status to "Published · Edited" if the item is currently published
-    const statusFieldId = findStatusFieldId(get().fields[collectionId] || []);
+    const collectionFields = get().fields[collectionId] || [];
+    const statusFieldId = findStatusFieldId(collectionFields);
     const optimisticStatus: Record<string, string> = {};
     if (statusFieldId && previousItem) {
       try {
@@ -748,12 +760,25 @@ export const useCollectionsStore = create<CollectionsStore>((set, get) => ({
       } catch { /* non-JSON status value, skip */ }
     }
 
+    // Optimistically bump the virtual `updated_at` field to mirror the
+    // server-side auto-bump in setValuesByFieldName.
+    const now = new Date().toISOString();
+    const updatedAtFieldId = collectionFields.find(f => f.key === 'updated_at')?.id;
+    const optimisticTimestamps: Record<string, string> = {};
+    if (updatedAtFieldId && !(updatedAtFieldId in values)) {
+      optimisticTimestamps[updatedAtFieldId] = now;
+    }
+
     set(state => ({
       items: {
         ...state.items,
         [collectionId]: (state.items[collectionId] || []).map(item =>
           item.id === itemId
-            ? { ...item, values: { ...item.values, ...values, ...optimisticStatus }, updated_at: new Date().toISOString() }
+            ? {
+              ...item,
+              values: { ...item.values, ...values, ...optimisticStatus, ...optimisticTimestamps },
+              updated_at: now,
+            }
             : item
         ),
       },
@@ -1199,40 +1224,124 @@ export const useCollectionsStore = create<CollectionsStore>((set, get) => ({
   getDropdownItems: async (collectionId: string) => {
     try {
       const state = get();
-
-      // Fields and items are ALWAYS preloaded before UI renders
-      // No defensive loading needed - guaranteed to be available
       const collectionFields = state.fields[collectionId] || [];
       const items = state.items[collectionId] || [];
 
-      // Find the name field (field with key = 'name')
       const nameField = collectionFields.find(field => field.key === 'name');
-
       if (!nameField) {
         console.warn(`Name field not found for collection ${collectionId}. Available fields:`, collectionFields.map(f => ({ id: f.id, key: f.key, name: f.name })));
       }
 
-      // Map items to { id, label } format
-      const itemsWithLabels = items.map(item => {
-        let label = `Item ${item.id.slice(0, 8)}`;
-
-        if (nameField) {
-          const nameValue = item.values?.[nameField.id];
-          if (nameValue !== null && nameValue !== undefined && String(nameValue).trim() !== '') {
-            label = String(nameValue);
-          }
-        }
-
-        return {
-          id: item.id,
-          label,
-        };
-      });
-
-      return itemsWithLabels;
+      return items.map(item => ({ id: item.id, label: getCollectionItemLabel(item, collectionFields) }));
     } catch (error) {
       console.error('Failed to get dropdown items:', error);
       return [];
     }
   },
+
+  searchAndMergeItems: async (collectionId: string, query: string, limit = 50) => {
+    try {
+      const response = await collectionsApi.getItems(collectionId, {
+        search: query,
+        limit,
+        includeAssets: true,
+      });
+
+      if (response.error) throw new Error(response.error);
+
+      const fetched = response.data?.items || [];
+
+      if (response.data?.referencedAssets?.length) {
+        useAssetsStore.getState().addAssetsToCache(response.data.referencedAssets);
+      }
+
+      // Merge fetched items into the store (dedupe by id) so the canvas can
+      // resolve them for slug/preview rendering when the user picks an item
+      // that wasn't part of the initial preload.
+      set(state => {
+        const existing = state.items[collectionId] || [];
+        const existingIds = new Set(existing.map(item => item.id));
+        const newItems = fetched.filter(item => !existingIds.has(item.id));
+        if (newItems.length === 0) return state;
+        return {
+          items: {
+            ...state.items,
+            [collectionId]: [...existing, ...newItems],
+          },
+        };
+      });
+
+      const fields = get().fields[collectionId] || [];
+      return fetched.map(item => ({ id: item.id, label: getCollectionItemLabel(item, fields) }));
+    } catch (error) {
+      console.error('Failed to search collection items:', error);
+      return [];
+    }
+  },
+
+  ensureItemLoaded: async (collectionId: string, itemId: string) => {
+    if (!collectionId || !itemId) return;
+    const existing = get().items[collectionId] || [];
+    if (existing.some(item => item.id === itemId)) return;
+
+    try {
+      const response = await collectionsApi.getItemById(collectionId, itemId);
+      if (response.error || !response.data) return;
+      const item = response.data;
+
+      set(state => {
+        const current = state.items[collectionId] || [];
+        if (current.some(i => i.id === item.id)) return state;
+        return {
+          items: {
+            ...state.items,
+            [collectionId]: [...current, item],
+          },
+        };
+      });
+    } catch (error) {
+      console.error('Failed to hydrate collection item:', error);
+    }
+  },
+
+  loadMissingItemSlugs: async (itemIds: string[]) => {
+    if (itemIds.length === 0) return;
+
+    const { crossCollectionSlugs } = get();
+    const idsToFetch = itemIds.filter(id => !(id in crossCollectionSlugs));
+    if (idsToFetch.length === 0) return;
+
+    try {
+      const response = await collectionsApi.getItemSlugs(idsToFetch);
+      if (response.error || !response.data) return;
+
+      const fetchedSlugs = response.data.slugs;
+      set(state => {
+        const next: Record<string, string | null> = { ...state.crossCollectionSlugs };
+        // Mark every requested id so we never re-fetch — items without a slug
+        // are recorded as null instead of being omitted from the cache.
+        for (const id of idsToFetch) {
+          next[id] = fetchedSlugs[id] ?? null;
+        }
+        return { crossCollectionSlugs: next };
+      });
+    } catch (error) {
+      console.error('Failed to load missing item slugs:', error);
+    }
+  },
 }));
+
+/**
+ * Resolve a human-readable label for a collection item using the `name` field
+ * when present, falling back to a short id-based placeholder.
+ */
+function getCollectionItemLabel(item: CollectionItemWithValues, fields: CollectionField[]): string {
+  const nameField = fields.find(field => field.key === 'name');
+  if (nameField) {
+    const nameValue = item.values?.[nameField.id];
+    if (nameValue !== null && nameValue !== undefined && String(nameValue).trim() !== '') {
+      return String(nameValue);
+    }
+  }
+  return `Item ${item.id.slice(0, 8)}`;
+}

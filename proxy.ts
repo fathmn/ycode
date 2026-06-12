@@ -33,6 +33,8 @@ const PUBLIC_COLLECTION_ITEM_SUFFIXES = ['/items/filter', '/items/load-more'];
 
 const PUBLIC_API_EXACT = [
   '/ycode/api/revalidate', // Cache revalidation — has own secret token auth
+  '/ycode/api/oauth/register', // RFC 7591 Dynamic Client Registration — anonymous
+  '/ycode/api/oauth/token',    // OAuth token exchange — auth is via PKCE/refresh
   '/ycode/api/setup/status', // Read-only setup status — required before login
   '/ycode/api/setup/check-email-confirm', // Read-only setup check — required before first admin exists
   '/ycode/api/auth/callback', // Auth callback
@@ -220,7 +222,15 @@ function getSupabaseEnvConfig(): { url: string; anonKey: string; secretKey?: str
 
   if (!anonKey || !connectionUrl) return null;
 
-  // Extract project ID from connection URL
+  if (process.env.SUPABASE_URL) {
+    return {
+      url: process.env.SUPABASE_URL.replace(/\/+$/, ''),
+      anonKey,
+      secretKey,
+    };
+  }
+
+  // Hosted Supabase: extract project ID from connection URL
   // e.g. "postgresql://postgres.abc123:..." → "abc123"
   const match = connectionUrl.match(/\/\/postgres\.([a-z0-9]+):/);
   if (!match) return null;
@@ -1132,9 +1142,13 @@ export async function proxy(request: NextRequest) {
     return response;
   }
 
-  // MCP endpoint uses its own token-based authentication — skip session auth.
-  // Cloud overlay proxies MUST also exempt this path to avoid login redirects.
-  if (pathname.startsWith('/ycode/mcp/')) {
+  // MCP endpoints use their own token-based authentication — skip session auth.
+  // Cloud overlay proxies MUST also exempt these paths to avoid login redirects.
+  //   - `/ycode/mcp/<token>`: legacy URL-token endpoint (Cursor, Windsurf, etc.)
+  //   - `/ycode/mcp`: OAuth Bearer-token endpoint (Claude.ai web, ChatGPT)
+  // Studio note: upstream's DISABLE_PREVIEW_AUTH debug escape hatch is deliberately
+  // NOT ported — preview must always require a project membership here.
+  if (pathname === '/ycode/mcp' || pathname.startsWith('/ycode/mcp/')) {
     const response = NextResponse.next();
     response.headers.set('x-pathname', pathname);
     return response;

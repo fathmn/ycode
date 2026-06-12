@@ -33,9 +33,12 @@ import {
 } from '@/components/ui/empty';
 
 // 4. Hooks
+import { useCanvasPan } from '@/hooks/use-canvas-pan';
 import { useEditorUrl } from '@/hooks/use-editor-url';
+import { useEditComponent } from '@/hooks/use-edit-component';
 import { useZoom } from '@/hooks/use-zoom';
 import { useUndoRedo } from '@/hooks/use-undo-redo';
+import { useRole } from '@/hooks/use-role';
 
 // 5. Stores
 import { useEditorStore } from '@/stores/useEditorStore';
@@ -53,11 +56,12 @@ import { CollectionFieldSelector } from './CollectionFieldSelector';
 import SelectionOverlay from '@/components/SelectionOverlay';
 import RichTextLinkPopover from './RichTextLinkPopover';
 import PageSelector from './PageSelector';
+import CollectionItemSelector from './CollectionItemSelector';
 import RichTextEditorSheet from './RichTextEditorSheet';
 
 // 6. Utils
-import { buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page-utils';
-import { getTranslationValue } from '@/lib/localisation-utils';
+import { buildPreviewAuthRevision, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page-utils';
+import { getTranslationValue, applyCmsTranslations, extractLayerTranslatableItemsShallow } from '@/lib/localisation-utils';
 import { cn } from '@/lib/utils';
 import { STUDIO_PROJECT_SELECTION_EVENT, getSelectedStudioProjectSlug } from '@/lib/api';
 import { getCollectionVariable, canDeleteLayer, findLayerById, findParentCollectionLayer, canLayerHaveLink, updateLayerProps, removeRichTextSublayer, isRichTextLayer, getLayerCmsFieldBinding } from '@/lib/layer-utils';
@@ -96,7 +100,6 @@ import { useCanvasDropDetection } from '@/hooks/use-canvas-drop-detection';
 import { useCanvasSiblingReorder } from '@/hooks/use-canvas-sibling-reorder';
 
 interface CenterCanvasProps {
-  selectedLayerId: string | null;
   currentPageId: string | null;
   viewportMode: ViewportMode;
   setViewportMode: (mode: ViewportMode) => void;
@@ -193,6 +196,9 @@ function ViewportZoomControls({
           avoidCollisions={false}
           collisionPadding={0}
           className="max-h-75! w-38"
+          // Don't return focus to the trigger on close, otherwise pressing Space
+          // (the pan shortcut) re-activates the focused button and reopens this menu.
+          onCloseAutoFocus={(e) => e.preventDefault()}
         >
           <DropdownMenuItem onClick={onZoomIn}>
             Zoom in
@@ -601,7 +607,6 @@ function CanvasSiblingReorderOverlay({
 }
 
 const CenterCanvas = React.memo(function CenterCanvas({
-  selectedLayerId,
   currentPageId,
   viewportMode,
   setViewportMode,
@@ -611,12 +616,17 @@ const CenterCanvas = React.memo(function CenterCanvas({
   liveLayerUpdates,
   liveComponentUpdates,
 }: CenterCanvasProps) {
+  const { canEditStructure } = useRole();
+  const selectedLayerId = useEditorStore((state) => state.selectedLayerId);
+
   const [showAddBlockPanel, setShowAddBlockPanel] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [previewContentHeight, setPreviewContentHeight] = useState(0);
   const previousCanvasScopeRef = useRef<string | null>(null);
+  const [previewContainerHeight, setPreviewContainerHeight] = useState(0);
+  const [previewContainerWidth, setPreviewContainerWidth] = useState(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // State for iframe element (for SelectionOverlay)
@@ -651,20 +661,28 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const selectLayerWithSublayer = useEditorStore((state) => state.selectLayerWithSublayer);
 
   const selectedLocaleId = useLocalisationStore((state) => state.selectedLocaleId);
-  const getSelectedLocale = useLocalisationStore((state) => state.getSelectedLocale);
   const translations = useLocalisationStore((state) => state.translations);
+  const locales = useLocalisationStore((state) => state.locales);
+  // Derive the selected locale here (instead of via getSelectedLocale()) so it
+  // is in scope for callbacks defined below — non-default locales gate every
+  // canvas mutation handler into a no-op (read-only translation mode).
+  const selectedLocale = useMemo(
+    () => (selectedLocaleId ? locales.find((l) => l.id === selectedLocaleId) ?? null : null),
+    [selectedLocaleId, locales]
+  );
   const activeUIState = useEditorStore((state) => state.activeUIState);
   const editingComponentId = useEditorStore((state) => state.editingComponentId);
+  const editingComponentVariantId = useEditorStore((state) => state.editingComponentVariantId);
   const setCurrentPageId = useEditorStore((state) => state.setCurrentPageId);
   const returnToPageId = useEditorStore((state) => state.returnToPageId);
   const currentPageCollectionItemId = useEditorStore((state) => state.currentPageCollectionItemId);
   const setCurrentPageCollectionItemId = useEditorStore((state) => state.setCurrentPageCollectionItemId);
-  const hoveredLayerId = useEditorStore((state) => state.hoveredLayerId);
   const setHoveredLayerId = useEditorStore((state) => state.setHoveredLayerId);
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
   const [selectedProjectSlug, setSelectedProjectSlug] = useState<string | null>(() => getSelectedPreviewProjectSlug());
   const activeSidebarTab = useEditorStore((state) => state.activeSidebarTab);
   const activeInteractionTriggerLayerId = useEditorStore((state) => state.activeInteractionTriggerLayerId);
+  const activeInteractionTargetLayerIds = useEditorStore((state) => state.activeInteractionTargetLayerIds);
   const richTextSheetLayerId = useEditorStore((state) => state.richTextSheetLayerId);
   const closeRichTextSheet = useEditorStore((state) => state.closeRichTextSheet);
   const activeSublayerIndex = useEditorStore((state) => state.activeSublayerIndex);
@@ -725,20 +743,22 @@ const CenterCanvas = React.memo(function CenterCanvas({
     }
   }, [isTextEditing, editingLayerId, selectedLayerId, requestFinishEditing]);
 
-  // Close rich text sheet if a different layer is selected
+  // Close rich text sheet if a different layer is selected. Flushing the
+  // pending translation save first ensures the last keystroke is persisted
+  // when the user changes selection mid-edit. The flush function is defined
+  // later in this component, so we go through a ref to keep effect ordering
+  // and avoid a "use-before-declaration" cycle.
+  const flushRichTextTranslationSaveRef = useRef<() => void>(() => { });
   useEffect(() => {
     if (richTextSheetLayerId && selectedLayerId !== richTextSheetLayerId) {
+      flushRichTextTranslationSaveRef.current();
       closeRichTextSheet();
     }
   }, [richTextSheetLayerId, selectedLayerId, closeRichTextSheet]);
 
-  // Load draft when page changes (ensure draft exists before rendering)
-  const loadDraft = usePagesStore((state) => state.loadDraft);
-  useEffect(() => {
-    if (currentPageId && !currentDraft) {
-      loadDraft(currentPageId);
-    }
-  }, [currentPageId, loadDraft, currentDraft]);
+  // Draft loading is owned by LeftSidebar (wrapped in startTransition).
+  // The store-level in-flight guard in loadDraft makes any concurrent call
+  // a no-op if LeftSidebar is not mounted.
 
   // Reset content height when page changes to force Canvas to recalculate
   useEffect(() => {
@@ -750,21 +770,31 @@ const CenterCanvas = React.memo(function CenterCanvas({
     setReportedContentWidth(0);
   }, [editingComponentId]);
 
-  const getDropdownItems = useCollectionsStore((state) => state.getDropdownItems);
   const collectionItemsFromStore = useCollectionsStore((state) => state.items);
   const collectionsFromStore = useCollectionsStore((state) => state.collections);
   const collectionFieldsFromStore = useCollectionsStore((state) => state.fields);
 
   // Collection layer store for independent layer data
-  const collectionLayerData = useCollectionLayerStore((state) => state.layerData);
   const referencedItems = useCollectionLayerStore((state) => state.referencedItems);
-  const fetchReferencedCollectionItems = useCollectionLayerStore((state) => state.fetchReferencedCollectionItems);
+  const fetchReferencedCollectionsBatch = useCollectionLayerStore((state) => state.fetchReferencedCollectionsBatch);
+
+  const mergedCollectionItems = useMemo(
+    () => ({ ...collectionItemsFromStore, ...referencedItems }),
+    [collectionItemsFromStore, referencedItems],
+  );
 
   const components = useComponentsStore((state) => state.components);
   const componentDrafts = useComponentsStore((state) => state.componentDrafts);
-  const [collectionItems, setCollectionItems] = useState<Array<{ id: string; label: string }>>([]);
-  const [collectionItemSearch, setCollectionItemSearch] = useState('');
-
+  // Resolve the active variant id while editing a component. The editor store
+  // is the source of truth; falls back to the first persisted variant when
+  // the URL/state references a stale id.
+  const activeComponentVariantId = useMemo(() => {
+    if (!editingComponentId) return null;
+    const drafts = componentDrafts[editingComponentId];
+    if (!drafts) return editingComponentVariantId || null;
+    if (editingComponentVariantId && drafts[editingComponentVariantId]) return editingComponentVariantId;
+    return Object.keys(drafts)[0] || null;
+  }, [editingComponentId, editingComponentVariantId, componentDrafts]);
   // Get editing component's variables for default value display
   // Depends on `components` array to react to variable changes
   const editingComponentVariables = useMemo(() => {
@@ -772,7 +802,6 @@ const CenterCanvas = React.memo(function CenterCanvas({
     const component = components.find(c => c.id === editingComponentId);
     return component?.variables;
   }, [editingComponentId, components]);
-  const [isLoadingItems, setIsLoadingItems] = useState(false);
 
   // Undo/Redo hook - tracks versions for the current entity (page or component)
   const undoRedoEntityType = editingComponentId ? 'component' : 'page_layers';
@@ -850,6 +879,14 @@ const CenterCanvas = React.memo(function CenterCanvas({
     shortcutsEnabled: !isPreviewMode,
   });
 
+  // Pan the canvas by dragging while holding Space or with the middle mouse button
+  const { isPanGestureActive } = useCanvasPan({
+    scrollContainerRef,
+    iframeElement: canvasIframeElement,
+    enabled: !isPreviewMode,
+    isTextEditing,
+  });
+
   // Independent zoom for the preview (second useZoom instance, active only in preview mode)
   const previewContentWidth = parseInt((viewportSizes[viewportMode] || viewportSizes.desktop).width);
   const {
@@ -871,43 +908,41 @@ const CenterCanvas = React.memo(function CenterCanvas({
     iframeRef,
   });
 
-  const [previewViewportHeight, setPreviewViewportHeight] = useState(0);
-
-  useEffect(() => {
-    if (!isPreviewMode) return;
-    const container = previewContainerRef.current;
-    if (!container) return;
-
-    const updatePreviewViewportHeight = () => {
-      setPreviewViewportHeight(Math.max(0, container.clientHeight - (CANVAS_BORDER * 2)));
-    };
-
-    updatePreviewViewportHeight();
-    const resizeObserver = new ResizeObserver(updatePreviewViewportHeight);
-    resizeObserver.observe(container);
-
-    return () => resizeObserver.disconnect();
-  }, [isPreviewMode]);
-
-  const previewFrameHeight = useMemo(() => {
-    const viewportHeight = previewViewportHeight || defaultCanvasHeight;
-    const zoomScale = previewZoom > 0 ? previewZoom / 100 : 1;
-    return Math.max(320, viewportHeight / zoomScale);
-  }, [defaultCanvasHeight, previewViewportHeight, previewZoom]);
-  const previewCanvasHeight = useMemo(() => (
-    Math.max(previewContentHeight || 0, previewFrameHeight)
-  ), [previewContentHeight, previewFrameHeight]);
-
-  // Calculate final iframe height — always stretch so the scaled canvas fills the
-  // visible viewport at any zoom level. When the actual content is taller than the
-  // viewport, use the content height instead so scrolling works naturally.
+  // Size the iframe element to exactly fill the visible canvas area at the
+  // current zoom. The iframe's native scrolling then handles document content
+  // taller than this — giving a single, properly-bounded scrollbar inside the
+  // canvas instead of an (invisible) outer container scroll. Content height
+  // (iframeContentHeight) still drives Fit Height zoom calc separately.
   const finalIframeHeight = useMemo(() => {
     if (editingComponentId) return iframeContentHeight;
     if (!containerHeight || zoom <= 0) return iframeContentHeight;
 
-    const minHeightForZoom = (containerHeight - CANVAS_PADDING) / (zoom / 100);
-    return Math.max(iframeContentHeight, minHeightForZoom);
+    return (containerHeight - CANVAS_PADDING) / (zoom / 100);
   }, [iframeContentHeight, containerHeight, zoom, editingComponentId]);
+
+  // Same logic as finalIframeHeight, applied to the preview iframe. Sizing the
+  // wrapper to the measured scrollHeight is unstable on pages that pin absolute
+  // elements to the viewport (e.g. `bottom: -6rem` with no positioned ancestor)
+  // — once `h-full` is restored after measurement, those elements extend past
+  // the wrapper. Sizing to the visible container area instead lets the iframe
+  // scroll internally and keeps the scrollbar bounded and accurate.
+  const finalPreviewIframeHeight = useMemo(() => {
+    if (!previewContainerHeight || previewZoom <= 0) return 0;
+    return (previewContainerHeight - CANVAS_PADDING) / (previewZoom / 100);
+  }, [previewContainerHeight, previewZoom]);
+
+  // Natural (unscaled) width of the preview iframe — its true layout viewport.
+  // Mirrors the previous `width: '100%' (minWidth: viewport)` vs fixed-width
+  // logic, but as a concrete pixel value so the iframe can be scaled with
+  // `transform` instead of CSS `zoom`. In desktop autofit the preview fills the
+  // available container width (but never below the desktop breakpoint); other
+  // modes use the exact breakpoint width.
+  const previewStageWidth = useMemo(() => {
+    if (viewportMode === 'desktop' && previewZoomMode === 'autofit') {
+      return Math.max(previewContainerWidth - CANVAS_PADDING, previewContentWidth);
+    }
+    return previewContentWidth;
+  }, [viewportMode, previewZoomMode, previewContainerWidth, previewContentWidth]);
 
   const previewObserverRef = useRef<ResizeObserver | null>(null);
 
@@ -1031,32 +1066,38 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const isInitialScrollRef = useRef(true);
 
   const scrollCanvasToLayer = useCallback((layerId: string, smooth: boolean, force = false) => {
-    const scrollEl = scrollContainerRef.current;
-    if (!canvasIframeElement || !scrollEl) return;
+    if (!canvasIframeElement) return;
 
     const iframeDoc = canvasIframeElement.contentDocument;
-    if (!iframeDoc) return;
+    const iframeWin = canvasIframeElement.contentWindow;
+    if (!iframeDoc || !iframeWin) return;
 
     const el = iframeDoc.querySelector(`[data-layer-id="${layerId}"]`) as HTMLElement;
     if (!el) return;
 
+    // Scrolling happens inside the iframe (the iframe element is sized to the
+    // visible canvas area; its own document handles overflow). All coordinates
+    // here are in the iframe's coordinate system, so zoom doesn't apply.
+    const scrollEl = iframeDoc.scrollingElement || iframeDoc.documentElement;
     const elRect = el.getBoundingClientRect();
-    const iframeRect = canvasIframeElement.getBoundingClientRect();
-    const zoomScale = zoom / 100;
-    const elTopInScroll = iframeRect.top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop + elRect.top * zoomScale;
-    const elBottomInScroll = elTopInScroll + elRect.height * zoomScale;
-    const viewTop = scrollEl.scrollTop;
-    const viewBottom = scrollEl.scrollTop + scrollEl.clientHeight;
+    const currentScroll = scrollEl.scrollTop;
+    const viewHeight = scrollEl.clientHeight;
 
-    if (!force && elTopInScroll >= viewTop && elBottomInScroll <= viewBottom) return;
+    const elTopInDoc = currentScroll + elRect.top;
+    const elBottomInDoc = elTopInDoc + elRect.height;
+    const viewTop = currentScroll;
+    const viewBottom = viewTop + viewHeight;
 
-    const elScaledHeight = elRect.height * zoomScale;
-    const fitsInView = elScaledHeight <= scrollEl.clientHeight;
+    if (!force && elTopInDoc >= viewTop && elBottomInDoc <= viewBottom) return;
+
+    const fitsInView = elRect.height <= viewHeight;
     const targetScroll = fitsInView
-      ? elTopInScroll - (scrollEl.clientHeight / 2) + (elScaledHeight / 2)
-      : elTopInScroll;
+      ? elTopInDoc - viewHeight / 2 + elRect.height / 2
+      : elTopInDoc;
+    // scrollEl.scrollTo starts the animation more reliably than iframeWin.scrollTo
+    // across browsers, which avoids a noticeable lag before smooth scrolling begins.
     scrollEl.scrollTo({ top: Math.max(0, targetScroll), behavior: smooth ? 'smooth' : 'auto' });
-  }, [canvasIframeElement, zoom]);
+  }, [canvasIframeElement]);
 
   const scrollCanvasToLayerRef = useRef(scrollCanvasToLayer);
   scrollCanvasToLayerRef.current = scrollCanvasToLayer;
@@ -1077,7 +1118,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
     let attempts = 0;
     const maxAttempts = 20;
-    const delay = isInitial ? 200 : 50;
+    let timeoutId: number | undefined;
 
     const tryScroll = () => {
       const iframeDoc = canvasIframeElement.contentDocument;
@@ -1092,9 +1133,18 @@ const CenterCanvas = React.memo(function CenterCanvas({
       scrollCanvasToLayer(selectedLayerId, !isInitial);
     };
 
-    let timeoutId = window.setTimeout(tryScroll, delay);
+    // Try synchronously first — the layer is almost always already in the DOM
+    // when selection changes, so we can start scrolling immediately. Only the
+    // initial selection on page load needs a deferred attempt while layers mount.
+    if (isInitial) {
+      timeoutId = window.setTimeout(tryScroll, 200);
+    } else {
+      tryScroll();
+    }
 
-    return () => clearTimeout(timeoutId);
+    return () => {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    };
   }, [selectedLayerId, canvasIframeElement, isCanvasReady, scrollCanvasToLayer]);
 
   // Re-scroll when content height changes during initial load (images loading shifts layout)
@@ -1155,10 +1205,27 @@ const CenterCanvas = React.memo(function CenterCanvas({
     return () => resizeObserver.disconnect();
   }, [isCanvasReady]);
 
+  // Track preview container height so the preview iframe wrapper can be sized
+  // to fit the visible area (mirrors the canvas container tracking).
+  useEffect(() => {
+    const container = previewContainerRef.current;
+    if (!container) return;
+
+    const update = () => {
+      setPreviewContainerHeight(container.clientHeight);
+      setPreviewContainerWidth(container.clientWidth);
+    };
+    update();
+    const resizeObserver = new ResizeObserver(update);
+    resizeObserver.observe(container);
+
+    return () => resizeObserver.disconnect();
+  }, [isPreviewMode]);
+
   const layers = useMemo(() => {
-    // If editing a component, show component layers
-    if (editingComponentId) {
-      return componentDrafts[editingComponentId] || [];
+    // If editing a component, show the active variant's layers
+    if (editingComponentId && activeComponentVariantId) {
+      return componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
     }
 
     // Otherwise show page layers
@@ -1167,7 +1234,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
     }
 
     return currentDraft ? currentDraft.layers : [];
-  }, [editingComponentId, componentDrafts, currentPageId, currentDraft]);
+  }, [editingComponentId, activeComponentVariantId, componentDrafts, currentPageId, currentDraft]);
 
   const layersOrderKey = useMemo(() => buildLayerOrderSignature(layers), [layers]);
 
@@ -1221,77 +1288,78 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const invalidationKey = useCollectionLayerStore((state) => state.invalidationKey);
   const fetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Create a stable string representation of collection layer settings for dependency
-  const collectionLayersKey = useMemo(() => {
-    const extractCollectionSettings = (layerList: Layer[]): string[] => {
-      const settings: string[] = [];
+  // Extract the fetch params for every collection layer in one tree walk. The
+  // params reference changes whenever `layers` changes, but the derived
+  // `collectionLayersKey` string only changes when collection-relevant settings
+  // change — so the actual fetch effect can ignore unrelated edits (typing,
+  // styling) and only fire on real collection changes.
+  const collectionFetchParams = useMemo(() => {
+    const params: Array<{
+      layerId: string;
+      collectionId: string;
+      sortBy: string | undefined;
+      sortOrder: 'asc' | 'desc' | undefined;
+      limit: number | undefined;
+      offset: number | undefined;
+    }> = [];
+    const traverse = (layerList: Layer[]) => {
       layerList.forEach((layer) => {
         const collectionVariable = getCollectionVariable(layer);
         if (collectionVariable?.id) {
           const opts = layer.settings?.optionsSource;
-          const sortBy = opts?.sortFieldId || collectionVariable.sort_by;
-          const sortOrder = opts?.sortOrder || collectionVariable.sort_order;
-          settings.push(`${layer.id}:${collectionVariable.id}:${sortBy ?? ''}:${sortOrder ?? ''}:${collectionVariable.limit ?? ''}:${collectionVariable.offset ?? ''}`);
+          params.push({
+            layerId: layer.id,
+            collectionId: collectionVariable.id,
+            sortBy: opts?.sortFieldId || collectionVariable.sort_by || undefined,
+            sortOrder: opts?.sortOrder || collectionVariable.sort_order || undefined,
+            limit: collectionVariable.limit ?? undefined,
+            offset: collectionVariable.offset ?? undefined,
+          });
         }
         if (layer.children && layer.children.length > 0) {
-          settings.push(...extractCollectionSettings(layer.children));
+          traverse(layer.children);
         }
       });
-      return settings;
     };
-
-    return extractCollectionSettings(layers).join('|');
+    traverse(layers);
+    return params;
   }, [layers]);
+
+  // Stable string key used as the effect dependency so unrelated layer edits
+  // (text content, design changes) don't re-arm the debounced fetch timer.
+  const collectionLayersKey = useMemo(
+    () => collectionFetchParams
+      .map((p) => `${p.layerId}:${p.collectionId}:${p.sortBy ?? ''}:${p.sortOrder ?? ''}:${p.limit ?? ''}:${p.offset ?? ''}`)
+      .join('|'),
+    [collectionFetchParams],
+  );
+
+  // Keep latest params reachable from inside the debounced timer without
+  // needing to add the (unstable) array reference to the effect deps.
+  const collectionFetchParamsRef = useRef(collectionFetchParams);
+  collectionFetchParamsRef.current = collectionFetchParams;
 
   // Debounce the fetch to prevent duplicate calls during rapid updates
   useEffect(() => {
-    // Clear any existing timeout
     if (fetchTimeoutRef.current) {
       clearTimeout(fetchTimeoutRef.current);
     }
 
-    // Set new timeout
     fetchTimeoutRef.current = setTimeout(() => {
-      // Recursively find all collection layers and fetch their data
-      const findAndFetchCollectionLayers = (layerList: Layer[]) => {
-        layerList.forEach((layer) => {
-          const collectionVariable = getCollectionVariable(layer);
-          if (collectionVariable?.id) {
-            const opts = layer.settings?.optionsSource;
-            const sortBy = opts?.sortFieldId || collectionVariable.sort_by;
-            const sortOrder = opts?.sortOrder || collectionVariable.sort_order;
-            fetchLayerData(
-              layer.id,
-              collectionVariable.id,
-              sortBy,
-              sortOrder,
-              collectionVariable.limit,
-              collectionVariable.offset
-            );
-          }
-
-          // Recursively check children
-          if (layer.children && layer.children.length > 0) {
-            findAndFetchCollectionLayers(layer.children);
-          }
-        });
-      };
-
-      if (layers.length > 0) {
-        findAndFetchCollectionLayers(layers);
-      }
-
+      const params = collectionFetchParamsRef.current;
+      params.forEach((p) => {
+        fetchLayerData(p.layerId, p.collectionId, p.sortBy, p.sortOrder, p.limit, p.offset);
+      });
       fetchTimeoutRef.current = null;
-    }, 100); // 100ms debounce - waits for rapid updates to settle
+    }, 100);
 
-    // Cleanup function
     return () => {
       if (fetchTimeoutRef.current) {
         clearTimeout(fetchTimeoutRef.current);
         fetchTimeoutRef.current = null;
       }
     };
-  }, [collectionLayersKey, fetchLayerData, layers, invalidationKey]);
+  }, [collectionLayersKey, fetchLayerData, invalidationKey]);
 
   // Get current page
   const currentPage = useMemo(() => pages.find(p => p.id === currentPageId), [pages, currentPageId]);
@@ -1339,34 +1407,33 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const editingLayerParentCollection = useMemo(() => {
     if (!editingLayerId || !currentPageId) return null;
 
-    // Get layers from either component draft or page draft
+    // Get layers from either the active component variant draft or page draft
     let layersToSearch: Layer[] = [];
-    if (editingComponentId) {
-      layersToSearch = componentDrafts[editingComponentId] || [];
+    if (editingComponentId && activeComponentVariantId) {
+      layersToSearch = componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
     } else {
       layersToSearch = currentDraft ? currentDraft.layers : [];
     }
 
     if (!layersToSearch.length) return null;
 
-    // Find parent collection layer
     return findParentCollectionLayer(layersToSearch, editingLayerId);
-  }, [editingLayerId, editingComponentId, componentDrafts, currentPageId, currentDraft]);
+  }, [editingLayerId, editingComponentId, activeComponentVariantId, componentDrafts, currentPageId, currentDraft]);
 
   // Build field groups for the canvas text editor's inline variable selection
   // Components are page-agnostic, so exclude dynamic page-collection fields when editing a component
   const fieldGroups = useMemo(() => {
     if (!editingLayerId) return undefined;
     let layers: Layer[] = [];
-    if (editingComponentId) {
-      layers = componentDrafts[editingComponentId] || [];
+    if (editingComponentId && activeComponentVariantId) {
+      layers = componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
     } else if (currentPageId) {
       layers = currentDraft ? currentDraft.layers : [];
     }
     if (!layers.length) return undefined;
     const page = editingComponentId ? null : currentPage;
     return buildFieldGroupsForLayer(editingLayerId, layers, page, collectionFieldsFromStore, collectionsFromStore);
-  }, [editingLayerId, editingComponentId, componentDrafts, currentPageId, currentDraft, currentPage, collectionFieldsFromStore, collectionsFromStore]);
+  }, [editingLayerId, editingComponentId, activeComponentVariantId, componentDrafts, currentPageId, currentDraft, currentPage, collectionFieldsFromStore, collectionsFromStore]);
 
   const textFieldGroups = useMemo(
     () => filterFieldGroupsByType(fieldGroups, SIMPLE_TEXT_FIELD_TYPES),
@@ -1384,12 +1451,17 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
   // Handle any click inside the canvas (closes ElementLibrary panel and other popovers)
   const handleCanvasClick = useCallback(() => {
+    // Ignore clicks that are part of a pan gesture (Space-drag / middle-mouse)
+    if (isPanGestureActive()) return;
     window.dispatchEvent(new CustomEvent('closeElementLibrary'));
     window.dispatchEvent(new CustomEvent('canvasClick'));
-  }, []);
+  }, [isPanGestureActive]);
 
   // Canvas callback handlers
   const handleCanvasLayerClick = useCallback((layerId: string, event?: React.MouseEvent) => {
+    // Don't select layers while panning the canvas (Space-drag / middle-mouse)
+    if (isPanGestureActive()) return;
+
     // Skip selection changes during drag operations
     const { isDraggingLayerOnCanvas, isDraggingToCanvas, elementPicker: picker } = useEditorStore.getState();
     if (isDraggingLayerOnCanvas || isDraggingToCanvas) {
@@ -1459,8 +1531,8 @@ const CenterCanvas = React.memo(function CenterCanvas({
       let resolvedSublayerIndex = Number.isFinite(blockIndex) ? blockIndex : null;
       let resolvedListItemIndex = Number.isFinite(listItemIndex) ? listItemIndex : null;
       if (resolvedSublayerIndex !== null && textStyleKey) {
-        const layers = editingComponentId
-          ? (componentDrafts[editingComponentId] || [])
+        const layers = editingComponentId && activeComponentVariantId
+          ? (componentDrafts[editingComponentId]?.[activeComponentVariantId] || [])
           : (currentDraft?.layers || []);
         const layer = findLayerById(layers, layerId);
         if (layer && isRichTextLayer(layer) && !getLayerCmsFieldBinding(layer)) {
@@ -1475,20 +1547,27 @@ const CenterCanvas = React.memo(function CenterCanvas({
         listItemIndex: resolvedListItemIndex,
       });
     }
-  }, [isPreviewMode, setActiveSidebarTab, selectLayerWithSublayer, editingComponentId, componentDrafts, currentDraft]);
+  }, [isPanGestureActive, isPreviewMode, setActiveSidebarTab, selectLayerWithSublayer, editingComponentId, activeComponentVariantId, componentDrafts, currentDraft]);
 
   const handleCanvasLayerUpdate = useCallback((layerId: string, updates: Partial<Layer>) => {
-    if (editingComponentId) {
-      const { updateComponentDraft } = useComponentsStore.getState();
-      const currentDraft = componentDrafts[editingComponentId] || [];
-      updateComponentDraft(editingComponentId, updateLayerProps(currentDraft, layerId, updates));
+    // Block all source-layer mutations from the canvas while in a non-default
+    // locale. The Translate panel writes through the translations table instead
+    // of mutating the layer tree.
+    if (selectedLocale && !selectedLocale.is_default) return;
+
+    if (editingComponentId && activeComponentVariantId) {
+      const { componentDrafts, updateComponentDraft } = useComponentsStore.getState();
+      const currentDraft = componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
+      updateComponentDraft(editingComponentId, activeComponentVariantId, updateLayerProps(currentDraft, layerId, updates));
     } else if (currentPageId) {
       updateLayer(currentPageId, layerId, updates);
     }
-  }, [editingComponentId, componentDrafts, currentPageId, updateLayer]);
+  }, [editingComponentId, activeComponentVariantId, currentPageId, updateLayer, selectedLocale]);
 
   const handleCanvasDeleteLayer = useCallback(() => {
     if (!selectedLayerId || !currentPageId) return;
+    // Block layer deletion in non-default locales (read-only canvas).
+    if (selectedLocale && !selectedLocale.is_default) return;
 
     // Handle sublayer deletion (remove TipTap block, not the whole layer)
     if (activeSublayerIndex !== null) {
@@ -1525,10 +1604,11 @@ const CenterCanvas = React.memo(function CenterCanvas({
         setSelectedLayerId(null);
       }
     }
-  }, [selectedLayerId, currentPageId, selectedLayerIds, currentDraft, deleteLayers, clearSelection, deleteLayer, setSelectedLayerId, activeSublayerIndex, setActiveSublayerIndex, updateLayer]);
+  }, [selectedLayerId, currentPageId, selectedLayerIds, currentDraft, deleteLayers, clearSelection, deleteLayer, setSelectedLayerId, activeSublayerIndex, setActiveSublayerIndex, updateLayer, selectedLocale]);
 
   const handleCanvasGapUpdate = useCallback((layerId: string, gapValue: string) => {
     if (!currentPageId) return;
+    if (selectedLocale && !selectedLocale.is_default) return;
 
     // Find the layer and update its gap class
     if (!currentDraft) return;
@@ -1547,7 +1627,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
     // Update the layer
     updateLayer(currentPageId, layerId, { classes: newClasses });
-  }, [currentPageId, currentDraft, updateLayer]);
+  }, [currentPageId, currentDraft, updateLayer, selectedLocale]);
 
   // Rich text sheet for canvas double-click (layers with components/variables)
   // Build field groups using the sheet target layer (not the canvas text editor layer)
@@ -1555,39 +1635,152 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const richTextSheetFieldGroups = useMemo(() => {
     if (!richTextSheetLayerId || !currentPageId) return undefined;
     let layers: Layer[] = [];
-    if (editingComponentId) {
-      layers = componentDrafts[editingComponentId] || [];
+    if (editingComponentId && activeComponentVariantId) {
+      layers = componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
     } else {
       layers = currentDraft ? currentDraft.layers : [];
     }
     if (!layers.length) return undefined;
     const page = editingComponentId ? null : currentPage;
     return buildFieldGroupsForLayer(richTextSheetLayerId, layers, page, collectionFieldsFromStore, collectionsFromStore);
-  }, [richTextSheetLayerId, editingComponentId, componentDrafts, currentPageId, currentDraft, currentPage, collectionFieldsFromStore, collectionsFromStore]);
+  }, [richTextSheetLayerId, editingComponentId, activeComponentVariantId, componentDrafts, currentPageId, currentDraft, currentPage, collectionFieldsFromStore, collectionsFromStore]);
 
   // Track the current value locally so the value prop always matches the editor's
   // internal state. This prevents the editor's sync effect from resetting content
   // when other deps (fields, allFields) change.
   const [richTextSheetValue, setRichTextSheetValue] = useState<any>(null);
 
+  // Translation context for the rich-text sheet. When the user is browsing the
+  // canvas in a non-default locale and a rich-text layer is the sheet target,
+  // we redirect read/write through the translations table instead of mutating
+  // the source layer. This is what makes the rich-text editor act as the
+  // translation surface for rich text (no plain-textarea fallback in the sidebar).
+  const richTextTranslationContext = useMemo(() => {
+    if (!richTextSheetLayerId || !selectedLocale || selectedLocale.is_default) return null;
+    const sourceLayers: Layer[] = editingComponentId && activeComponentVariantId
+      ? (componentDrafts[editingComponentId]?.[activeComponentVariantId] || [])
+      : (currentDraft?.layers || []);
+    const layer = findLayerById(sourceLayers, richTextSheetLayerId);
+    if (!layer || !isRichTextLayer(layer)) return null;
+    const sourceType: 'page' | 'component' = editingComponentId ? 'component' : 'page';
+    const sourceId = editingComponentId || currentPageId;
+    if (!sourceId) return null;
+    const items = extractLayerTranslatableItemsShallow(layer, sourceType, sourceId);
+    const item = items.find((i) => i.content_type === 'richtext');
+    if (!item) return null;
+    return { item };
+  }, [richTextSheetLayerId, selectedLocale, editingComponentId, activeComponentVariantId, componentDrafts, currentDraft, currentPageId]);
+
   useEffect(() => {
     if (!richTextSheetLayerId) {
       setRichTextSheetValue(null);
       return;
     }
-    const source = editingComponentId
-      ? componentDrafts[editingComponentId]
-      : currentDraft?.layers ?? null;
+
+    // Localization mode: only show the saved translation. Per spec we don't
+    // surface the default-locale source inside the editor — the user types the
+    // translation from scratch (the source is visible on the canvas).
+    if (richTextTranslationContext && selectedLocaleId) {
+      const stored = useLocalisationStore
+        .getState()
+        .getTranslationByKey(selectedLocaleId, richTextTranslationContext.item.key)?.content_value;
+      if (stored && stored.trim()) {
+        try {
+          setRichTextSheetValue(JSON.parse(stored));
+          return;
+        } catch {
+          // fall through to empty doc
+        }
+      }
+      setRichTextSheetValue({ type: 'doc', content: [{ type: 'paragraph' }] });
+      return;
+    }
+
+    const compId = useEditorStore.getState().editingComponentId;
+    const variantId = useEditorStore.getState().editingComponentVariantId;
+    const source = (() => {
+      if (compId) {
+        const drafts = useComponentsStore.getState().componentDrafts[compId];
+        if (!drafts) return null;
+        return drafts[variantId ?? ''] ?? drafts[Object.keys(drafts)[0]] ?? null;
+      }
+      return usePagesStore.getState().draftsByPageId[currentPageId ?? '']?.layers ?? null;
+    })();
     const layer = source ? findLayerById(source as Layer[], richTextSheetLayerId) : null;
     setRichTextSheetValue(getRichTextValue(layer?.variables));
-  // Only re-derive when the sheet target layer changes, not on every draft update
+  // Only re-derive when the sheet target layer (or translation context) changes,
+  // not on every draft update.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [richTextSheetLayerId]);
+  }, [richTextSheetLayerId, richTextTranslationContext, selectedLocaleId]);
+
+  // Debounced save for translation writes — the rich-text editor fires onChange
+  // on every keystroke, so we coalesce writes to avoid spamming the API and
+  // racing the optimistic create with concurrent updates.
+  const richTextTranslationSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const richTextTranslationPendingValueRef = useRef<{ key: string; value: string; localeId: string } | null>(null);
+
+  const flushRichTextTranslationSave = useCallback(() => {
+    if (richTextTranslationSaveTimerRef.current) {
+      clearTimeout(richTextTranslationSaveTimerRef.current);
+      richTextTranslationSaveTimerRef.current = null;
+    }
+    const pending = richTextTranslationPendingValueRef.current;
+    if (!pending) return;
+    // Drop the pending save if the user switched locale or selection while
+    // typing — we only want to persist edits authored against the locale they
+    // were typed for.
+    if (!richTextTranslationContext || !selectedLocaleId) return;
+    if (pending.key !== richTextTranslationContext.item.key) return;
+    if (pending.localeId !== selectedLocaleId) return;
+    const item = richTextTranslationContext.item;
+    const store = useLocalisationStore.getState();
+    const latest = store.getTranslationByKey(selectedLocaleId, item.key);
+    const previousValue = latest?.content_value || '';
+    if (pending.value === previousValue) {
+      richTextTranslationPendingValueRef.current = null;
+      return;
+    }
+    richTextTranslationPendingValueRef.current = null;
+    const savePromise = latest
+      ? store.updateTranslation(latest, { content_value: pending.value, is_completed: true })
+      : store.createTranslation({
+        locale_id: selectedLocaleId,
+        source_type: item.source_type as 'page' | 'component',
+        source_id: item.source_id,
+        content_key: item.content_key,
+        content_type: 'richtext',
+        content_value: pending.value,
+        is_completed: true,
+      });
+    savePromise.catch((error) => console.error('Failed to save rich text translation:', error));
+  }, [richTextTranslationContext, selectedLocaleId]);
+
+  // Keep the flush ref pointing at the latest closure so the early
+  // close-on-different-selection effect can flush without a forward reference.
+  useEffect(() => {
+    flushRichTextTranslationSaveRef.current = flushRichTextTranslationSave;
+  }, [flushRichTextTranslationSave]);
 
   const handleRichTextSheetChange = useCallback((value: any) => {
     if (!richTextSheetLayerId) return;
-    // Keep local state in sync so the value prop matches the editor's content
     setRichTextSheetValue(value);
+
+    if (richTextTranslationContext && selectedLocaleId) {
+      const finalValue = value ? JSON.stringify(value) : '';
+      richTextTranslationPendingValueRef.current = {
+        key: richTextTranslationContext.item.key,
+        value: finalValue,
+        localeId: selectedLocaleId,
+      };
+      if (richTextTranslationSaveTimerRef.current) {
+        clearTimeout(richTextTranslationSaveTimerRef.current);
+      }
+      richTextTranslationSaveTimerRef.current = setTimeout(() => {
+        flushRichTextTranslationSave();
+      }, 400);
+      return;
+    }
+
     const textVariable = value && (typeof value === 'object' || (typeof value === 'string' && value.trim())) ? {
       type: 'dynamic_rich_text' as const,
       data: {
@@ -1599,12 +1792,16 @@ const CenterCanvas = React.memo(function CenterCanvas({
     } : undefined;
 
     const compId = useEditorStore.getState().editingComponentId;
+    const variantId = useEditorStore.getState().editingComponentVariantId;
     if (compId) {
       const { componentDrafts: drafts, updateComponentDraft } = useComponentsStore.getState();
-      const currentDraft = drafts[compId];
-      if (!currentDraft) return;
+      const variantDrafts = drafts[compId];
+      if (!variantDrafts) return;
+      const targetVariantId = variantId && variantDrafts[variantId] ? variantId : Object.keys(variantDrafts)[0];
+      if (!targetVariantId) return;
+      const currentDraft = variantDrafts[targetVariantId];
       const layer = findLayerById(currentDraft, richTextSheetLayerId);
-      updateComponentDraft(compId, updateLayerProps(currentDraft, richTextSheetLayerId, {
+      updateComponentDraft(compId, targetVariantId, updateLayerProps(currentDraft, richTextSheetLayerId, {
         variables: { ...layer?.variables, text: textVariable },
       }));
     } else {
@@ -1616,7 +1813,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
         variables: { ...layer?.variables, text: textVariable },
       });
     }
-  }, [richTextSheetLayerId, updateLayer]);
+  }, [richTextSheetLayerId, updateLayer, richTextTranslationContext, selectedLocaleId, flushRichTextTranslationSave]);
 
   // Handle iframe ready callback (for SelectionOverlay)
   const handleIframeReady = useCallback((iframeElement: HTMLIFrameElement) => {
@@ -1625,8 +1822,24 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
   // Handle layer hover from Canvas (for SelectionOverlay)
   const handleCanvasLayerHover = useCallback((layerId: string | null) => {
+    // Don't draw hover outlines while panning the canvas (Space-drag / middle-mouse)
+    if (isPanGestureActive()) {
+      setHoveredLayerId(null);
+      return;
+    }
     setHoveredLayerId(layerId);
-  }, [setHoveredLayerId]);
+  }, [isPanGestureActive, setHoveredLayerId]);
+
+  // Open the master component when a component instance is double-clicked.
+  // Mirrors the "Edit component" sidebar button.
+  const editComponent = useEditComponent();
+  const handleCanvasComponentEdit = useCallback((componentId: string, instanceLayerId: string) => {
+    const instanceLayer = findLayerById(layers, instanceLayerId);
+    editComponent(componentId, {
+      returnToLayerId: instanceLayerId,
+      variantId: instanceLayer?.componentVariantId,
+    });
+  }, [editComponent, layers]);
 
   // Undo/Redo handlers
   // Note: We don't auto-save after undo/redo to preserve the redo stack
@@ -1648,6 +1861,8 @@ const CenterCanvas = React.memo(function CenterCanvas({
     dropTarget: { layerId: string; position: 'above' | 'below' | 'inside'; parentId: string | null }
   ) => {
     if (!currentPageId) return;
+    // Block element insertion in non-default locales (read-only canvas).
+    if (selectedLocale && !selectedLocale.is_default) return;
 
     if (source === 'elements') {
       // Determine insert position based on drop target
@@ -1693,7 +1908,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
     } else if (source === 'components') {
       // TODO: Add component using similar logic
     }
-  }, [currentPageId, addLayerFromTemplate, setSelectedLayerId, liveLayerUpdates]);
+  }, [currentPageId, addLayerFromTemplate, setSelectedLayerId, liveLayerUpdates, selectedLocale]);
 
   // Use the canvas drop detection hook for throttled hit-testing
   useCanvasDropDetection({
@@ -1734,17 +1949,16 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const parentLayerId = useMemo(() => {
     if (!selectedLayerId || !currentPageId) return null;
 
-    // Get layers from either component draft or page draft
+    // Get layers from either the active variant draft or page draft
     let layersToSearch: Layer[] = [];
-    if (editingComponentId) {
-      layersToSearch = componentDrafts[editingComponentId] || [];
+    if (editingComponentId && activeComponentVariantId) {
+      layersToSearch = componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
     } else {
       layersToSearch = currentDraft ? currentDraft.layers : [];
     }
 
     if (!layersToSearch.length) return null;
 
-    // Recursive function to find parent of a layer
     const findParentId = (layers: Layer[], targetId: string, parentId: string | null = null): string | null | undefined => {
       for (const layer of layers) {
         if (layer.id === targetId) {
@@ -1757,18 +1971,17 @@ const CenterCanvas = React.memo(function CenterCanvas({
           }
         }
       }
-      return undefined; // Not found in this branch
+      return undefined;
     };
 
     const result = findParentId(layersToSearch, selectedLayerId);
     if (result === undefined) return null;
 
-    // Hide parent outline for slide layers (parent is just the slides wrapper)
     const selectedLayer = findLayerById(layersToSearch, selectedLayerId);
     if (selectedLayer?.name === 'slide') return null;
 
     return result;
-  }, [selectedLayerId, currentPageId, editingComponentId, componentDrafts, currentDraft]);
+  }, [selectedLayerId, currentPageId, editingComponentId, activeComponentVariantId, componentDrafts, currentDraft]);
 
   // Get selected layer name for drag preview
   const selectedLayerName = useMemo(() => {
@@ -1778,11 +1991,36 @@ const CenterCanvas = React.memo(function CenterCanvas({
     return layer?.name || null;
   }, [selectedLayerId, layers]);
 
-  // Get selected locale and translations
-  const selectedLocale = getSelectedLocale();
+  // Translations map for the active locale (used to inject into the canvas)
   const localeTranslations = useMemo(() => {
     return selectedLocaleId ? translations[selectedLocaleId] : undefined;
   }, [selectedLocaleId, translations]);
+
+  // True when the user is browsing the canvas in a non-default locale.
+  // The canvas becomes a read-only translation view in this state.
+  const isLocalizing = !!(selectedLocale && !selectedLocale.is_default);
+
+  // Subscribe to translation loading state so we can show a spinner overlay
+  // while translations for the active locale are being fetched.
+  const isLoadingTranslations = useLocalisationStore((state) => state.isLoading.loadTranslations);
+
+  // Translate the dynamic page's CMS item values when localizing so layers
+  // bound to CMS fields render the translated values.
+  const translatedPageCollectionItem = useMemo(() => {
+    if (!pageCollectionItem || !isLocalizing || !localeTranslations) {
+      return pageCollectionItem;
+    }
+    return {
+      ...pageCollectionItem,
+      values: applyCmsTranslations(
+        pageCollectionItem.id,
+        pageCollectionItem.values || {},
+        pageCollectionFields,
+        localeTranslations,
+        { includeIncomplete: true }
+      ),
+    };
+  }, [pageCollectionItem, pageCollectionFields, isLocalizing, localeTranslations]);
 
   // Build preview URL for preview mode
   const previewUrl = useMemo(() => {
@@ -1846,29 +2084,42 @@ const CenterCanvas = React.memo(function CenterCanvas({
     return `${next.pathname}${next.search}${next.hash}`;
   }, []);
 
+  // Reload preview when password settings change (URL path stays the same).
+  const previewAuthRevision = useMemo(
+    () => buildPreviewAuthRevision(currentPage, folders),
+    [currentPage, folders],
+  );
+
   // Keep the preview iframe mounted and only change its src when the actual
   // preview URL changes. Switching Studio toolbar tabs or leaving/re-entering
   // preview should not force a browser reload; clicking preview explicitly
   // requests fresh SSR preview output after the current draft was saved.
+  // Auth-setting changes (previewAuthRevision) also force a fresh reload.
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewFrameSrc, setPreviewFrameSrc] = useState('');
   const prevPreviewModeForFrame = useRef(false);
+  const prevPreviewAuthRevisionRef = useRef(previewAuthRevision);
   useEffect(() => {
     if (!previewUrl) {
       setIsPreviewLoading(false);
       prevPreviewModeForFrame.current = isPreviewMode;
+      prevPreviewAuthRevisionRef.current = previewAuthRevision;
       return;
     }
 
     const enteredPreview = isPreviewMode && !prevPreviewModeForFrame.current;
     prevPreviewModeForFrame.current = isPreviewMode;
-    const nextFrameSrc = enteredPreview ? withPreviewRefreshParam(previewUrl) : previewUrl;
+    const authRevisionChanged = prevPreviewAuthRevisionRef.current !== previewAuthRevision;
+    prevPreviewAuthRevisionRef.current = previewAuthRevision;
+    const nextFrameSrc = (enteredPreview || authRevisionChanged)
+      ? withPreviewRefreshParam(previewUrl)
+      : previewUrl;
 
     if (previewFrameSrc === nextFrameSrc) return;
 
     setIsPreviewLoading(true);
     setPreviewFrameSrc(nextFrameSrc);
-  }, [isPreviewMode, previewFrameSrc, previewUrl, withPreviewRefreshParam]);
+  }, [isPreviewMode, previewFrameSrc, previewUrl, previewAuthRevision, withPreviewRefreshParam]);
 
   useEffect(() => {
     if (isPreviewMode) return;
@@ -1934,34 +2185,6 @@ const CenterCanvas = React.memo(function CenterCanvas({
       clearTimeout(fallbackId);
     };
   }, [isPreviewMode, previewFrameSrc, setupPreviewMeasurement]);
-
-  // Load collection items when dynamic page is selected
-  useEffect(() => {
-    if (!collectionId || !currentPage?.is_dynamic) {
-      setCollectionItems([]);
-      setIsLoadingItems(false);
-      return;
-    }
-
-    const loadItems = async () => {
-      setIsLoadingItems(true);
-      try {
-        const itemsWithLabels = await getDropdownItems(collectionId);
-        setCollectionItems(itemsWithLabels);
-        // Auto-select first item if none selected
-        if (!currentPageCollectionItemId && itemsWithLabels.length > 0) {
-          setCurrentPageCollectionItemId(itemsWithLabels[0].id);
-        }
-      } catch (error) {
-        console.error('Failed to load collection items:', error);
-      } finally {
-        setIsLoadingItems(false);
-      }
-    };
-
-    loadItems();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collectionId, currentPage?.is_dynamic, getDropdownItems]);
 
   // Get return page for component edit mode
   const returnToPage = useMemo(() => {
@@ -2030,11 +2253,12 @@ const CenterCanvas = React.memo(function CenterCanvas({
       });
     }
 
-    // Fetch items for each referenced collection
-    allReferencedIds.forEach((collectionId) => {
-      fetchReferencedCollectionItems(collectionId);
-    });
-  }, [collectionFieldsFromStore, pageCollectionFields, fetchReferencedCollectionItems, invalidationKey]);
+    // One batch call per re-render covers every referenced collection; the
+    // store dedupes against already-loaded IDs so repeat calls are cheap.
+    if (allReferencedIds.size > 0) {
+      fetchReferencedCollectionsBatch(Array.from(allReferencedIds));
+    }
+  }, [collectionFieldsFromStore, pageCollectionFields, fetchReferencedCollectionsBatch, invalidationKey]);
 
   // Keyboard shortcuts for undo/redo
   useEffect(() => {
@@ -2119,64 +2343,11 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
             {/* Collection item selector for dynamic pages */}
             {currentPage?.is_dynamic && collectionId && (
-              <Select
-                value={currentPageCollectionItemId || ''}
-                onValueChange={(value) => {
-                  setCurrentPageCollectionItemId(value);
-                  setCollectionItemSearch('');
-                }}
-                onOpenChange={(open) => {
-                  if (!open) setCollectionItemSearch('');
-                }}
-                disabled={isLoadingItems || collectionItems.length === 0}
-              >
-                <SelectTrigger className="w-24 justify-between" size="sm">
-                  {isLoadingItems ? (
-                    <Spinner className="size-3" />
-                  ) : (
-                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="shrink-0">
-                            <Icon name="database" className="size-3 opacity-50" />
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent>Collection item</TooltipContent>
-                      </Tooltip>
-                      <span className="truncate">
-                        {collectionItems.find(item => item.id === currentPageCollectionItemId)?.label || 'Select item'}
-                      </span>
-                    </div>
-                  )}
-                </SelectTrigger>
-
-                <SelectContent
-                  searchable
-                  searchValue={collectionItemSearch}
-                  onSearchChange={setCollectionItemSearch}
-                  searchPlaceholder="Search items..."
-                  align="start"
-                  className="w-72"
-                >
-                  {(() => {
-                    const filtered = collectionItems.filter(item =>
-                      item.label.toLowerCase().includes(collectionItemSearch.toLowerCase())
-                    );
-                    if (filtered.length === 0) {
-                      return (
-                        <div className="px-2 py-4 text-center text-xs text-muted-foreground">
-                          {collectionItemSearch ? 'No items found' : 'No items available'}
-                        </div>
-                      );
-                    }
-                    return filtered.map((item) => (
-                      <SelectItem key={item.id} value={item.id}>
-                        {item.label}
-                      </SelectItem>
-                    ));
-                  })()}
-                </SelectContent>
-              </Select>
+              <CollectionItemSelector
+                collectionId={collectionId}
+                value={currentPageCollectionItemId}
+                onValueChange={setCurrentPageCollectionItemId}
+              />
             )}
           </div>
         )}
@@ -2259,8 +2430,8 @@ const CenterCanvas = React.memo(function CenterCanvas({
             let editingLayer: Layer | null = null;
             let layersToSearch: Layer[] = [];
             if (editingLayerId) {
-              if (editingComponentId) {
-                layersToSearch = componentDrafts[editingComponentId] || [];
+              if (editingComponentId && activeComponentVariantId) {
+                layersToSearch = componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
               } else if (currentPageId) {
                 layersToSearch = currentDraft ? currentDraft.layers : [];
               }
@@ -2486,7 +2657,6 @@ const CenterCanvas = React.memo(function CenterCanvas({
             iframeElement={canvasIframeElement}
             containerElement={scrollContainerRef.current}
             selectedLayerId={selectedLayerId}
-            hoveredLayerId={hoveredLayerId}
             parentLayerId={parentLayerId}
             zoom={zoom}
             activeSublayerIndex={activeSublayerIndex}
@@ -2499,6 +2669,15 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
         {/* Element picker SVG connector overlay */}
         <ElementPickerOverlay iframeElement={canvasIframeElement} zoom={zoom} />
+
+        {/* Translation loading overlay — shown while translations for the
+            active locale are being fetched. Mirrors the preview-mode overlay
+            below for visual consistency. */}
+        {isLocalizing && isLoadingTranslations && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-background/80">
+            <Spinner />
+          </div>
+        )}
 
         {/* Scrollable container with hidden scrollbars (editor canvas) */}
         <div
@@ -2528,6 +2707,11 @@ const CenterCanvas = React.memo(function CenterCanvas({
               position: 'relative',
               minWidth: '100%',
               minHeight: '100%',
+              // When editing a component, center the canvas inside the scroll area.
+              // Page editing keeps default block flow so absolute overlays anchor at the top.
+              ...(editingComponentId
+                ? { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }
+                : null),
             }}
           >
               <div
@@ -2546,19 +2730,38 @@ const CenterCanvas = React.memo(function CenterCanvas({
                   position: 'relative',
                 }}
               >
+                {/* Sizer: occupies the SCALED footprint so the scroll area,
+                    centering, and drop shadow match the visible canvas size. */}
                 <div
                   className={editingComponentId ? 'relative' : 'bg-white shadow-3xl relative'}
                   style={{
-                    zoom: zoom / 100,
-                    width: `${effectiveCanvasWidth}px`,
-                    height: `${finalIframeHeight}px`,
+                    width: `${effectiveCanvasWidth * (zoom / 100)}px`,
+                    height: `${finalIframeHeight * (zoom / 100)}px`,
                     flexShrink: 0, // Prevent shrinking - maintain fixed size
-                    // No transition to prevent shifts
-                    transition: 'none',
                     // Clip overflow when canvas is smaller than iframe (component editing)
                     overflow: editingComponentId ? 'hidden' : undefined,
                   }}
                 >
+                  {/* Stage: natural (unscaled) size, scaled with CSS transform from
+                      the top-left corner. We deliberately use `transform: scale()`
+                      instead of CSS `zoom`: Safari shrinks an iframe's content layout
+                      viewport when an ancestor uses `zoom`, which rendered the page
+                      too narrow (white space on the right) and misaligned the
+                      selection overlay. transform keeps the iframe at its true
+                      breakpoint width while only scaling the painted output. */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: `${effectiveCanvasWidth}px`,
+                      height: `${finalIframeHeight}px`,
+                      transform: `scale(${zoom / 100})`,
+                      transformOrigin: 'top left',
+                      // No transition to prevent shifts
+                      transition: 'none',
+                    }}
+                  >
                   {/* Inner wrapper: keep iframe at viewport width for natural content rendering */}
                   <div
                     style={{
@@ -2576,23 +2779,25 @@ const CenterCanvas = React.memo(function CenterCanvas({
                         layers={layers}
                         components={components}
                         selectedLayerId={selectedLayerId}
-                        hoveredLayerId={hoveredLayerId}
+                        hoveredLayerId={null}
                         breakpoint={viewportMode}
                         activeUIState={activeUIState}
                         editingComponentId={editingComponentId || null}
-                        collectionItems={{ ...collectionItemsFromStore, ...referencedItems }}
+                        collectionItems={mergedCollectionItems}
                         collectionFields={collectionFieldsFromStore}
-                        pageCollectionItem={pageCollectionItem}
+                        pageCollectionItem={translatedPageCollectionItem}
                         pageCollectionFields={pageCollectionFields}
+                        currentLocale={selectedLocale}
+                        availableLocales={locales}
+                        translations={localeTranslations}
                         assets={assetsMap}
-                        collectionLayerData={collectionLayerData}
                         pageId={currentPageId || ''}
                         onLayerClick={handleCanvasLayerClick}
                         onLayerUpdate={handleCanvasLayerUpdate}
-                        onDeleteLayer={handleCanvasDeleteLayer}
+                        onDeleteLayer={canEditStructure ? handleCanvasDeleteLayer : undefined}
                         onContentHeightChange={setReportedContentHeight}
                         onContentWidthChange={editingComponentId ? setReportedContentWidth : undefined}
-                        onGapUpdate={handleCanvasGapUpdate}
+                        onGapUpdate={canEditStructure ? handleCanvasGapUpdate : undefined}
                         onZoomGesture={handleZoomGesture}
                         onZoomIn={zoomIn}
                         onZoomOut={zoomOut}
@@ -2606,8 +2811,9 @@ const CenterCanvas = React.memo(function CenterCanvas({
                         onIframeReady={handleIframeReady}
                         onLayerHover={handleCanvasLayerHover}
                         onCanvasClick={handleCanvasClick}
+                        onComponentEdit={canEditStructure ? handleCanvasComponentEdit : undefined}
                         editingComponentVariables={editingComponentVariables}
-                        disableEditorHiddenLayers={!!activeInteractionTriggerLayerId}
+                        forceVisibleLayerIds={activeInteractionTriggerLayerId ? activeInteractionTargetLayerIds : undefined}
                         zoom={zoom}
                         referenceViewportHeight={defaultCanvasHeight}
                       />
@@ -2628,28 +2834,29 @@ const CenterCanvas = React.memo(function CenterCanvas({
                                   <Icon name="layout" className="size-3 text-neutral-900" />
                                 </EmptyMedia>
                                 <EmptyHeader>
-                                  <EmptyTitle className="text-sm">Start building</EmptyTitle>
+                                  <EmptyTitle className="text-sm">{canEditStructure ? 'Start building' : 'No content yet'}</EmptyTitle>
                                   <EmptyDescription>
-                                    Add your first block to begin creating your page.
+                                    {canEditStructure
+                                      ? 'Add your first block to begin creating your page.'
+                                      : 'This page has no content to edit yet.'}
                                   </EmptyDescription>
                                 </EmptyHeader>
-                                <Button
-                                  onClick={(e) => {
-                                    // Stop propagation to prevent canvas click handler from
-                                    // dispatching closeElementLibrary and immediately closing the panel
-                                    e.stopPropagation();
-                                    // Open ElementLibrary with layouts tab active
-                                    window.dispatchEvent(new CustomEvent('toggleElementLibrary', {
-                                      detail: { tab: 'layouts' }
-                                    }));
-                                  }}
-                                  size="sm"
-                                  variant="secondary"
-                                  className="bg-neutral-900/5 hover:bg-neutral-900/10 text-neutral-900"
-                                >
-                                  <Icon name="plus" />
-                                  Add layout
-                                </Button>
+                                {canEditStructure && (
+                                  <Button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      window.dispatchEvent(new CustomEvent('toggleElementLibrary', {
+                                        detail: { tab: 'layouts' }
+                                      }));
+                                    }}
+                                    size="sm"
+                                    variant="secondary"
+                                    className="bg-neutral-900/5 hover:bg-neutral-900/10 text-neutral-900"
+                                  >
+                                    <Icon name="plus" />
+                                    Add layout
+                                  </Button>
+                                )}
                               </EmptyContent>
                             </Empty>
                           </div>
@@ -2663,16 +2870,19 @@ const CenterCanvas = React.memo(function CenterCanvas({
                           <Icon name="layout" className="w-10 h-10 text-blue-500" />
                         </div>
                         <h2 className="text-2xl font-bold text-gray-900 mb-3">
-                          Start building
+                          {canEditStructure ? 'Start building' : 'No content yet'}
                         </h2>
                         <p className="text-gray-600 mb-8">
-                          Add your first block to begin creating your page.
+                          {canEditStructure
+                            ? 'Add your first block to begin creating your page.'
+                            : 'This page has no content to edit yet.'}
                         </p>
-                        <div className="relative inline-block">
+                        {canEditStructure && <div className="relative inline-block">
                           <Button
                             onClick={() => setShowAddBlockPanel(!showAddBlockPanel)}
                             size="lg"
                             className="gap-2"
+                            disabled={!!(selectedLocale && !selectedLocale.is_default)}
                           >
                             <Icon name="plus" className="w-5 h-5" />
                             Add Block
@@ -2803,10 +3013,11 @@ const CenterCanvas = React.memo(function CenterCanvas({
                               </div>
                             </div>
                           )}
-                        </div>
+                        </div>}
                       </div>
                     </div>
                   )}
+                  </div>
                   </div>
                 </div>
               </div>
@@ -2868,70 +3079,77 @@ const CenterCanvas = React.memo(function CenterCanvas({
               <p className="text-sm text-neutral-400">Vorschau wird geladen...</p>
             </div>
           )}
+          {/* Sizer: occupies the SCALED footprint so centering and scrolling
+              match the visible preview size. */}
           <div
             className="bg-white shadow-3xl relative mx-auto my-auto"
             style={{
-              zoom: previewZoom / 100,
-              width: viewportMode === 'desktop' && previewZoomMode === 'autofit'
-                ? '100%'
-                : (viewportSizes[viewportMode] || viewportSizes.desktop).width,
-              minWidth: viewportMode === 'desktop' && previewZoomMode === 'autofit'
-                ? (viewportSizes[viewportMode] || viewportSizes.desktop).width
-                : undefined,
-              height: `${previewCanvasHeight}px`,
+              width: `${previewStageWidth * (previewZoom / 100)}px`,
+              height: finalPreviewIframeHeight > 0
+                ? `${finalPreviewIframeHeight * (previewZoom / 100)}px`
+                : '100%',
               flexShrink: 0,
-              transition: 'none',
             }}
           >
-            {isPreviewMode && !previewUrl ? (
-              <div className="w-full h-full flex items-center justify-center p-12">
-                <div className="text-center max-w-md">
-                  <div className="w-20 h-20 bg-linear-to-br from-blue-100 to-blue-50 rounded-2xl mx-auto mb-6 flex items-center justify-center">
-                    <Icon name="layout" className="w-10 h-10 text-blue-500" />
+            {/* Stage: natural (unscaled) size, scaled with `transform` instead of
+                CSS `zoom`. Safari shrinks an iframe's content viewport under an
+                ancestor `zoom`, which rendered previews too narrow; transform keeps
+                the iframe at its true breakpoint width. */}
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: `${previewStageWidth}px`,
+                height: finalPreviewIframeHeight > 0 ? `${finalPreviewIframeHeight}px` : '100%',
+                transform: `scale(${previewZoom / 100})`,
+                transformOrigin: 'top left',
+                transition: 'none',
+              }}
+            >
+              {isPreviewMode && !previewUrl ? (
+                <div className="w-full h-full flex items-center justify-center p-12">
+                  <div className="text-center max-w-md">
+                    <div className="w-20 h-20 bg-linear-to-br from-blue-100 to-blue-50 rounded-2xl mx-auto mb-6 flex items-center justify-center">
+                      <Icon name="layout" className="w-10 h-10 text-blue-500" />
+                    </div>
+                    <h2 className="text-2xl font-bold text-gray-900 mb-3">
+                      Projekt auswählen
+                    </h2>
+                    <p className="text-gray-600">
+                      Wähle ein Studio-Projekt aus, um die Vorschau zu öffnen.
+                    </p>
                   </div>
-                  <h2 className="text-2xl font-bold text-gray-900 mb-3">
-                    Projekt auswählen
-                  </h2>
-                  <p className="text-gray-600">
-                    Wähle ein Studio-Projekt aus, um die Vorschau zu öffnen.
-                  </p>
                 </div>
-              </div>
-            ) : isPreviewMode && previewFrameSrc ? (
-              // The outer wrapper carries the measured page height so the Studio
-              // preview pane has the right scroll extent. The iframe itself must
-              // stay viewport-height: source FadeIn/IntersectionObserver logic
-              // depends on iframe document scrollY changing as the user scrolls.
-              <iframe
-                ref={iframeRef}
-                src={previewFrameSrc}
-                className="w-full border-0"
-                style={{
-                  display: 'block',
-                  height: `${previewFrameHeight}px`,
-                  opacity: isPreviewLoading ? 0 : 1,
-                  position: 'sticky',
-                  top: 0,
-                }}
-                title="Preview"
-                tabIndex={-1}
-                onLoad={handlePreviewLoad}
-              />
-            ) : layers.length === 0 && isPreviewMode ? (
-              <div className="w-full h-full flex items-center justify-center p-12">
-                <div className="text-center max-w-md">
-                  <div className="w-20 h-20 bg-linear-to-br from-blue-100 to-blue-50 rounded-2xl mx-auto mb-6 flex items-center justify-center">
-                    <Icon name="layout" className="w-10 h-10 text-blue-500" />
+              ) : isPreviewMode && previewFrameSrc ? (
+                // Studio: keep the iframe mounted and drive it via previewFrameSrc
+                // so toolbar tab switches don't force a reload; explicit preview
+                // entry/auth changes append a refresh param for fresh SSR output.
+                <iframe
+                  ref={iframeRef}
+                  src={previewFrameSrc}
+                  className="w-full h-full border-0"
+                  style={{ opacity: isPreviewLoading ? 0 : 1 }}
+                  title="Preview"
+                  tabIndex={-1}
+                  onLoad={handlePreviewLoad}
+                />
+              ) : layers.length === 0 && isPreviewMode ? (
+                <div className="w-full h-full flex items-center justify-center p-12">
+                  <div className="text-center max-w-md">
+                    <div className="w-20 h-20 bg-linear-to-br from-blue-100 to-blue-50 rounded-2xl mx-auto mb-6 flex items-center justify-center">
+                      <Icon name="layout" className="w-10 h-10 text-blue-500" />
+                    </div>
+                    <h2 className="text-2xl font-bold text-gray-900 mb-3">
+                      Kein Inhalt
+                    </h2>
+                    <p className="text-gray-600">
+                      Diese Seite hat keinen Inhalt für die Vorschau.
+                    </p>
                   </div>
-                  <h2 className="text-2xl font-bold text-gray-900 mb-3">
-                    No content
-                  </h2>
-                  <p className="text-gray-600">
-                    This page has no content to preview.
-                  </p>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </div>
         </div>
       </div>
@@ -2940,9 +3158,16 @@ const CenterCanvas = React.memo(function CenterCanvas({
       {richTextSheetValue && (
         <RichTextEditorSheet
           open={!!richTextSheetLayerId}
-          onOpenChange={(open) => { if (!open) closeRichTextSheet(); }}
+          onOpenChange={(open) => {
+            if (!open) {
+              flushRichTextTranslationSave();
+              closeRichTextSheet();
+            }
+          }}
           title="Content editor"
-          description="Element content"
+          description={richTextTranslationContext && selectedLocale
+            ? `Translate to ${selectedLocale.label}`
+            : 'Element content'}
           value={richTextSheetValue}
           onChange={handleRichTextSheetChange}
           fieldGroups={richTextSheetFieldGroups}

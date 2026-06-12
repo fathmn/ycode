@@ -8,7 +8,7 @@ import { studioFetch } from '@/lib/api';
  * Works in both LayersTree sidebar and canvas
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -21,8 +21,12 @@ import { useCanvasPortalContainer, useCanvasZoom } from '@/lib/canvas-portal-con
 import { useEditorStore } from '@/stores/useEditorStore';
 import { usePagesStore } from '@/stores/usePagesStore';
 import { useClipboardStore } from '@/stores/useClipboardStore';
+import { useExternalPasteStore } from '@/stores/useExternalPasteStore';
+import { isClipboardReadGranted, readExternalDesignClipboard } from '@/lib/import/clipboard-detect';
 import { useComponentsStore } from '@/stores/useComponentsStore';
-import { canHaveChildren, findLayerById, getClassesString, getLayerIcon, getLayerName, regenerateInteractionIds, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, removeLayerById, findParentAndIndex, insertLayerAfter, updateLayerProps, canConvertToCollection, isExcludedFromCollection, getCollectionVariable, resetBindingsOnCollectionSourceChange } from '@/lib/layer-utils';
+import { canHaveChildren, canPasteIntoParent, LINK_NESTING_ERROR, findLayerById, getClassesString, regenerateInteractionIds, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, removeLayerById, findParentAndIndex, insertLayerAfter, updateLayerProps, canConvertToCollection, isExcludedFromCollection, getCollectionVariable, resetBindingsOnCollectionSourceChange } from '@/lib/layer-utils';
+import { getStyleIds } from '@/lib/layer-style-resolve';
+import { getLayerIcon, getLayerName } from '@/lib/layer-display-utils';
 import { cloneDeep } from 'lodash';
 import { toast } from 'sonner';
 import { Icon } from '@/components/ui/icon';
@@ -40,9 +44,9 @@ interface LayerContextMenuProps {
   layerId: string;
   pageId: string;
   children: React.ReactNode;
+  readOnly?: boolean;
   isLocked?: boolean;
   onLayerSelect?: (layerId: string) => void;
-  selectedLayerId?: string | null;
   liveLayerUpdates?: UseLiveLayerUpdatesReturn | null;
   liveComponentUpdates?: UseLiveComponentUpdatesReturn | null;
   /** When set, we're editing a component; resolve layer from component draft so "Detach" works for nested instances */
@@ -73,23 +77,50 @@ useEditorStore.subscribe((state, prevState) => {
   }
 });
 
-export default function LayerContextMenu({
+interface LayerContextMenuInnerProps extends Omit<LayerContextMenuProps, 'children'> {
+  isComponentDialogOpen: boolean;
+  setIsComponentDialogOpen: (open: boolean) => void;
+  isLayoutDialogOpen: boolean;
+  setIsLayoutDialogOpen: (open: boolean) => void;
+  isImportHtmlOpen: boolean;
+  setIsImportHtmlOpen: (open: boolean) => void;
+  isExportHtmlOpen: boolean;
+  setIsExportHtmlOpen: (open: boolean) => void;
+  exportHtml: string;
+  setExportHtml: (html: string) => void;
+  layerName: string;
+  setLayerName: (name: string) => void;
+}
+
+/**
+ * Heavy inner half of the layer context menu: all store subscriptions,
+ * memoized layer-tree lookups, handlers, and the rendered menu items / dialogs.
+ *
+ * Mounted only when the menu (or one of its dialogs) is actually open.
+ * Keeping it lazy means each layer row in `LayersTree` carries only a thin
+ * `<ContextMenu>` shell at rest — critical when a page has 1000+ layers.
+ */
+function LayerContextMenuInner({
   layerId,
   pageId,
-  children,
   isLocked = false,
   onLayerSelect,
-  selectedLayerId,
   liveLayerUpdates,
   liveComponentUpdates,
   editingComponentId = null,
-}: LayerContextMenuProps) {
-  const [isComponentDialogOpen, setIsComponentDialogOpen] = useState(false);
-  const [isLayoutDialogOpen, setIsLayoutDialogOpen] = useState(false);
-  const [isImportHtmlOpen, setIsImportHtmlOpen] = useState(false);
-  const [isExportHtmlOpen, setIsExportHtmlOpen] = useState(false);
-  const [exportHtml, setExportHtml] = useState('');
-  const [layerName, setLayerName] = useState('');
+  isComponentDialogOpen,
+  setIsComponentDialogOpen,
+  isLayoutDialogOpen,
+  setIsLayoutDialogOpen,
+  isImportHtmlOpen,
+  setIsImportHtmlOpen,
+  isExportHtmlOpen,
+  setIsExportHtmlOpen,
+  exportHtml,
+  setExportHtml,
+  layerName,
+  setLayerName,
+}: LayerContextMenuInnerProps) {
   const canvasPortalContainer = useCanvasPortalContainer();
   const canvasZoom = useCanvasZoom();
 
@@ -107,6 +138,17 @@ export default function LayerContextMenu({
   const getComponentById = useComponentsStore((state) => state.getComponentById);
   const components = useComponentsStore((state) => state.components);
   const componentDrafts = useComponentsStore((state) => state.componentDrafts);
+  const editingComponentVariantId = useEditorStore((state) => state.editingComponentVariantId);
+  // Resolve the active variant id for the component being edited. When
+  // unspecified (or pointing at a missing variant) we fall back to the first
+  // variant so the editor never shows an empty tree.
+  const activeVariantId = useMemo(() => {
+    if (!editingComponentId) return null;
+    const drafts = componentDrafts[editingComponentId];
+    if (!drafts) return editingComponentVariantId || null;
+    if (editingComponentVariantId && drafts[editingComponentVariantId]) return editingComponentVariantId;
+    return Object.keys(drafts)[0] || null;
+  }, [editingComponentId, editingComponentVariantId, componentDrafts]);
   const updateComponentDraft = useComponentsStore((state) => state.updateComponentDraft);
   const createComponentFromComponentLayer = useComponentsStore((state) => state.createComponentFromLayer);
 
@@ -121,18 +163,24 @@ export default function LayerContextMenu({
   const pasteInteractionsFromClipboard = useClipboardStore((state) => state.pasteInteractions);
   const copiedInteractions = useClipboardStore((state) => state.copiedInteractions);
 
+  // Design-tool clipboard (Webflow/Figma) detected when the menu opened, plus
+  // the registered runner that imports it at a chosen placement.
+  const externalKind = useExternalPasteStore((state) => state.kind);
+  const pasteExternalAt = useExternalPasteStore((state) => state.pasteAt);
+
   const hasClipboard = clipboardLayer !== null;
+  const hasExternal = externalKind !== null && pasteExternalAt !== null;
   const hasStyleClipboard = copiedStyle !== null;
   const hasInteractionsClipboard = copiedInteractions !== null;
 
-  // Resolve layers: component draft when editing a component, else page draft
+  // Resolve layers: active variant draft when editing a component, else page draft
   const isComponentContext = !!editingComponentId;
   const layers = useMemo(
     () =>
-      isComponentContext
-        ? (componentDrafts[editingComponentId!] || [])
+      isComponentContext && editingComponentId && activeVariantId
+        ? (componentDrafts[editingComponentId]?.[activeVariantId] || [])
         : (draftsByPageId[pageId]?.layers || []),
-    [isComponentContext, editingComponentId, componentDrafts, draftsByPageId, pageId]
+    [isComponentContext, editingComponentId, activeVariantId, componentDrafts, draftsByPageId, pageId]
   );
   const layer = findLayerById(layers, layerId);
 
@@ -141,12 +189,22 @@ export default function LayerContextMenu({
     ? getComponentById(layer.componentId)?.name
     : null;
 
-  // Check if the current layer can have children
+  // Check if the current layer can have children and link nesting is valid
   const canPasteInside = useMemo(() => {
     const targetLayer = findLayerById(layers, layerId);
     if (!targetLayer) return false;
-    return canHaveChildren(targetLayer);
-  }, [layers, layerId]);
+    if (!canHaveChildren(targetLayer)) return false;
+    if (clipboardLayer && !canPasteIntoParent(layers, layerId, clipboardLayer)) return false;
+    return true;
+  }, [layers, layerId, clipboardLayer]);
+
+  // Check if paste-after would violate link nesting (parent of target has a link)
+  const canPasteAfterTarget = useMemo(() => {
+    if (!clipboardLayer) return true;
+    const result = findParentAndIndex(layers, layerId);
+    if (!result || !result.parent) return true;
+    return canPasteIntoParent(layers, result.parent.id, clipboardLayer);
+  }, [layers, layerId, clipboardLayer]);
 
   const isBody = layerId === 'body';
 
@@ -161,18 +219,20 @@ export default function LayerContextMenu({
     return canDeleteLayer(layer);
   }, [layer]);
 
-  /** Update component draft layers and broadcast to collaborators */
+  /** Update active variant draft layers and broadcast to collaborators */
   const updateComponentAndBroadcast = (newLayers: Layer[]) => {
-    if (!editingComponentId) return;
-    updateComponentDraft(editingComponentId, newLayers);
+    if (!editingComponentId || !activeVariantId) return;
+    updateComponentDraft(editingComponentId, activeVariantId, newLayers);
     if (liveComponentUpdates) {
       liveComponentUpdates.broadcastComponentLayersUpdate(editingComponentId, newLayers);
     }
   };
 
-  /** Get current component layers for the editing context */
+  /** Get current variant layers for the editing context */
   const getComponentLayers = () =>
-    editingComponentId ? (componentDrafts[editingComponentId] || []) : [];
+    editingComponentId && activeVariantId
+      ? (componentDrafts[editingComponentId]?.[activeVariantId] || [])
+      : [];
 
   const handleCopy = () => {
     if (!canCopy) return;
@@ -225,6 +285,14 @@ export default function LayerContextMenu({
   };
 
   const handlePasteAfter = () => {
+    // A Webflow/Figma copy on the OS clipboard means the freshest copy was
+    // external (an internal copy stamps the OS clipboard with the Ycode marker,
+    // which detection ignores), so it wins over a stale internal clipboard —
+    // matching the keyboard ⌘V behaviour. Import it as a sibling after target.
+    if (hasExternal) {
+      if (!isBody) pasteExternalAt?.({ mode: 'after', layerId });
+      return;
+    }
     if (!clipboardLayer) return;
 
     if (isComponentContext && editingComponentId) {
@@ -235,20 +303,32 @@ export default function LayerContextMenu({
       }
 
       const componentLayers = getComponentLayers();
-      const newLayer = regenerateIdsWithInteractionRemapping(cloneDeep(clipboardLayer));
       const result = findParentAndIndex(componentLayers, layerId);
       if (!result) return;
 
+      if (result.parent && !canPasteIntoParent(componentLayers, result.parent.id, clipboardLayer)) {
+        toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+        return;
+      }
+
+      const newLayer = regenerateIdsWithInteractionRemapping(cloneDeep(clipboardLayer));
       updateComponentAndBroadcast(insertLayerAfter(componentLayers, result.parent, result.index, newLayer));
     } else {
       const pastedLayer = pasteAfter(pageId, layerId, clipboardLayer);
       if (liveLayerUpdates && pastedLayer) {
         liveLayerUpdates.broadcastLayerAdd(pageId, null, 'paste', pastedLayer);
+      } else if (!pastedLayer) {
+        toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
       }
     }
   };
 
   const handlePasteInside = () => {
+    // External clipboard wins over a stale internal one (see handlePasteAfter).
+    if (hasExternal) {
+      if (canPasteInside) pasteExternalAt?.({ mode: 'inside', layerId });
+      return;
+    }
     if (!clipboardLayer || !canPasteInside) return;
 
     if (isComponentContext && editingComponentId) {
@@ -259,6 +339,11 @@ export default function LayerContextMenu({
       }
 
       const componentLayers = getComponentLayers();
+      if (!canPasteIntoParent(componentLayers, layerId, clipboardLayer)) {
+        toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+        return;
+      }
+
       const newLayer = regenerateIdsWithInteractionRemapping(cloneDeep(clipboardLayer));
       updateComponentAndBroadcast(
         updateLayerProps(componentLayers, layerId, { children: [...(findLayerById(componentLayers, layerId)?.children || []), newLayer] })
@@ -267,6 +352,8 @@ export default function LayerContextMenu({
       const pastedLayer = pasteInside(pageId, layerId, clipboardLayer);
       if (liveLayerUpdates && pastedLayer) {
         liveLayerUpdates.broadcastLayerAdd(pageId, layerId, 'paste', pastedLayer);
+      } else if (!pastedLayer) {
+        toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
       }
     }
   };
@@ -326,7 +413,8 @@ export default function LayerContextMenu({
     if (!layer) return;
 
     const classes = getClassesString(layer);
-    copyStyleToClipboard(classes, layer.design, layer.styleId, layer.styleOverrides);
+    const ids = getStyleIds(layer);
+    copyStyleToClipboard(classes, layer.design, ids[0], layer.styleOverrides, ids);
   };
 
   const handlePasteStyle = () => {
@@ -336,8 +424,10 @@ export default function LayerContextMenu({
     const styleProps = {
       classes: style.classes,
       design: style.design,
-      styleId: style.styleId,
+      styleId: style.styleIds?.[0] ?? style.styleId,
+      styleIds: style.styleIds ?? (style.styleId ? [style.styleId] : undefined),
       styleOverrides: style.styleOverrides,
+      styleOverridesByStyle: undefined,
     };
 
     if (isComponentContext && editingComponentId) {
@@ -399,17 +489,24 @@ export default function LayerContextMenu({
   const handleEditMasterComponent = async () => {
     if (!layer?.componentId) return;
 
-    const { setEditingComponentId, setSelectedLayerId, pushComponentNavigation, editingComponentId } = useEditorStore.getState();
-    const { loadComponentDraft, getComponentById } = useComponentsStore.getState();
+    const { setEditingComponentId, setSelectedLayerId, setEditingComponentVariantId, editingComponentVariantId, pushComponentNavigation, editingComponentId } = useEditorStore.getState();
+    const { loadComponentDraft, getComponentById, getComponentDraftLayers } = useComponentsStore.getState();
     const { pages } = usePagesStore.getState();
 
+    const component = getComponentById(layer.componentId);
+    if (!component) return;
+
+    // Resolve which variant to open — use the instance's configured variant
+    const requestedVariantId = layer.componentVariantId;
+    const targetVariantId = (requestedVariantId && component.variants?.some(v => v.id === requestedVariantId))
+      ? requestedVariantId
+      : (component.variants && component.variants.length > 0 ? component.variants[0].id : null);
+
     // Capture the current layer ID BEFORE clearing selection
-    // This is the layer we'll return to when exiting component edit mode
     const componentInstanceLayerId = layer.id;
 
     // Push current context to navigation stack before entering component edit mode
     if (editingComponentId) {
-      // We're currently editing a component, push it to stack
       const currentComponent = getComponentById(editingComponentId);
       if (currentComponent) {
         pushComponentNavigation({
@@ -417,10 +514,10 @@ export default function LayerContextMenu({
           id: editingComponentId,
           name: currentComponent.name,
           layerId: layer.id,
+          variantId: editingComponentVariantId ?? null,
         });
       }
     } else if (pageId) {
-      // We're on a page, push it to stack
       const currentPage = pages.find((p) => p.id === pageId);
       if (currentPage) {
         pushComponentNavigation({
@@ -433,23 +530,22 @@ export default function LayerContextMenu({
     }
 
     // Clear selection FIRST to release lock on current page's channel
-    // before switching to component's channel
     setSelectedLayerId(null);
 
-    // Enter edit mode (changes lock channel to component)
-    // Pass the component instance layer ID so we can restore it when exiting
+    // Enter edit mode and set the target variant
     setEditingComponentId(layer.componentId, pageId, componentInstanceLayerId);
+    setEditingComponentVariantId(targetVariantId);
 
     // Load component into draft (async to ensure proper cache sync)
     await loadComponentDraft(layer.componentId);
 
-    // Select root layer only if user hasn't already selected a valid component layer during the await
-    const component = getComponentById(layer.componentId);
-    if (component && component.layers && component.layers.length > 0) {
+    // Select root layer of the target variant's tree
+    const variantLayers = getComponentDraftLayers(layer.componentId, targetVariantId);
+    if (variantLayers && variantLayers.length > 0) {
       const currentSelection = useEditorStore.getState().selectedLayerId;
-      const hasValidSelection = currentSelection && findLayerById(component.layers, currentSelection);
+      const hasValidSelection = currentSelection && findLayerById(variantLayers, currentSelection);
       if (!hasValidSelection) {
-        setSelectedLayerId(component.layers[0].id);
+        setSelectedLayerId(variantLayers[0].id);
       }
     }
   };
@@ -462,8 +558,8 @@ export default function LayerContextMenu({
     // Use the shared utility function for detaching
     const newLayers = detachSpecificLayerFromComponent(layers, layerId, component || undefined);
 
-    if (isComponentContext && editingComponentId) {
-      updateComponentDraft(editingComponentId, newLayers);
+    if (isComponentContext && editingComponentId && activeVariantId) {
+      updateComponentDraft(editingComponentId, activeVariantId, newLayers);
     } else {
       setDraftLayers(pageId, newLayers);
     }
@@ -677,41 +773,11 @@ export default function LayerContextMenu({
   const showConvertOption = !!(layer && !isCollection && canHaveChildren(layer) && !layer.componentId);
   const isConvertDisabled = isLocked || isComponentInstance || !!(layer && isExcludedFromCollection(layer));
 
-  const handleOpenChange = (open: boolean) => {
-    if (open) {
-      dismissActiveContextMenu();
-      activeMenuDocument = canvasPortalContainer?.ownerDocument ?? document;
-    }
-
-    if (open && onLayerSelect && layer && selectedLayerId !== layerId) {
-      selectionFromMenu = true;
-      onLayerSelect(layerId);
-    }
-    // Hide the parent-document selection overlay while the canvas context menu is open,
-    // and suppress stale clicks that fire on the canvas when the menu dismisses
-    if (canvasPortalContainer) {
-      if (open) {
-        cancelAnimationFrame(pendingCloseRaf);
-        useEditorStore.getState().setCanvasContextMenuOpen(true);
-      } else {
-        pendingCloseRaf = requestAnimationFrame(() => {
-          useEditorStore.getState().setCanvasContextMenuOpen(false);
-        });
-      }
-    }
-  };
-
   // Check if we're on localhost
   const isLocalhost = typeof window !== 'undefined' && window.location.hostname === 'localhost';
 
   return (
-    <ContextMenu onOpenChange={handleOpenChange}>
-      <ContextMenuTrigger
-        asChild
-        onContextMenu={(e) => e.stopPropagation()}
-      >
-        {children}
-      </ContextMenuTrigger>
+    <>
       <ContextMenuContent
         className="w-46"
         container={canvasPortalContainer}
@@ -746,12 +812,22 @@ export default function LayerContextMenu({
             container={canvasPortalContainer}
             style={canvasPortalContainer ? { zoom: 100 / canvasZoom } : undefined}
           >
-            <ContextMenuItem onClick={handlePasteAfter} disabled={!hasClipboard || isBody}>
+            {hasExternal && (
+              <>
+                <ContextMenuLabel className="flex items-center gap-1.5 font-normal text-muted-foreground select-none">
+                  <Icon name={externalKind === 'figma' ? 'figma' : 'webflow'} className="size-3" />
+                  <span>From {externalKind === 'figma' ? 'Figma' : 'Webflow'}</span>
+                </ContextMenuLabel>
+                <ContextMenuSeparator />
+              </>
+            )}
+
+            <ContextMenuItem onClick={handlePasteAfter} disabled={(!hasClipboard && !hasExternal) || isBody || !canPasteAfterTarget}>
               Paste after
               <ContextMenuShortcut>⌘V</ContextMenuShortcut>
             </ContextMenuItem>
 
-            <ContextMenuItem onClick={handlePasteInside} disabled={!hasClipboard || !canPasteInside}>
+            <ContextMenuItem onClick={handlePasteInside} disabled={(!hasClipboard && !hasExternal) || !canPasteInside}>
               Paste inside
               <ContextMenuShortcut>⌘⇧V</ContextMenuShortcut>
             </ContextMenuItem>
@@ -863,8 +939,8 @@ export default function LayerContextMenu({
           </ContextMenuItem>
         )}
 
-        {/* Development only: Show JSON */}
-        {process.env.NODE_ENV === 'development' && (
+        {/* Developer tools: dev build or when NEXT_PUBLIC_DEVELOPER_MODE=true */}
+        {(process.env.NODE_ENV === 'development' || process.env.NEXT_PUBLIC_DEVELOPER_MODE === 'true') && (
           <>
             <ContextMenuSeparator />
 
@@ -906,6 +982,125 @@ export default function LayerContextMenu({
         onOpenChange={setIsExportHtmlOpen}
         html={exportHtml}
       />
+    </>
+  );
+}
+
+/**
+ * Thin always-mounted shell rendered per layer row. Only when the menu opens
+ * (or a triggered dialog is active) does it mount {@link LayerContextMenuInner},
+ * which carries all Zustand subscriptions and Radix providers.
+ *
+ * Wrapped in `React.memo` because the layer tree re-renders frequently and
+ * the shell only depends on layerId / pageId / lock state / context flags.
+ */
+function LayerContextMenu({
+  layerId,
+  pageId,
+  children,
+  readOnly = false,
+  isLocked = false,
+  onLayerSelect,
+  liveLayerUpdates,
+  liveComponentUpdates,
+  editingComponentId = null,
+}: LayerContextMenuProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [isComponentDialogOpen, setIsComponentDialogOpen] = useState(false);
+  const [isLayoutDialogOpen, setIsLayoutDialogOpen] = useState(false);
+  const [isImportHtmlOpen, setIsImportHtmlOpen] = useState(false);
+  const [isExportHtmlOpen, setIsExportHtmlOpen] = useState(false);
+  const [exportHtml, setExportHtml] = useState('');
+  const [layerName, setLayerName] = useState('');
+  const canvasPortalContainer = useCanvasPortalContainer();
+
+  const anyDialogOpen =
+    isComponentDialogOpen || isLayoutDialogOpen || isImportHtmlOpen || isExportHtmlOpen;
+  const needsInner = menuOpen || anyDialogOpen;
+
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      setMenuOpen(open);
+
+      if (open) {
+        dismissActiveContextMenu();
+        activeMenuDocument = canvasPortalContainer?.ownerDocument ?? document;
+
+        // Detect a Webflow/Figma copy on the OS clipboard so the Paste submenu
+        // can offer "Paste after / inside". Best-effort and silent: only read
+        // when clipboard access is already granted, so a right-click never
+        // triggers a permission prompt. When access isn't granted the items
+        // stay disabled — the keyboard ⌘V import path is unaffected.
+        useExternalPasteStore.getState().setKind(null);
+        void isClipboardReadGranted()
+          .then((granted) => (granted ? readExternalDesignClipboard() : null))
+          .then((data) => useExternalPasteStore.getState().setKind(data?.kind ?? null))
+          .catch(() => useExternalPasteStore.getState().setKind(null));
+      }
+
+      if (open && onLayerSelect) {
+        // Read selectedLayerId from the store on demand rather than via prop.
+        // This keeps the shell's prop surface stable across selection changes,
+        // letting React.memo skip re-renders for the 700+ wrapped layers in
+        // the canvas whenever a different layer is clicked.
+        const currentSelection = useEditorStore.getState().selectedLayerId;
+        if (currentSelection !== layerId) {
+          selectionFromMenu = true;
+          onLayerSelect(layerId);
+        }
+      }
+
+      // Hide the parent-document selection overlay while the canvas context menu is open,
+      // and suppress stale clicks that fire on the canvas when the menu dismisses
+      if (canvasPortalContainer) {
+        if (open) {
+          cancelAnimationFrame(pendingCloseRaf);
+          useEditorStore.getState().setCanvasContextMenuOpen(true);
+        } else {
+          pendingCloseRaf = requestAnimationFrame(() => {
+            useEditorStore.getState().setCanvasContextMenuOpen(false);
+          });
+        }
+      }
+    },
+    [canvasPortalContainer, onLayerSelect, layerId]
+  );
+
+  if (readOnly) return <>{children}</>;
+
+  return (
+    <ContextMenu onOpenChange={handleOpenChange}>
+      <ContextMenuTrigger
+        asChild
+        onContextMenu={(e) => e.stopPropagation()}
+      >
+        {children}
+      </ContextMenuTrigger>
+      {needsInner && (
+        <LayerContextMenuInner
+          layerId={layerId}
+          pageId={pageId}
+          isLocked={isLocked}
+          onLayerSelect={onLayerSelect}
+          liveLayerUpdates={liveLayerUpdates}
+          liveComponentUpdates={liveComponentUpdates}
+          editingComponentId={editingComponentId}
+          isComponentDialogOpen={isComponentDialogOpen}
+          setIsComponentDialogOpen={setIsComponentDialogOpen}
+          isLayoutDialogOpen={isLayoutDialogOpen}
+          setIsLayoutDialogOpen={setIsLayoutDialogOpen}
+          isImportHtmlOpen={isImportHtmlOpen}
+          setIsImportHtmlOpen={setIsImportHtmlOpen}
+          isExportHtmlOpen={isExportHtmlOpen}
+          setIsExportHtmlOpen={setIsExportHtmlOpen}
+          exportHtml={exportHtml}
+          setExportHtml={setExportHtml}
+          layerName={layerName}
+          setLayerName={setLayerName}
+        />
+      )}
     </ContextMenu>
   );
 }
+
+export default React.memo(LayerContextMenu);

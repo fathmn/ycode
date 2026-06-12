@@ -1,4 +1,5 @@
-import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { getSupabaseAdmin, getTenantIdFromHeaders } from '@/lib/supabase-server';
+import { getKnexClient } from '@/lib/knex-client';
 import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 import type { Collection, CreateCollectionData, UpdateCollectionData } from '@/types';
 import { randomUUID } from 'crypto';
@@ -83,6 +84,45 @@ export async function getAllCollections(filters?: QueryFilters, projectId?: stri
   });
 
   return collections;
+}
+
+/**
+ * Get raw collection rows for a publish flag in a single direct-DB (Knex) read.
+ * Unlike getAllCollections, this skips item-count joins and published-version
+ * lookups — intended for bulk publish flows that only need the base columns.
+ * @param tenantId - Optional explicit tenant scope (required inside unstable_cache)
+ */
+export async function getCollectionsRaw(isPublished: boolean, projectId?: string | null, tenantId?: string): Promise<Collection[]> {
+  try {
+    const knex = await getKnexClient();
+    const resolvedTenantId = tenantId ?? await getTenantIdFromHeaders();
+    let query = knex('collections')
+      .select('*')
+      .where('is_published', isPublished)
+      .whereNull('deleted_at');
+    if (resolvedTenantId) {
+      query = query.where('tenant_id', resolvedTenantId);
+    }
+    if (projectId) {
+      query = query.where('project_id', projectId);
+    }
+    return await query;
+  } catch {
+    const client = await getSupabaseAdmin(tenantId);
+    if (!client) throw new Error('Supabase client not configured');
+
+    let query = client
+      .from('collections')
+      .select('*')
+      .eq('is_published', isPublished)
+      .is('deleted_at', null);
+    query = (await applyProjectScopeToQuery(query, client, 'collections', projectId)).query;
+
+    const { data, error } = await query;
+
+    if (error) throw new Error(`Failed to fetch collections: ${error.message}`);
+    return data || [];
+  }
 }
 
 /**

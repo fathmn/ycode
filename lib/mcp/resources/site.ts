@@ -48,7 +48,7 @@ export function registerSiteResources(server: McpServer, projectContext: McpProj
               name: f.name,
               parent_id: f.page_folder_id,
             })),
-          }, null, 2),
+          }),
         }],
       };
     },
@@ -86,7 +86,7 @@ export function registerSiteResources(server: McpServer, projectContext: McpProj
         contents: [{
           uri: 'ycode://site/collections',
           mimeType: 'application/json',
-          text: JSON.stringify(schema, null, 2),
+          text: JSON.stringify(schema),
         }],
       };
     },
@@ -131,7 +131,7 @@ export function registerSiteResources(server: McpServer, projectContext: McpProj
               label: l.label,
               is_default: l.is_default,
             })),
-          }, null, 2),
+          }),
         }],
       };
     },

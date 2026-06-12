@@ -311,16 +311,23 @@ function resolveImageLinkHref(
 /**
  * Flatten multi-paragraph Tiptap content into a single paragraph with hardBreak nodes.
  * Used for heading/text elements that should not contain nested block elements.
- * Converts: [paragraph("a"), paragraph("b")] → [paragraph("a", hardBreak, "b")]
+ * Treats `heading` blocks like paragraphs so their inline content is preserved without
+ * producing a nested <h1>-<h6> inside the simple text layer's own heading tag.
+ * Converts: [paragraph("a"), heading("b")] → [paragraph("a", hardBreak, "b")]
  */
 export function flattenTiptapParagraphs(content: any): any {
   if (!content || typeof content !== 'object' || content.type !== 'doc') return content;
   const blocks = content.content;
-  if (!Array.isArray(blocks) || blocks.length <= 1) return content;
+  if (!Array.isArray(blocks) || blocks.length === 0) return content;
+
+  const FLATTENABLE = new Set(['paragraph', 'heading']);
+  const allFlattenable = blocks.every((b: any) => FLATTENABLE.has(b?.type));
+  if (!allFlattenable) return content;
+
+  if (blocks.length === 1 && blocks[0].type === 'paragraph') return content;
 
   const merged: any[] = [];
   blocks.forEach((block: any, i: number) => {
-    if (block.type !== 'paragraph') return;
     if (i > 0 && merged.length > 0) {
       merged.push({ type: 'hardBreak' });
     }
@@ -631,8 +638,9 @@ function renderInlineContent(
       return [React.createElement(HtmlEmbedRenderer, { key, code: htmlCode })];
     }
 
-    // Handle richTextImage nodes that may appear inline from CMS rich_text expansion
-    if (node.type === 'richTextImage') {
+    // Handle richTextImage nodes that may appear inline from CMS rich_text expansion.
+    // Legacy migrated content may use `image` as the node type — accept both.
+    if (node.type === 'richTextImage' || node.type === 'image') {
       const imgProps: Record<string, any> = {
         key,
         src: node.attrs?.src || '',
@@ -715,7 +723,7 @@ function renderRichTextComponentBlock(
   }
 
   const component = components?.find(c => c.id === componentId);
-  if (!component || !component.layers?.length) {
+  if (!component) {
     return React.createElement('span', { key, className: 'text-xs text-muted-foreground' }, '[missing component]');
   }
 
@@ -730,6 +738,11 @@ function renderRichTextComponentBlock(
   // Use pre-resolved layers (from server-side resolveRichTextCollections) when available
   if (block.attrs._resolvedLayers) {
     return renderComponentBlock(component, block.attrs._resolvedLayers, overrides, key, updatedAncestors);
+  }
+
+  // Fallback: resolve from component definition (edit mode)
+  if (!component.layers?.length) {
+    return React.createElement('span', { key, className: 'text-xs text-muted-foreground' }, '[missing component]');
   }
 
   const withOverrides = applyComponentOverrides(
@@ -859,7 +872,7 @@ function renderBlock(
     );
   }
 
-  if (block.type === 'richTextImage') {
+  if (block.type === 'richTextImage' || block.type === 'image') {
     const imgProps: Record<string, any> = {
       key,
       src: block.attrs?.src || '',
@@ -1143,10 +1156,19 @@ export function renderRichText(
       return null;
     }
     const inlineContent = renderInlineContent(paragraph.content, collectionItemData, pageCollectionItemData, textStyles, isEditMode, linkContext, timezone, layerDataMap, components, renderComponentBlock, ancestorComponentIds, useSpanForParagraphs);
-    if (isEditMode && !isSimpleTextElement) {
+    if (!isSimpleTextElement) {
+      // Wrap so inline nodes (text + <strong>, etc.) form a single flow unit.
+      // Without this, a parent with `flex flex-col` turns each text node /
+      // inline element into separate flex items that stack vertically.
+      const tag = useSpanForParagraphs ? 'span' : 'p';
       const paragraphClass = textStyles?.paragraph?.classes ?? DEFAULT_TEXT_STYLES.paragraph?.classes ?? '';
       const children = Array.isArray(inlineContent) ? inlineContent : [inlineContent];
-      return React.createElement('span', { 'data-style': 'paragraph', 'data-block-index': 0, className: paragraphClass }, ...children);
+      const props: Record<string, any> = { className: paragraphClass || undefined };
+      if (isEditMode) {
+        props['data-style'] = 'paragraph';
+        props['data-block-index'] = 0;
+      }
+      return React.createElement(tag, props, ...children);
     }
     return inlineContent;
   }
@@ -1155,7 +1177,10 @@ export function renderRichText(
   return doc.content.map((block: any, idx: number) => {
     const element = renderBlock(block, idx, collectionItemData, pageCollectionItemData, textStyles, useSpanForParagraphs, isEditMode, linkContext, timezone, layerDataMap, components, renderComponentBlock, ancestorComponentIds);
     const isVisibleBlock = block.type !== 'paragraph' || block.content?.length;
-    if (element && isVisibleBlock && isEditMode) {
+    // Embedded component blocks render as a React.Fragment, which only accepts
+    // `key`/`children` — cloning to inject `data-block-index` would throw.
+    const isFragment = React.isValidElement(element) && (element as React.ReactElement).type === React.Fragment;
+    if (element && isVisibleBlock && isEditMode && !isFragment) {
       return React.cloneElement(element as React.ReactElement<any>, {
         'data-block-index': visibleBlockIdx++,
       });

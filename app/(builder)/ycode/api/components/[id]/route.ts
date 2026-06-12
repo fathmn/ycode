@@ -69,7 +69,7 @@ export async function PUT(
 
     const { id } = await params;
     const body = await request.json();
-    const { name, layers, variables } = body;
+    const { name, layers, variables, variants } = body;
 
     const existing = await getComponentById(id);
     if (!existing || !recordInStudioProject(existing, projectId)) {
@@ -80,6 +80,7 @@ export async function PUT(
     if (name !== undefined) updates.name = name;
     if (layers !== undefined) updates.layers = layers;
     if (variables !== undefined) updates.variables = variables;
+    if (variants !== undefined) updates.variants = variants;
 
     const component = await updateComponent(id, updates);
 

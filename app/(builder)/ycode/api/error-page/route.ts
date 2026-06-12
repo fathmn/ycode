@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchErrorPage } from '@/lib/page-fetcher';
-import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { canRenderStudioCustomCode, requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 const STUDIO_READ_ROLES: StudioProjectRole[] = [
@@ -10,6 +8,9 @@ const STUDIO_READ_ROLES: StudioProjectRole[] = [
   'customer_editor',
   'customer_viewer',
 ];
+import { fetchErrorPage } from '@/lib/page-fetcher';
+import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
+import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
 
 // Force dynamic rendering - no caching
 export const dynamic = 'force-dynamic';
@@ -56,13 +57,14 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Load CSS based on published state
     const cssKey = published ? 'published_css' : 'draft_css';
-    const css = await getSettingByKey(cssKey, projectId);
+    const [settings, colorVariablesCss] = await Promise.all([
+      getSettingsByKeys([cssKey, 'ycode_badge'], projectId),
+      generateColorVariablesCss(projectId),
+    ]);
 
-    // Strip custom code when the studio secret scan blocks rendering.
-    // The preview error boundary injects this HTML raw, so it must not
-    // bypass the same gate used by regular page rendering.
+    // Strip custom code when the studio secret scan blocks rendering — the
+    // preview error boundary injects this HTML raw.
     const allowCustomCode = await canRenderStudioCustomCode(projectId, published);
     if (!allowCustomCode && pageData.page?.settings?.custom_code) {
       pageData.page.settings.custom_code = { head: '', body: '' };
@@ -70,7 +72,9 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       pageData,
-      css,
+      css: settings[cssKey] || null,
+      colorVariablesCss,
+      ycodeBadge: settings.ycode_badge ?? false,
     });
   } catch (error) {
     console.error('Failed to fetch error page:', error);

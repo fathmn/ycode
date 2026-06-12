@@ -38,6 +38,25 @@ function extractInnerHtml(full: string, tag: string): string {
   return m ? m[1] : '';
 }
 
+const STYLE_BLOCK_REGEX = /<style[^>]*>([\s\S]*?)<\/style\s*>/gi;
+
+/**
+ * Concatenates the inner CSS of every `<style>` block in an HTML string.
+ * Used by the builder canvas to live-preview user-defined CSS variables
+ * declared in custom head code, without executing any `<script>` tags.
+ */
+export function extractStyleBlockContents(html: string | null | undefined): string {
+  if (!html) return '';
+  const parts: string[] = [];
+  STYLE_BLOCK_REGEX.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = STYLE_BLOCK_REGEX.exec(html)) !== null) {
+    const inner = match[1].trim();
+    if (inner) parts.push(inner);
+  }
+  return parts.join('\n');
+}
+
 /**
  * Renders global head HTML as React elements for direct placement inside
  * the root layout's <head>. Bypasses next/script to avoid self.__next_s
@@ -56,15 +75,19 @@ export function renderRootLayoutHeadCode(html: string, prefix = 'global-head'): 
     const pairedTag = match[3]?.toLowerCase();
     const pairedAttrStr = match[4] || '';
 
+    // Third-party scripts (AdSense, GTM, etc.) mutate their own head tags at
+    // runtime (e.g. adding `data-checked-head`), so the live DOM diverges from
+    // the SSR markup. suppressHydrationWarning silences these expected diffs.
     if (voidTag) {
       const attrs = toReactAttrs(parseAttributes(voidAttrStr.trim()));
-      elements.push(React.createElement(voidTag, { key: `${prefix}-${idx++}`, ...attrs }));
+      elements.push(React.createElement(voidTag, { key: `${prefix}-${idx++}`, suppressHydrationWarning: true, ...attrs }));
     } else if (pairedTag === 'script') {
       const attrs = parseAttributes(pairedAttrStr.trim());
       const inner = extractInnerHtml(match[0], 'script');
       const reactAttrs = toReactAttrs(attrs);
       const props: Record<string, unknown> = {
         key: `${prefix}-${idx++}`,
+        suppressHydrationWarning: true,
         ...reactAttrs,
       };
       if (inner) {
@@ -77,19 +100,21 @@ export function renderRootLayoutHeadCode(html: string, prefix = 'global-head'): 
       elements.push(
         React.createElement('style', {
           key: `${prefix}-${idx++}`,
+          suppressHydrationWarning: true,
           ...attrs,
           dangerouslySetInnerHTML: { __html: inner },
         }),
       );
     } else if (pairedTag === 'title') {
       const inner = extractInnerHtml(match[0], 'title');
-      elements.push(React.createElement('title', { key: `${prefix}-${idx++}` }, inner));
+      elements.push(React.createElement('title', { key: `${prefix}-${idx++}`, suppressHydrationWarning: true }, inner));
     } else if (pairedTag) {
       const attrs = toReactAttrs(parseAttributes(pairedAttrStr.trim()));
       const inner = extractInnerHtml(match[0], pairedTag);
       elements.push(
         React.createElement(pairedTag, {
           key: `${prefix}-${idx++}`,
+          suppressHydrationWarning: true,
           ...attrs,
           dangerouslySetInnerHTML: { __html: inner },
         }),

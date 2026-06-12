@@ -3,8 +3,21 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getAllPages, getPageById, getPagesByFolder, createPage, updatePage, deletePage, duplicatePage } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { upsertDraftLayers } from '@/lib/repositories/pageLayersRepository';
+import { getSettingByKey, setSetting } from '@/lib/repositories/settingsRepository';
 import { broadcastPageCreated, broadcastPageUpdated, broadcastPageDeleted, broadcastLayersChanged } from '@/lib/mcp/broadcast';
 import { resolveMcpProjectId, type McpProjectContext } from '@/lib/mcp/project-context';
+import type { Redirect } from '@/types';
+
+const REDIRECTS_KEY = 'redirects';
+
+async function getRedirects(projectId?: string | null): Promise<Redirect[]> {
+  const value = await getSettingByKey(REDIRECTS_KEY, projectId);
+  return Array.isArray(value) ? value : [];
+}
+
+function generateRedirectId(): string {
+  return `redirect_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+}
 
 const projectSchema = z.string().optional().describe('Optional Studio project slug, studio path slug, or domain for project-scoped page data');
 
@@ -20,7 +33,7 @@ export function registerPageTools(server: McpServer, projectContext: McpProjectC
       const pages = await getAllPages(undefined, projectId);
       const folders = await getAllPageFolders(undefined, projectId);
       return {
-        content: [{ type: 'text' as const, text: JSON.stringify({ pages, folders }, null, 2) }],
+        content: [{ type: 'text' as const, text: JSON.stringify({ pages, folders }) }],
       };
     },
   );
@@ -38,19 +51,22 @@ export function registerPageTools(server: McpServer, projectContext: McpProjectC
       if (!page) {
         return { content: [{ type: 'text' as const, text: `Error: Page "${page_id}" not found.` }], isError: true };
       }
-      return { content: [{ type: 'text' as const, text: JSON.stringify(page, null, 2) }] };
+      return { content: [{ type: 'text' as const, text: JSON.stringify(page) }] };
     },
   );
 
   server.tool(
     'create_page',
-    'Create a new page. Returns the created page with its ID. The page is created as a draft — use the publish tool to make it live.',
+    `Create a new page. Returns the created page with its ID. The page is unpublished — use the publish tool to make it live.
+
+DRAFT STATUS: Set is_publishable to false to keep this page as a draft that is skipped when the site is published (it will not go live until you flip it back to publishable). Defaults to publishable.`,
     {
       name: z.string().describe('Page title (e.g. "About Us", "Contact")'),
       slug: z.string().optional().describe('URL slug. Auto-generated from name if omitted.'),
       page_folder_id: z.string().nullable().optional().describe('Parent folder ID, or null for root'),
       is_index: z.boolean().optional().describe('Set to true to make this the homepage'),
       is_dynamic: z.boolean().optional().describe('Set to true for CMS dynamic pages'),
+      is_publishable: z.boolean().optional().describe('Set to false to keep the page as a draft that is excluded from publishing. Defaults to true.'),
       project: projectSchema,
     },
     async (args) => {
@@ -66,6 +82,7 @@ export function registerPageTools(server: McpServer, projectContext: McpProjectC
         name: args.name,
         slug,
         is_published: false,
+        ...(args.is_publishable !== undefined ? { is_publishable: args.is_publishable } : {}),
         page_folder_id: folderId,
         order: maxOrder + 1,
         depth: 0,
@@ -81,40 +98,52 @@ export function registerPageTools(server: McpServer, projectContext: McpProjectC
         classes: '',
         children: [],
       }];
-      await upsertDraftLayers(page.id, initialLayers, undefined, projectId);
+      // Brand-new page guarantees no existing draft — assert it to skip the repo's pre-read.
+      await upsertDraftLayers(page.id, initialLayers, undefined, null, projectId);
 
       broadcastPageCreated(page).catch(() => {});
       broadcastLayersChanged(page.id, initialLayers).catch(() => {});
 
-      return { content: [{ type: 'text' as const, text: JSON.stringify(page, null, 2) }] };
+      return { content: [{ type: 'text' as const, text: JSON.stringify(page) }] };
     },
   );
 
   server.tool(
     'update_page',
-    "Update a page's name, slug, or folder.",
+    `Update a page's metadata: name, slug, folder, homepage flag, dynamic flag, and error-page assignment.
+
+ERROR PAGES: Set error_page to 401, 404, or 500 to designate this as the auth-required / not-found / server-error page for the site. Pass null to clear.
+DYNAMIC PAGES: Set is_dynamic true to turn this into a CMS-driven page (then use update_page_settings.cms to bind it to a collection).
+DRAFT STATUS: Set is_publishable to false to keep the page as a draft that is skipped when the site is published; set true to allow it to go live on the next publish.`,
     {
       page_id: z.string().describe('The page ID to update'),
       name: z.string().optional().describe('New page title'),
       slug: z.string().optional().describe('New URL slug'),
       page_folder_id: z.string().nullable().optional().describe('Move to folder ID, or null for root'),
+      is_index: z.boolean().optional().describe('Mark as the homepage (only one page can be the index)'),
+      is_dynamic: z.boolean().optional().describe('Turn into a CMS dynamic page'),
+      is_publishable: z.boolean().optional().describe('Set false to keep the page as a draft excluded from publishing; true to allow it to go live on publish.'),
+      error_page: z.union([z.literal(401), z.literal(404), z.literal(500)]).nullable().optional()
+        .describe('Designate as 401 / 404 / 500 error page. Pass null to clear.'),
       project: projectSchema,
     },
     async ({ page_id, project, ...data }) => {
       const projectId = await resolveMcpProjectId(projectContext, project);
       const page = await updatePage(page_id, data, projectId);
       broadcastPageUpdated(page_id, data).catch(() => {});
-      return { content: [{ type: 'text' as const, text: JSON.stringify(page, null, 2) }] };
+      return { content: [{ type: 'text' as const, text: JSON.stringify(page) }] };
     },
   );
 
   server.tool(
     'update_page_settings',
-    `Update page SEO, custom code, or password protection settings.
+    `Update page SEO, custom code, password protection, or CMS binding (dynamic pages).
 
 SEO: Set title, description, noindex, and OG image (asset ID).
 Custom code: Inject HTML into <head> or before </body>.
-Password protection: Enable/disable with a password.`,
+Password protection: Enable/disable with a password.
+CMS binding: For dynamic pages — bind to a collection, pick the slug field, and configure
+how next-item / previous-item links traverse the collection.`,
     {
       page_id: z.string().describe('The page ID'),
       seo: z.object({
@@ -131,9 +160,17 @@ Password protection: Enable/disable with a password.`,
         enabled: z.boolean().describe('Enable or disable password protection'),
         password: z.string().optional().describe('Password for accessing the page'),
       }).optional(),
+      cms: z.object({
+        collection_id: z.string().describe('Collection to drive this dynamic page'),
+        slug_field_id: z.string().describe('Field whose value provides each item\'s URL slug'),
+        next_previous: z.object({
+          sort_by: z.string().optional().describe('"manual" (default) or a collection field ID'),
+          sort_order: z.enum(['asc', 'desc']).optional(),
+        }).optional().describe('Controls how next-item / previous-item link keywords traverse this page\'s collection.'),
+      }).nullable().optional().describe('CMS binding for dynamic pages. Pass null to clear.'),
       project: projectSchema,
     },
-    async ({ page_id, seo, custom_code, auth, project }) => {
+    async ({ page_id, seo, custom_code, auth, cms, project }) => {
       const projectId = await resolveMcpProjectId(projectContext, project);
       const existing = await getPageById(page_id, false, projectId);
       if (!existing) {
@@ -167,9 +204,26 @@ Password protection: Enable/disable with a password.`,
         };
       }
 
+      if (cms !== undefined) {
+        if (cms === null) {
+          delete settings.cms;
+        } else {
+          settings.cms = {
+            collection_id: cms.collection_id,
+            slug_field_id: cms.slug_field_id,
+            ...(cms.next_previous && {
+              next_previous: {
+                ...(cms.next_previous.sort_by !== undefined && { sort_by: cms.next_previous.sort_by as 'manual' | string }),
+                ...(cms.next_previous.sort_order !== undefined && { sort_order: cms.next_previous.sort_order }),
+              },
+            }),
+          };
+        }
+      }
+
       const page = await updatePage(page_id, { settings }, projectId);
       broadcastPageUpdated(page_id, { settings }).catch(() => {});
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ message: 'Updated page settings', settings: page.settings }, null, 2) }] };
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ message: 'Updated page settings', settings: page.settings }) }] };
     },
   );
 
@@ -184,7 +238,7 @@ Password protection: Enable/disable with a password.`,
       const projectId = await resolveMcpProjectId(projectContext, project);
       const page = await duplicatePage(page_id, projectId);
       broadcastPageCreated(page).catch(() => {});
-      return { content: [{ type: 'text' as const, text: JSON.stringify({ message: `Duplicated page as "${page.name}"`, page }, null, 2) }] };
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ message: `Duplicated page as "${page.name}"`, page }) }] };
     },
   );
 
@@ -200,6 +254,98 @@ Password protection: Enable/disable with a password.`,
       await deletePage(page_id, projectId);
       broadcastPageDeleted(page_id).catch(() => {});
       return { content: [{ type: 'text' as const, text: `Page ${page_id} deleted successfully.` }] };
+    },
+  );
+
+  server.tool(
+    'list_redirects',
+    `List all configured URL redirects. Redirects map an old path to a new URL (internal path
+or external URL), with optional 301 (permanent) or 302 (temporary) semantics. Paths containing
+".+" or ".*" are treated as regex patterns; exact matches take priority.`,
+    {
+      project: projectSchema,
+    },
+    async ({ project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      const redirects = await getRedirects(projectId);
+      return { content: [{ type: 'text' as const, text: JSON.stringify(redirects) }] };
+    },
+  );
+
+  server.tool(
+    'add_redirect',
+    `Add a new URL redirect.
+
+Examples:
+- { old_url: "/about-us", new_url: "/about", type: "301" }
+- { old_url: "/blog/.+", new_url: "/posts/$0" } (regex — entire match is $0)
+- { old_url: "/", new_url: "/welcome" } (root / homepage redirect)`,
+    {
+      old_url: z.string().describe('The old internal path (must start with /). Use ".+" or ".*" for regex patterns.'),
+      new_url: z.string().describe('The new destination — internal path "/about" or external URL "https://example.com"'),
+      type: z.enum(['301', '302']).optional().describe('301 = permanent, 302 = temporary. Defaults to 301.'),
+      project: projectSchema,
+    },
+    async ({ old_url, new_url, type, project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      const redirects = await getRedirects(projectId);
+      const newRedirect: Redirect = {
+        id: generateRedirectId(),
+        oldUrl: old_url,
+        newUrl: new_url,
+        ...(type && { type }),
+      };
+      await setSetting(REDIRECTS_KEY, [...redirects, newRedirect], projectId);
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ message: 'Redirect added', redirect: newRedirect }) }] };
+    },
+  );
+
+  server.tool(
+    'update_redirect',
+    'Update an existing redirect by ID.',
+    {
+      redirect_id: z.string().describe('The redirect ID'),
+      old_url: z.string().optional(),
+      new_url: z.string().optional(),
+      type: z.enum(['301', '302']).optional(),
+      project: projectSchema,
+    },
+    async ({ redirect_id, old_url, new_url, type, project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      const redirects = await getRedirects(projectId);
+      const idx = redirects.findIndex((r) => r.id === redirect_id);
+      if (idx === -1) {
+        return { content: [{ type: 'text' as const, text: `Error: Redirect "${redirect_id}" not found.` }], isError: true };
+      }
+      const updated: Redirect = {
+        ...redirects[idx],
+        ...(old_url !== undefined && { oldUrl: old_url }),
+        ...(new_url !== undefined && { newUrl: new_url }),
+        ...(type !== undefined && { type }),
+      };
+      const next = [...redirects];
+      next[idx] = updated;
+      await setSetting(REDIRECTS_KEY, next, projectId);
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ message: 'Redirect updated', redirect: updated }) }] };
+    },
+  );
+
+  server.tool(
+    'delete_redirect',
+    'Delete a redirect by ID.',
+    {
+      redirect_id: z.string().describe('The redirect ID'),
+      project: projectSchema,
+    },
+    async ({ redirect_id, project }) => {
+      const projectId = await resolveMcpProjectId(projectContext, project);
+      const redirects = await getRedirects(projectId);
+      const next = redirects.filter((r) => r.id !== redirect_id);
+      if (next.length === redirects.length) {
+        return { content: [{ type: 'text' as const, text: `Error: Redirect "${redirect_id}" not found.` }], isError: true };
+      }
+      await setSetting(REDIRECTS_KEY, next, projectId);
+      return { content: [{ type: 'text' as const, text: `Redirect ${redirect_id} deleted` }] };
     },
   );
 }

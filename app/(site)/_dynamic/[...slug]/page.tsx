@@ -133,7 +133,7 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
     }
   }
 
-  const globalSettings = await fetchGlobalPageSettings(projectId);
+  const globalSettings = await fetchGlobalPageSettings(false, projectId);
 
   return (
     <PublishedPageRenderer

@@ -8,7 +8,7 @@
  * Extracted from LinkSettings to work with LinkSettings object directly.
  */
 
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useCallback, useMemo } from 'react';
 
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
@@ -24,22 +24,21 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { FieldSelectDropdown, type FieldSourceType } from './CollectionFieldSelector';
-import type { Layer, CollectionField, Collection, LinkSettings, LinkType, CollectionItemWithValues } from '@/types';
+import type { Layer, CollectionField, Collection, LinkSettings, LinkType } from '@/types';
 import {
   createDynamicTextVariable,
   getDynamicTextContent,
 } from '@/lib/variable-utils';
 import { usePagesStore } from '@/stores/usePagesStore';
-import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useAssetsStore } from '@/stores/useAssetsStore';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { getAssetIcon } from '@/lib/asset-utils';
-import { collectionsApi } from '@/lib/api';
-import { getLayerIcon, getLayerName, getCollectionVariable } from '@/lib/layer-utils';
+import { getCollectionVariable, findLayersWithAnchorId } from '@/lib/layer-utils';
+import { getLayerIcon, getLayerName } from '@/lib/layer-display-utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import PageSelector from './PageSelector';
 import { filterFieldGroupsByType, flattenFieldGroups, LINK_FIELD_TYPES, buildReferenceItemOptions, type FieldGroup } from '@/lib/collection-field-utils';
-import LinkItemOptions from './LinkItemOptions';
+import LinkCollectionItemPicker from './LinkCollectionItemPicker';
 
 export interface RichTextLinkSettingsProps {
   /** Current link settings */
@@ -76,17 +75,12 @@ export default function RichTextLinkSettings({
   excludedLinkTypes = [],
   hidePageContextOptions = false,
 }: RichTextLinkSettingsProps) {
-  const [collectionItems, setCollectionItems] = useState<CollectionItemWithValues[]>([]);
-  const [loadingItems, setLoadingItems] = useState(false);
-  const [collectionItemSearch, setCollectionItemSearch] = useState('');
-
   // Stores
   const pages = usePagesStore((state) => state.pages);
   const draftsByPageId = usePagesStore((state) => state.draftsByPageId);
   const currentPageId = useEditorStore((state) => state.currentPageId);
   const openFileManager = useEditorStore((state) => state.openFileManager);
   const getAsset = useAssetsStore((state) => state.getAsset);
-  const collectionsStoreFields = useCollectionsStore((state) => state.fields);
 
   // Get current link settings
   const linkSettings = value;
@@ -131,26 +125,6 @@ export default function RichTextLinkSettings({
     return pages.find((p) => p.id === pageId) || null;
   }, [pageId, pages]);
 
-  // Flatten layers and find all layers with attributes.id
-  const findLayersWithId = useCallback((layers: Layer[]): Array<{ layer: Layer; id: string }> => {
-    const result: Array<{ layer: Layer; id: string }> = [];
-    const stack: Layer[] = [...layers];
-
-    while (stack.length > 0) {
-      const currLayer = stack.pop()!;
-
-      if (currLayer.attributes?.id) {
-        result.push({ layer: currLayer, id: currLayer.attributes.id });
-      }
-
-      if (currLayer.children) {
-        stack.push(...currLayer.children);
-      }
-    }
-
-    return result;
-  }, []);
-
   // Get layers for anchor selection based on link type
   const anchorLayers = useMemo(() => {
     let targetPageId: string | null = null;
@@ -161,17 +135,13 @@ export default function RichTextLinkSettings({
       targetPageId = currentPageId;
     }
 
-    if (!targetPageId) {
-      return [];
-    }
+    if (!targetPageId) return [];
 
     const draft = draftsByPageId[targetPageId];
-    if (!draft || !draft.layers) {
-      return [];
-    }
+    if (!draft || !draft.layers) return [];
 
-    return findLayersWithId(draft.layers);
-  }, [linkType, pageId, currentPageId, draftsByPageId, findLayersWithId]);
+    return findLayersWithAnchorId(draft.layers);
+  }, [linkType, pageId, currentPageId, draftsByPageId]);
 
   // Check if selected page is dynamic
   const isDynamicPage = selectedPage?.is_dynamic || false;
@@ -223,29 +193,7 @@ export default function RichTextLinkSettings({
   // Get collection ID from dynamic page settings
   const pageCollectionId = selectedPage?.settings?.cms?.collection_id || null;
 
-  // Load collection items when dynamic page is selected
-  useEffect(() => {
-    if (!pageCollectionId || !isDynamicPage) {
-      setCollectionItems([]);
-      return;
-    }
-
-    const loadItems = async () => {
-      setLoadingItems(true);
-      try {
-        const response = await collectionsApi.getItems(pageCollectionId);
-        if (response.data) {
-          setCollectionItems(response.data.items || []);
-        }
-      } catch (error) {
-        console.error('Failed to load collection items:', error);
-      } finally {
-        setLoadingItems(false);
-      }
-    };
-
-    loadItems();
-  }, [pageCollectionId, isDynamicPage]);
+  const collectionPickerId = isDynamicPage ? pageCollectionId : null;
 
   // Link type options for the dropdown
   const linkTypeOptions = useMemo<
@@ -505,12 +453,6 @@ export default function RichTextLinkSettings({
   // Get asset info for display
   const selectedAsset = assetId ? getAsset(assetId) : null;
 
-  // Fields for the linked page's collection (for display names)
-  const linkedPageCollectionFields = useMemo(
-    () => pageCollectionId ? collectionsStoreFields[pageCollectionId] || [] : [],
-    [pageCollectionId, collectionsStoreFields]
-  );
-
   return (
     <div className="flex flex-col gap-3">
       {/* Link Type */}
@@ -647,38 +589,15 @@ export default function RichTextLinkSettings({
             <div className="grid grid-cols-3 items-center gap-2">
               <Label className="text-xs text-muted-foreground">CMS item</Label>
               <div className="col-span-2">
-                <Select
-                  value={collectionItemId || ''}
-                  onValueChange={(value) => {
-                    handleCollectionItemChange(value);
-                    setCollectionItemSearch('');
-                  }}
-                  onOpenChange={(open) => {
-                    if (!open) setCollectionItemSearch('');
-                  }}
-                  disabled={loadingItems}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder={loadingItems ? 'Loading...' : 'Select...'} />
-                  </SelectTrigger>
-                  <SelectContent
-                    searchable
-                    searchValue={collectionItemSearch}
-                    onSearchChange={setCollectionItemSearch}
-                    searchPlaceholder="Search items..."
-                    className="w-72"
-                  >
-                    <LinkItemOptions
-                      canUseCurrentPageItem={canUseCurrentPageItem}
-                      canUseCurrentCollectionItem={canUseCurrentCollectionItem}
-                      canUseNextPreviousItem={canUseNextPreviousItem}
-                      referenceItemOptions={referenceItemOptions}
-                      collectionItems={collectionItems}
-                      collectionFields={linkedPageCollectionFields}
-                      searchValue={collectionItemSearch}
-                    />
-                  </SelectContent>
-                </Select>
+                <LinkCollectionItemPicker
+                  collectionId={collectionPickerId}
+                  value={collectionItemId}
+                  onChange={handleCollectionItemChange}
+                  canUseCurrentPageItem={canUseCurrentPageItem}
+                  canUseCurrentCollectionItem={canUseCurrentCollectionItem}
+                  canUseNextPreviousItem={canUseNextPreviousItem}
+                  referenceItemOptions={referenceItemOptions}
+                />
               </div>
             </div>
           )}

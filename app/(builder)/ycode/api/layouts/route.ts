@@ -393,7 +393,7 @@ export async function POST(request: NextRequest) {
               children: l.children ? updateTree(l.children) : undefined,
             });
 
-          await upsertDraftLayers(pageId, updateTree(pageLayers.layers), undefined, projectId);
+          await upsertDraftLayers(pageId, updateTree(pageLayers.layers), undefined, undefined, projectId);
         }
       } catch (error) {
         console.warn('Warning: Could not update page layers with asset URLs:', error);

@@ -1,48 +1,21 @@
-import { NextRequest } from 'next/server';
-import { createServerClient } from '@supabase/ssr';
-import { credentials } from '@/lib/credentials';
-import { parseSupabaseConfig } from '@/lib/supabase-config-parser';
-import { cookies } from 'next/headers';
+import { createRouteClient } from '@/lib/supabase-route-client';
 import { noCache } from '@/lib/api-response';
-import type { SupabaseConfig } from '@/types';
 
 /**
  * GET /ycode/api/auth/session
- * 
+ *
  * Get current user session
  */
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
-    // Get Supabase config
-    const config = await credentials.get<SupabaseConfig>('supabase_config');
+    const supabase = await createRouteClient();
 
-    if (!config) {
+    if (!supabase) {
       return noCache(
         { error: 'Supabase not configured' },
         500
       );
     }
-
-    const cookieStore = await cookies();
-    const parsed = parseSupabaseConfig(config);
-
-    // Create Supabase client
-    const supabase = createServerClient(
-      parsed.projectUrl,
-      parsed.anonKey,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set({ name, value, ...options });
-            });
-          },
-        },
-      }
-    );
 
     // Get session, then validate the user server-side. Supabase warns that
     // getSession() reads client-owned storage and must not be trusted as user
@@ -84,7 +57,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('Session check failed:', error);
-    
+
     return noCache(
       { error: 'Session check failed' },
       500

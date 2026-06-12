@@ -111,7 +111,7 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
     }
   }
 
-  const globalSettings = await fetchGlobalPageSettings(projectId);
+  const globalSettings = await fetchGlobalPageSettings(false, projectId);
 
   return (
     <PublishedPageRenderer

@@ -5,9 +5,27 @@ import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepos
 import { getItemWithValues, deleteItem } from '@/lib/repositories/collectionItemRepository';
 import { setValues } from '@/lib/repositories/collectionItemValueRepository';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { invalidateForCollectionChange } from '@/lib/services/cacheService';
+import type { CollectionField, CollectionItemWithValues } from '@/types';
 import { transformItemToPublicWithRefs, parseFieldProjections } from '../../../../reference-resolver';
 import { ProjectScopeAuthorizationError, resolveApiKeyRequestProjectId } from '@/lib/request-project-scope';
 import { applyProjectScopeToQuery } from '@/lib/project-scope';
+
+/**
+ * Pull the current slug value off an item before mutation/delete, so we can
+ * invalidate the old dynamic-page URL afterwards. Returns undefined when the
+ * collection has no slug field or the item has no slug value — both safe to
+ * skip (no URL exists to go stale).
+ */
+function extractItemSlug(
+  item: CollectionItemWithValues,
+  fields: CollectionField[],
+): string | undefined {
+  const slugField = fields.find((f) => f.key === 'slug');
+  if (!slugField) return undefined;
+  const value = item.values?.[slugField.id];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
 
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
@@ -191,6 +209,11 @@ export async function PUT(
       await itemUpdate;
     }
 
+    // Capture the pre-mutation slug before we overwrite values. If the slug
+    // field gets changed, we need to invalidate the OLD dynamic-page URL too
+    // — getRoutePathsForPages only enumerates the new slug after the write.
+    const previousSlug = extractItemSlug(existingItem, fields);
+
     // Set the values for both published and draft
     await setValues(item_id, valuesToSet, true, projectId);
     await setValues(item_id, valuesToSet, false, projectId);
@@ -205,6 +228,18 @@ export async function PUT(
       hasProjections ? collection.name : undefined,
       projectId
     );
+
+    try {
+      const result = await invalidateForCollectionChange(collection_id, {
+        removedSlugs: previousSlug ? [previousSlug] : [],
+      });
+      if (result.invalidatedRoutes.length > 0) {
+        console.log(`[Cache] v1 item update: invalidated ${result.invalidatedRoutes.length} route(s)`);
+      }
+    } catch (cacheError) {
+      console.error(`[Cache] v1 item update: invalidation failed:`, cacheError);
+    }
+
     return NextResponse.json(response);
   } catch (error) {
     console.error('Error updating collection item:', error);
@@ -320,6 +355,9 @@ export async function PATCH(
       await itemUpdate;
     }
 
+    // Capture pre-mutation slug for cache invalidation (see PUT for rationale).
+    const previousSlug = extractItemSlug(existingItem, fields);
+
     // Set the values for both published and draft
     if (Object.keys(valuesToSet).length > 0) {
       await setValues(item_id, valuesToSet, true, projectId);
@@ -336,6 +374,18 @@ export async function PATCH(
       hasProjections ? collection.name : undefined,
       projectId
     );
+
+    try {
+      const result = await invalidateForCollectionChange(collection_id, {
+        removedSlugs: previousSlug ? [previousSlug] : [],
+      });
+      if (result.invalidatedRoutes.length > 0) {
+        console.log(`[Cache] v1 item patch: invalidated ${result.invalidatedRoutes.length} route(s)`);
+      }
+    } catch (cacheError) {
+      console.error(`[Cache] v1 item patch: invalidation failed:`, cacheError);
+    }
+
     return NextResponse.json(response);
   } catch (error) {
     console.error('Error patching collection item:', error);
@@ -388,9 +438,27 @@ export async function DELETE(
       );
     }
 
+    // Capture slug BEFORE the soft-delete. Once deleted_at is set, the
+    // item is excluded from getRoutePathsForPages — without the slug we'd
+    // have no way to invalidate the dynamic-page URL the CDN is still
+    // serving with the now-deleted content.
+    const fields = await getFieldsByCollectionId(collection_id, true, { excludeComputed: true });
+    const previousSlug = extractItemSlug(existingItem, fields);
+
     // Delete both published and draft items
     await deleteItem(item_id, true, projectId);
     await deleteItem(item_id, false, projectId);
+
+    try {
+      const result = await invalidateForCollectionChange(collection_id, {
+        removedSlugs: previousSlug ? [previousSlug] : [],
+      });
+      if (result.invalidatedRoutes.length > 0) {
+        console.log(`[Cache] v1 item delete: invalidated ${result.invalidatedRoutes.length} route(s)`);
+      }
+    } catch (cacheError) {
+      console.error(`[Cache] v1 item delete: invalidation failed:`, cacheError);
+    }
 
     return NextResponse.json({
       deleted: true,

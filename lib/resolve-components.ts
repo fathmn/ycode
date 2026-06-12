@@ -4,7 +4,8 @@
  * Applies component variable overrides during resolution
  */
 
-import type { Layer, Component, ComponentVariable, ComponentVariableValue, LayerVariables } from '@/types';
+import type { Layer, Component, ComponentVariable, ComponentVariableValue, LayerVariables, VariantSettingsValue } from '@/types';
+import { getComponentVariantLayers } from './component-variant-utils';
 
 /**
  * Remap collection_layer_id in a FieldVariable using the ID map.
@@ -181,6 +182,26 @@ function remapVariableCollectionLayerIds(vars: LayerVariables, idMap: Map<string
     if (designChanged) { result.design = newDesign; changed = true; }
   }
 
+  // Conditional visibility conditions targeting a collection by layer ID
+  // (e.g. empty-state "has no items" rules inside a component instance)
+  if (vars.conditionalVisibility?.groups?.length) {
+    const groups = vars.conditionalVisibility.groups;
+    const newGroups = groups.map((group) => {
+      if (!Array.isArray(group?.conditions)) return group;
+      const newConditions = group.conditions.map((cond) => {
+        const mapped = cond?.collectionLayerId ? idMap.get(cond.collectionLayerId) : undefined;
+        return mapped && mapped !== cond.collectionLayerId ? { ...cond, collectionLayerId: mapped } : cond;
+      });
+      return newConditions.some((c, i) => c !== group.conditions[i])
+        ? { ...group, conditions: newConditions }
+        : group;
+    });
+    if (newGroups.some((g, i) => g !== groups[i])) {
+      result.conditionalVisibility = { ...vars.conditionalVisibility, groups: newGroups };
+      changed = true;
+    }
+  }
+
   return changed ? result : vars;
 }
 
@@ -257,6 +278,7 @@ const OVERRIDE_CATEGORIES: OverrideCategory[] = [
   'audio',
   'video',
   'icon',
+  'variant',
 ];
 
 function findOverrideByVariableId(
@@ -329,6 +351,23 @@ export function applyComponentOverrides(
   return layers.map(layer => {
     let updatedLayer = { ...layer };
 
+    // If this nested-component instance has its variant choice driven by a
+    // parent component variable, resolve the variant id from the parent's
+    // override (or the variable's default) and stamp it on `componentVariantId`
+    // before `resolveComponents` reads it. The parent variable is generic — it
+    // doesn't carry a target component id — so the variant id might not exist
+    // on this layer's referenced component; in that case
+    // `getComponentVariantLayers` falls back to the first variant.
+    if (layer.componentVariantVariableId) {
+      const variableId = layer.componentVariantVariableId;
+      const variableDef = componentVariables?.find(v => v.id === variableId);
+      const overrideValue = overrides?.variant?.[variableId];
+      const value = (overrideValue ?? variableDef?.default_value) as VariantSettingsValue | undefined;
+      if (value && typeof value === 'object' && 'variant_id' in value && value.variant_id) {
+        updatedLayer = { ...updatedLayer, componentVariantId: value.variant_id };
+      }
+    }
+
     // Check if this layer has a text variable linked
     const linkedTextVariableId = layer.variables?.text?.id;
     if (linkedTextVariableId) {
@@ -339,13 +378,17 @@ export function applyComponentOverrides(
 
       // Only apply if it's a text variable (has 'type' property, not ImageSettingsValue)
       if (valueToApply && 'type' in valueToApply) {
-        // Apply the value to this layer's text variable
+        // Apply the value to this layer's text variable. Mark layers whose
+        // text came from an instance override so `injectTranslatedText`
+        // doesn't clobber the (already page-scope-translated) override value
+        // with the component-scope default translation.
         updatedLayer = {
           ...updatedLayer,
           variables: {
             ...updatedLayer.variables,
             text: valueToApply as any,
           },
+          ...(overrideValue !== undefined ? { _textFromOverride: true } as any : {}),
         };
       }
     }
@@ -379,6 +422,7 @@ export function applyComponentOverrides(
             ...(imageValue.height && { height: imageValue.height }),
             ...(imageValue.loading && { loading: imageValue.loading }),
           },
+          ...(overrideValue !== undefined ? { _imageFromOverride: true } as any : {}),
         };
       }
     }
@@ -386,10 +430,12 @@ export function applyComponentOverrides(
     // Check if this layer has a link variable linked
     const linkedLinkVariableId = (layer.variables?.link as any)?.variable_id;
     if (linkedLinkVariableId) {
-      // Check for override first, then fall back to variable's default value
+      // Check for override first, then fall back to variable's default value.
+      // Use `!== undefined` (not `??`) so an explicit `null` override (user cleared
+      // the link via "No link") is respected instead of reverting to the default.
       const overrideValue = overrides?.link?.[linkedLinkVariableId];
       const variableDef = componentVariables?.find(v => v.id === linkedLinkVariableId);
-      const linkValue = (overrideValue ?? variableDef?.default_value) as any;
+      const linkValue = (overrideValue !== undefined ? overrideValue : variableDef?.default_value) as any;
 
       if (linkValue) {
         // Apply the value to this layer's link variable, keeping the variable_id for reference
@@ -400,6 +446,11 @@ export function applyComponentOverrides(
             link: { ...linkValue, variable_id: linkedLinkVariableId },
           },
         };
+      } else {
+        // Explicit "No link" — strip any inherited link settings from the layer
+        // so the rendered element has no href / link wrapper.
+        const { link: _ignored, ...restVariables } = updatedLayer.variables ?? {};
+        updatedLayer = { ...updatedLayer, variables: restVariables };
       }
     }
 
@@ -555,13 +606,19 @@ export function resolveComponents(
 
       const component = components.find(c => c.id === layer.componentId);
 
-      if (component?.layers?.length) {
+      // Pick the layer tree for the variant this instance is bound to. Falls
+      // back to the first variant when the requested variant no longer exists
+      // (silent fallback for deleted variants) or to the legacy `layers` field
+      // for components stored before the variants migration.
+      const variantLayers = component ? getComponentVariantLayers(component, layer.componentVariantId) : [];
+
+      if (component && variantLayers.length) {
         // Track this component in the resolution chain
         const innerVisited = new Set(visited);
         innerVisited.add(layer.componentId);
 
-        // The component's first layer is the actual content (Section, etc.)
-        const componentContent = component.layers[0];
+        // The variant's first layer is the actual content (Section, etc.)
+        const componentContent = variantLayers[0];
 
         // Recursively resolve nested components, passing current component's
         // variables and this instance's overrides so nested variableLinks resolve correctly
@@ -613,12 +670,16 @@ export function resolveComponents(
 
         // Merge component content with instance layer, keeping instance ID
         // IMPORTANT: Keep componentId so LayerRenderer knows this is a component instance
+        // _originalLayerId is the component's root template ID — translations on the
+        // component's root wrapper (text/media) are stored under this ID, while the
+        // runtime ID becomes the page-instance ID.
         return {
           ...layer,
           ...overriddenRoot,
           id: layer.id,
           componentId: layer.componentId, // Keep the original componentId
           _masterComponentId: component.id,
+          _originalLayerId: componentContent.id,
           children: resolvedChildren,
           interactions: resolvedInteractions,
         };

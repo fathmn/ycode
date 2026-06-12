@@ -82,12 +82,14 @@ export default function FieldFormDialog({
   const [referenceCollectionId, setReferenceCollectionId] = useState<string | null>(null);
   const [fieldMultiple, setFieldMultiple] = useState(false);
   const [fieldOptions, setFieldOptions] = useState<{ id: string; name: string }[]>([]);
+  const [countCollectionId, setCountCollectionId] = useState<string | null>(null);
+  const [countFieldId, setCountFieldId] = useState<string | null>(null);
   const [hasChangedType, setHasChangedType] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Stores
-  const { collections } = useCollectionsStore();
-  const { openFileManager } = useEditorStore();
+  const { collections, fields: fieldsByCollectionId } = useCollectionsStore();
+  const openFileManager = useEditorStore((state) => state.openFileManager);
   const getAsset = useAssetsStore((state) => state.getAsset);
 
   // Filter out the current collection from reference options (can't reference self)
@@ -112,6 +114,7 @@ export default function FieldFormDialog({
   const isReferenceType = fieldType === 'reference' || fieldType === 'multi_reference';
   const isAssetType = ASSET_FIELD_TYPES.includes(fieldType);
   const isOptionType = fieldType === 'option';
+  const isCountType = fieldType === 'count';
   const hasDefault = supportsDefaultValue(fieldType);
 
   const hasInvalidOptions = isOptionType && (() => {
@@ -122,9 +125,36 @@ export default function FieldFormDialog({
     return new Set(lowered).size !== lowered.length;
   })();
 
+  // Collections that have at least one reference / multi_reference field
+  // pointing back at the current collection — only those make sense as a
+  // counting source.
+  const countableCollections = React.useMemo(() => {
+    if (!isCountType || !currentCollectionId) return [];
+    return collections.filter(c => {
+      if (c.id === currentCollectionId) return false;
+      const fields = fieldsByCollectionId[c.id] || [];
+      return fields.some(
+        f => (f.type === 'reference' || f.type === 'multi_reference')
+          && f.reference_collection_id === currentCollectionId,
+      );
+    });
+  }, [isCountType, currentCollectionId, collections, fieldsByCollectionId]);
+
+  // Reference fields on the picked count collection that point back at the
+  // current collection.
+  const countCandidateFields = React.useMemo(() => {
+    if (!isCountType || !countCollectionId || !currentCollectionId) return [];
+    const fields = fieldsByCollectionId[countCollectionId] || [];
+    return fields.filter(
+      f => (f.type === 'reference' || f.type === 'multi_reference')
+        && f.reference_collection_id === currentCollectionId,
+    );
+  }, [isCountType, countCollectionId, currentCollectionId, fieldsByCollectionId]);
+
   const isSubmitDisabled =
     !fieldName.trim() ||
     (isReferenceType && !referenceCollectionId) ||
+    (isCountType && (!countCollectionId || !countFieldId)) ||
     hasInvalidOptions;
 
   // Reset form when dialog opens
@@ -142,6 +172,8 @@ export default function FieldFormDialog({
           ? field.data.options.map(o => ({ id: o.id, name: o.name }))
           : []
       );
+      setCountCollectionId(field.data?.count?.collectionId ?? null);
+      setCountFieldId(field.data?.count?.fieldId ?? null);
     } else {
       setFieldName('');
       setFieldType('text');
@@ -149,6 +181,8 @@ export default function FieldFormDialog({
       setReferenceCollectionId(null);
       setFieldMultiple(false);
       setFieldOptions([]);
+      setCountCollectionId(null);
+      setCountFieldId(null);
     }
     setHasChangedType(false);
     setIsSubmitting(false);
@@ -175,6 +209,23 @@ export default function FieldFormDialog({
     }
   }, [isOptionType, hasChangedType]);
 
+  // Clear count config when switching away from count type
+  useEffect(() => {
+    if (hasChangedType && !isCountType) {
+      setCountCollectionId(null);
+      setCountFieldId(null);
+    }
+  }, [isCountType, hasChangedType]);
+
+  // When the picked count collection changes, drop a stale field selection
+  // that no longer belongs to that collection.
+  useEffect(() => {
+    if (!isCountType) return;
+    if (!countFieldId) return;
+    const stillValid = countCandidateFields.some(f => f.id === countFieldId);
+    if (!stillValid) setCountFieldId(null);
+  }, [isCountType, countFieldId, countCandidateFields]);
+
   // Clear/reset default value when switching types
   useEffect(() => {
     if (hasChangedType) {
@@ -191,6 +242,7 @@ export default function FieldFormDialog({
   const handleSubmit = async () => {
     if (!fieldName.trim()) return;
     if (isReferenceType && !referenceCollectionId) return;
+    if (isCountType && (!countCollectionId || !countFieldId)) return;
     if (hasInvalidOptions) return;
     if (isSubmitting) return;
 
@@ -201,6 +253,8 @@ export default function FieldFormDialog({
       data = {
         options: fieldOptions.map(o => ({ id: o.id, name: o.name.trim() })),
       };
+    } else if (isCountType && countCollectionId && countFieldId) {
+      data = { count: { collectionId: countCollectionId, fieldId: countFieldId } };
     }
 
     try {
@@ -340,6 +394,69 @@ export default function FieldFormDialog({
                 </Select>
               </div>
             </div>
+          )}
+
+          {/* Count configuration */}
+          {isCountType && (
+            <>
+              <div className="grid grid-cols-5 items-center gap-4">
+                <Label htmlFor="field-count-collection" className="text-right">
+                  Collection
+                </Label>
+                <div className="col-span-4">
+                  <Select
+                    value={countCollectionId || ''}
+                    onValueChange={(value) => setCountCollectionId(value || null)}
+                    disabled={mode === 'edit'}
+                  >
+                    <SelectTrigger id="field-count-collection" className="w-full">
+                      <SelectValue placeholder={countableCollections.length === 0 ? 'No collections reference this one' : 'Select collection...'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {countableCollections.length > 0 ? (
+                          countableCollections.map((collection) => (
+                            <SelectItem key={collection.id} value={collection.id}>
+                              {collection.name}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                            No collections reference this one
+                          </div>
+                        )}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-5 items-center gap-4">
+                <Label htmlFor="field-count-field" className="text-right">
+                  Field
+                </Label>
+                <div className="col-span-4">
+                  <Select
+                    value={countFieldId || ''}
+                    onValueChange={(value) => setCountFieldId(value || null)}
+                    disabled={mode === 'edit' || !countCollectionId || countCandidateFields.length === 0}
+                  >
+                    <SelectTrigger id="field-count-field" className="w-full">
+                      <SelectValue placeholder={!countCollectionId ? 'Pick a collection first' : countCandidateFields.length === 0 ? 'No reference fields' : 'Select field...'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {countCandidateFields.map((f) => (
+                          <SelectItem key={f.id} value={f.id}>
+                            {f.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </>
           )}
 
           {/* Multiple files toggle */}

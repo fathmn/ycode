@@ -18,7 +18,8 @@ import SettingsPanel from './SettingsPanel';
 import RichTextEditor from './RichTextEditor';
 import { filterFieldGroupsByType, flattenFieldGroups, LINK_FIELD_TYPES, buildReferenceItemOptions } from '@/lib/collection-field-utils';
 import { generateLinkHref } from '@/lib/link-utils';
-import LinkItemOptions from './LinkItemOptions';
+import { cn } from '@/lib/utils';
+import LinkCollectionItemPicker from './LinkCollectionItemPicker';
 import { FieldSelectDropdown, type FieldGroup, type FieldSourceType } from './CollectionFieldSelector';
 import ComponentVariableLabel, { VARIABLE_TYPE_ICONS } from './ComponentVariableLabel';
 import {
@@ -29,20 +30,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import type { Layer, CollectionField, Collection, Page, LinkSettings as LinkSettingsType, LinkType, CollectionItemWithValues, LinkSettingsValue } from '@/types';
+import type { Layer, CollectionField, Collection, Page, LinkSettings as LinkSettingsType, LinkType, LinkSettingsValue } from '@/types';
 import {
   createDynamicTextVariable,
   getDynamicTextContent,
 } from '@/lib/variable-utils';
 import { usePagesStore } from '@/stores/usePagesStore';
-import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useAssetsStore } from '@/stores/useAssetsStore';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
 import { ASSET_CATEGORIES, getAssetIcon } from '@/lib/asset-utils';
 import { toast } from 'sonner';
-import { collectionsApi, pagesApi } from '@/lib/api';
-import { getLayerIcon, getLayerName, canLayerHaveLink, getCollectionVariable } from '@/lib/layer-utils';
+import { pagesApi } from '@/lib/api';
+import { canLayerHaveLink, getCollectionVariable, findLayersWithAnchorId } from '@/lib/layer-utils';
+import { getLayerIcon, getLayerName } from '@/lib/layer-display-utils';
 import { Empty, EmptyDescription, EmptyTitle } from '@/components/ui/empty';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import PageSelector from './PageSelector';
@@ -62,8 +63,8 @@ interface LayerModeProps {
 // Standalone mode props - for component variables
 interface StandaloneModeProps {
   mode: 'standalone';
-  value: LinkSettingsValue | undefined;
-  onChange: (value: LinkSettingsValue) => void;
+  value: LinkSettingsValue | null | undefined;
+  onChange: (value: LinkSettingsValue | null) => void;
   layer?: never;
   onLayerUpdate?: never;
 }
@@ -116,9 +117,6 @@ export default function LinkSettings(props: LinkSettingsProps) {
   const standaloneOnChange = isStandaloneMode ? props.onChange : undefined;
 
   const [isOpen, setIsOpen] = useState(true);
-  const [collectionItems, setCollectionItems] = useState<CollectionItemWithValues[]>([]);
-  const [loadingItems, setLoadingItems] = useState(false);
-  const [collectionItemSearch, setCollectionItemSearch] = useState('');
 
   // Stores
   const pages = usePagesStore((state) => state.pages);
@@ -129,7 +127,6 @@ export default function LinkSettings(props: LinkSettingsProps) {
   const openFileManager = useEditorStore((state) => state.openFileManager);
   const editingComponentId = useEditorStore((state) => state.editingComponentId);
   const getAsset = useAssetsStore((state) => state.getAsset);
-  const collectionsStoreFields = useCollectionsStore((state) => state.fields);
   const getComponentById = useComponentsStore((state) => state.getComponentById);
   const addLinkVariable = useComponentsStore((state) => state.addLinkVariable);
   const updateTextVariable = useComponentsStore((state) => state.updateTextVariable);
@@ -197,50 +194,23 @@ export default function LinkSettings(props: LinkSettingsProps) {
     void Promise.all([loadPages(), loadFolders()]);
   }, [loadFolders, loadPages, pageId, pages.length, selectedPage]);
 
-  // Flatten layers and find all layers with a custom ID (settings.id takes priority over attributes.id)
-  const findLayersWithId = useCallback((layers: Layer[]): Array<{ layer: Layer; id: string }> => {
-    const result: Array<{ layer: Layer; id: string }> = [];
-    const stack: Layer[] = [...layers];
-
-    while (stack.length > 0) {
-      const layer = stack.pop()!;
-
-      const layerId = layer.settings?.id || layer.attributes?.id;
-      if (layerId) {
-        result.push({ layer, id: layerId });
-      }
-
-      if (layer.children) {
-        stack.push(...layer.children);
-      }
-    }
-
-    return result;
-  }, []);
-
   // Get layers for anchor selection based on link type
   const anchorLayers = useMemo(() => {
     let targetPageId: string | null = null;
 
     if (linkType === 'page' && pageId) {
-      // For page links, use the selected page
       targetPageId = pageId;
     } else if (linkType === 'url' && currentPageId) {
-      // For URL links, use the current page
       targetPageId = currentPageId;
     }
 
-    if (!targetPageId) {
-      return [];
-    }
+    if (!targetPageId) return [];
 
     const draft = draftsByPageId[targetPageId];
-    if (!draft || !draft.layers) {
-      return [];
-    }
+    if (!draft || !draft.layers) return [];
 
-    return findLayersWithId(draft.layers);
-  }, [linkType, pageId, currentPageId, draftsByPageId, findLayersWithId]);
+    return findLayersWithAnchorId(draft.layers);
+  }, [linkType, pageId, currentPageId, draftsByPageId]);
 
   // Check if selected page is dynamic
   const isDynamicPage = selectedPage?.is_dynamic || false;
@@ -291,29 +261,7 @@ export default function LinkSettings(props: LinkSettingsProps) {
   // Get collection ID from dynamic page settings
   const pageCollectionId = selectedPage?.settings?.cms?.collection_id || null;
 
-  // Load collection items when dynamic page is selected
-  useEffect(() => {
-    if (!pageCollectionId || !isDynamicPage) {
-      setCollectionItems([]);
-      return;
-    }
-
-    const loadItems = async () => {
-      setLoadingItems(true);
-      try {
-        const response = await collectionsApi.getItems(pageCollectionId);
-        if (response.data) {
-          setCollectionItems(response.data.items || []);
-        }
-      } catch (error) {
-        console.error('Failed to load collection items:', error);
-      } finally {
-        setLoadingItems(false);
-      }
-    };
-
-    loadItems();
-  }, [pageCollectionId, isDynamicPage]);
+  const collectionPickerId = isDynamicPage ? pageCollectionId : null;
 
   // Check if link settings should be disabled due to nesting restrictions
   const linkNestingIssue = useMemo(() => {
@@ -344,6 +292,8 @@ export default function LinkSettings(props: LinkSettingsProps) {
       | { value: LinkType | 'none'; label: string; icon: string; disabled?: boolean }
       | { type: 'separator' }
     > = [
+      { value: 'none', label: 'No link', icon: 'none' },
+      { type: 'separator' },
       { value: 'page', label: 'Page', icon: 'page' },
       { value: 'asset', label: 'Asset', icon: 'paperclip' },
       { value: 'field', label: 'CMS field', icon: 'database', disabled: linkFieldGroups.length === 0 },
@@ -377,8 +327,8 @@ export default function LinkSettings(props: LinkSettingsProps) {
   const updateLinkSettings = useCallback(
     (newSettings: Partial<LinkSettingsType> | null) => {
       if (isStandaloneMode) {
-        // In standalone mode, call onChange with the new settings
-        standaloneOnChange?.(newSettings as LinkSettingsType);
+        // In standalone mode, call onChange with the new settings (null = explicit "no link" override)
+        standaloneOnChange?.(newSettings as LinkSettingsType | null);
         return;
       }
 
@@ -667,12 +617,6 @@ export default function LinkSettings(props: LinkSettingsProps) {
   // Get asset info for display
   const selectedAsset = assetId ? getAsset(assetId) : null;
 
-  // Fields for the linked page's collection (for display names)
-  const linkedPageCollectionFields = useMemo(
-    () => pageCollectionId ? collectionsStoreFields[pageCollectionId] || [] : [],
-    [pageCollectionId, collectionsStoreFields]
-  );
-
   // Layer mode requires a layer
   if (!isStandaloneMode && !layer) return null;
 
@@ -727,7 +671,7 @@ export default function LinkSettings(props: LinkSettingsProps) {
       {isStandaloneMode && !useStackedLayout && typeLabel && (
         <Label variant="muted">{typeLabel}</Label>
       )}
-      <div className={useStackedLayout ? '' : 'col-span-2 *:w-full'}>
+      <div className={useStackedLayout ? '*:w-full' : 'col-span-2 *:w-full'}>
         {linkedLinkVariable ? (
           <Button
             asChild
@@ -753,7 +697,7 @@ export default function LinkSettings(props: LinkSettingsProps) {
           </Button>
         ) : (
           <Select
-            value={linkType === 'none' ? '' : linkType}
+            value={linkType}
             onValueChange={(value) => handleLinkTypeChange(value as LinkType | 'none')}
             disabled={isLockedByOther}
           >
@@ -762,7 +706,7 @@ export default function LinkSettings(props: LinkSettingsProps) {
                 ? () => handleLinkTypeChange('none')
                 : undefined}
             >
-              <SelectValue placeholder="Page or URL..." />
+              <SelectValue placeholder="No link" />
             </SelectTrigger>
             <SelectContent>
               {linkTypeOptions.map((option, index) => {
@@ -898,38 +842,16 @@ export default function LinkSettings(props: LinkSettingsProps) {
               {!useStackedLayout && <Label variant="muted">CMS item</Label>}
               {useStackedLayout && <Label variant="muted" className="mb-1.5">CMS item</Label>}
               <div className={useStackedLayout ? '' : 'col-span-2'}>
-                <Select
-                  value={collectionItemId || ''}
-                  onValueChange={(value) => {
-                    handleCollectionItemChange(value);
-                    setCollectionItemSearch('');
-                  }}
-                  onOpenChange={(open) => {
-                    if (!open) setCollectionItemSearch('');
-                  }}
-                  disabled={isLockedByOther || loadingItems}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder={loadingItems ? 'Loading...' : 'Select...'} />
-                  </SelectTrigger>
-                  <SelectContent
-                    searchable
-                    searchValue={collectionItemSearch}
-                    onSearchChange={setCollectionItemSearch}
-                    searchPlaceholder="Search items..."
-                    className="w-72"
-                  >
-                    <LinkItemOptions
-                      canUseCurrentPageItem={canUseCurrentPageItem}
-                      canUseCurrentCollectionItem={canUseCurrentCollectionItem}
-                      canUseNextPreviousItem={canUseNextPreviousItem}
-                      referenceItemOptions={referenceItemOptions}
-                      collectionItems={collectionItems}
-                      collectionFields={linkedPageCollectionFields}
-                      searchValue={collectionItemSearch}
-                    />
-                  </SelectContent>
-                </Select>
+                <LinkCollectionItemPicker
+                  collectionId={collectionPickerId}
+                  value={collectionItemId}
+                  onChange={handleCollectionItemChange}
+                  canUseCurrentPageItem={canUseCurrentPageItem}
+                  canUseCurrentCollectionItem={canUseCurrentCollectionItem}
+                  canUseNextPreviousItem={canUseNextPreviousItem}
+                  referenceItemOptions={referenceItemOptions}
+                  disabled={isLockedByOther}
+                />
               </div>
             </div>
           )}
@@ -967,7 +889,7 @@ export default function LinkSettings(props: LinkSettingsProps) {
       {isStandaloneMode && !useStackedLayout && <Label variant="muted">Anchor</Label>}
       {useStackedLayout && <Label variant="muted" className="mb-1.5">Anchor</Label>}
 
-      <div className={useStackedLayout ? '' : 'col-span-2 *:w-full'}>
+      <div className={useStackedLayout ? '*:w-full' : 'col-span-2 *:w-full'}>
         <Select
           value={anchorLayerId || ''}
           onValueChange={handleAnchorLayerIdChange}
@@ -1059,7 +981,7 @@ export default function LinkSettings(props: LinkSettingsProps) {
   // Standalone mode: render without SettingsPanel wrapper
   if (isStandaloneMode) {
     return (
-      <div className="flex flex-col">
+      <div className={cn('flex flex-col', !useStackedLayout && 'gap-2.5')}>
         {linkTypeContent}
         {typeSpecificContent}
         {anchorContent}

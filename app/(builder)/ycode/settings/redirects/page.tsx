@@ -3,7 +3,6 @@
 import { studioFetch } from '@/lib/api';
 
 import { useState, useEffect } from 'react';
-import { Label } from '@/components/ui/label';
 import {
   FieldDescription,
   FieldLabel,
@@ -27,6 +26,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+
+import { downloadCSV, rowsToCSV } from '@/lib/csv-utils';
 
 import type { Redirect } from '@/types';
 
@@ -162,6 +163,17 @@ export default function RedirectsSettingsPage() {
     setEditingRedirect(null);
   };
 
+  const handleExportCSV = () => {
+    const headers = ['Old URL', 'New URL'];
+    const rows = redirects.map((r) => ({
+      'Old URL': r.oldUrl,
+      'New URL': r.newUrl,
+    }));
+    const csv = rowsToCSV(headers, rows);
+    const timestamp = new Date().toISOString().slice(0, 10);
+    downloadCSV(csv, `redirects-${timestamp}.csv`);
+  };
+
   return (
     <div className="p-8">
       <div className="max-w-3xl mx-auto">
@@ -178,7 +190,15 @@ export default function RedirectsSettingsPage() {
               </FieldDescription>
             </div>
 
-            <div>
+            <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleExportCSV}
+                disabled={isSaving || isLoading || redirects.length === 0}
+              >
+                Export as CSV
+              </Button>
               <Button
                 variant="secondary"
                 size="sm"
@@ -205,16 +225,16 @@ export default function RedirectsSettingsPage() {
               {redirects.map((redirect) => (
                 <div key={redirect.id} className="py-4 flex">
                   <div className="flex-1 flex items-center gap-4">
-                    <Label variant="muted" className="flex-1">
+                    <span className="flex-1 text-xs text-muted-foreground select-text break-all">
                       {redirect.oldUrl}
-                    </Label>
+                    </span>
                     <Icon
                       name="arrowLeft"
-                      className="size-2.5 rotate-180 opacity-50"
+                      className="size-2.5 rotate-180 opacity-50 shrink-0"
                     />
-                    <Label variant="muted" className="flex-1">
+                    <span className="flex-1 text-xs text-muted-foreground select-text break-all">
                       {redirect.newUrl}
-                    </Label>
+                    </span>
                   </div>
 
                   <DropdownMenu>
@@ -259,7 +279,7 @@ export default function RedirectsSettingsPage() {
           if (!open) resetForm();
         }}
       >
-        <DialogContent>
+        <DialogContent aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>Weiterleitung hinzufügen</DialogTitle>
           </DialogHeader>
@@ -322,7 +342,7 @@ export default function RedirectsSettingsPage() {
           if (!open) resetForm();
         }}
       >
-        <DialogContent>
+        <DialogContent aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle>Weiterleitung bearbeiten</DialogTitle>
           </DialogHeader>

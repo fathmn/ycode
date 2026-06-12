@@ -23,11 +23,16 @@ import { CanvasPortalProvider } from '@/lib/canvas-portal-context';
 import { cn } from '@/lib/utils';
 import { loadSwiperCss } from '@/lib/slider-utils';
 import { resolveReferenceFieldsSync } from '@/lib/collection-utils';
+import { extractStyleBlockContents } from '@/lib/parse-head-html';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { useFontsStore } from '@/stores/useFontsStore';
 import { useColorVariablesStore } from '@/stores/useColorVariablesStore';
+import { usePagesStore } from '@/stores/usePagesStore';
+import { useSettingsStore } from '@/stores/useSettingsStore';
 
-import type { Layer, Component, CollectionItemWithValues, CollectionField, Breakpoint, Asset, ComponentVariable } from '@/types';
+import { applyCmsTranslations, injectTranslatedText, translateComponentOverrides } from '@/lib/localisation-utils';
+
+import type { Layer, Component, CollectionItemWithValues, CollectionField, Breakpoint, Asset, ComponentVariable, Locale, Translation } from '@/types';
 import type { UseLiveLayerUpdatesReturn } from '@/hooks/use-live-layer-updates';
 import type { UseLiveComponentUpdatesReturn } from '@/hooks/use-live-component-updates';
 
@@ -56,8 +61,6 @@ interface CanvasProps {
   pageCollectionFields?: CollectionField[];
   /** Assets map */
   assets: Record<string, Asset>;
-  /** Collection layer data by layer ID */
-  collectionLayerData: Record<string, CollectionItemWithValues[]>;
   /** Page ID */
   pageId: string;
   /** Callback when a layer is clicked */
@@ -98,14 +101,22 @@ interface CanvasProps {
   onLayerHover?: (layerId: string | null) => void;
   /** Callback when any click occurs inside the canvas (for closing panels) */
   onCanvasClick?: () => void;
+  /** Callback when a component instance is double-clicked on the canvas */
+  onComponentEdit?: (componentId: string, instanceLayerId: string) => void;
   /** Component variables when editing a component (for default value display) */
   editingComponentVariables?: ComponentVariable[];
-  /** Disable editor hidden layers (e.g., when Interactions panel is active) */
-  disableEditorHiddenLayers?: boolean;
+  /** Layer IDs to force-show even if they have display:hidden apply_styles */
+  forceVisibleLayerIds?: string[];
   /** Current canvas zoom percentage (100 = 100%) */
   zoom?: number;
   /** Fixed viewport height for stable measurement of content using vh/svh/dvh units */
   referenceViewportHeight?: number;
+  /** Currently selected locale (controls translation injection on the canvas) */
+  currentLocale?: Locale | null;
+  /** All available locales (forwarded to LocaleSelector layers) */
+  availableLocales?: Locale[];
+  /** Translation map for the current locale (keyed by translatable key) */
+  translations?: Record<string, Translation> | null;
 }
 
 /**
@@ -128,6 +139,10 @@ interface CanvasContentProps {
   editorHiddenLayerIds?: Map<string, Breakpoint[]>;
   editorBreakpoint?: Breakpoint;
   zoom?: number;
+  onComponentEdit?: (componentId: string, instanceLayerId: string) => void;
+  currentLocale?: Locale | null;
+  availableLocales?: Locale[];
+  translations?: Record<string, Translation> | null;
 }
 
 function CanvasContent({
@@ -147,6 +162,10 @@ function CanvasContent({
   editorHiddenLayerIds,
   editorBreakpoint,
   zoom = 100,
+  onComponentEdit,
+  currentLocale,
+  availableLocales,
+  translations,
 }: CanvasContentProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [portalContainer, setPortalContainer] = useState<HTMLElement | null>(null);
@@ -429,6 +448,10 @@ function CanvasContent({
           editorHiddenLayerIds={editorHiddenLayerIds}
           editorBreakpoint={editorBreakpoint}
           ancestorComponentIds={initialAncestorIds}
+          onComponentEdit={onComponentEdit}
+          currentLocale={currentLocale}
+          availableLocales={availableLocales}
+          translations={translations}
         />
       </div>
     </CanvasPortalProvider>
@@ -439,7 +462,7 @@ function CanvasContent({
  * Canvas Component
  * Uses an embedded iframe with Tailwind Browser CDN for style generation
  */
-export default function Canvas({
+const Canvas = React.memo(function Canvas({
   layers,
   components,
   selectedLayerId,
@@ -452,7 +475,6 @@ export default function Canvas({
   pageCollectionItem,
   pageCollectionFields,
   assets,
-  collectionLayerData,
   pageId,
   onLayerClick,
   onLayerUpdate,
@@ -473,10 +495,14 @@ export default function Canvas({
   onIframeReady,
   onLayerHover,
   onCanvasClick,
+  onComponentEdit,
   editingComponentVariables,
-  disableEditorHiddenLayers = false,
+  forceVisibleLayerIds,
   zoom = 100,
   referenceViewportHeight,
+  currentLocale,
+  availableLocales,
+  translations,
 }: CanvasProps) {
   // Refs
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -485,32 +511,95 @@ export default function Canvas({
 
   // State
   const [iframeReady, setIframeReady] = useState(false);
-  const [internalHoveredLayerId, setInternalHoveredLayerId] = useState<string | null>(null);
-  const effectiveHoveredLayerId = hoveredLayerId ?? internalHoveredLayerId;
+
+  // Translate component-instance override values before serialization so that
+  // `resolveComponents` (inside serializeLayers) propagates per-instance
+  // translations through the override pipeline. Runs only when a non-default
+  // locale is active.
+  const layersForSerialization = useMemo(() => {
+    if (!currentLocale || currentLocale.is_default || !translations) return layers;
+    const lookupPageId = pageId || (editingComponentId ?? '');
+    if (!lookupPageId) return layers;
+    return translateComponentOverrides(layers, lookupPageId, translations, { includeIncomplete: true });
+  }, [layers, currentLocale, translations, pageId, editingComponentId]);
 
   // Resolve component instances in layers
   const { layers: resolvedLayers, componentMap } = useMemo(() => {
-    return serializeLayers(layers, components, editingComponentVariables);
-  }, [layers, components, editingComponentVariables]);
+    return serializeLayers(layersForSerialization, components, editingComponentVariables);
+  }, [layersForSerialization, components, editingComponentVariables]);
+
+  // When a non-default locale is active, swap layer text and translatable
+  // asset references with their translations so the canvas mirrors what the
+  // server-rendered preview / published page would output. The injection runs
+  // AFTER serializeLayers so component instance child IDs are already resolved
+  // (injectTranslatedText reads _originalLayerId / _masterComponentId to look
+  // up component-scoped translations).
+  //
+  // When the user is editing a component definition (editingComponentId set),
+  // the rendered layers are the component's raw layers (not a resolved
+  // instance), so they carry no _masterComponentId. Pass editingComponentId
+  // as the default so translations stored under `component:{id}:...` apply.
+  const localizedLayers = useMemo(() => {
+    if (!currentLocale || currentLocale.is_default || !translations) {
+      return resolvedLayers;
+    }
+    // pageId may be empty when editing a component without a page selected.
+    // injectTranslatedText still needs a non-empty value to perform lookups.
+    const lookupPageId = pageId || (editingComponentId ?? '');
+    if (!lookupPageId) return resolvedLayers;
+    // Builder canvas mirrors what the editor has saved, including in-progress
+    // translations that are not yet marked complete. Production rendering
+    // (page-fetcher) keeps the default behaviour and only ships completed ones.
+    return injectTranslatedText(resolvedLayers, lookupPageId, translations, {
+      includeIncomplete: true,
+      defaultMasterComponentId: editingComponentId ?? undefined,
+    });
+  }, [resolvedLayers, currentLocale, translations, pageId, editingComponentId]);
 
   // Enrich page collection item data with reference field dotted keys
-  // so variables like "refFieldId.targetFieldId" resolve on canvas
-  const enrichedPageCollectionItemData = useMemo(() => {
+  // so variables like "refFieldId.targetFieldId" resolve on canvas.
+  // Stabilize the reference: collectionItems gets a new ref whenever ANY collection changes,
+  // but this output only depends on the page's specific collection — prevent unnecessary
+  // root.render() calls in the iframe which are very expensive (~2-3s per full re-render).
+  const enrichedPageCollectionItemDataRaw = useMemo(() => {
     const values = pageCollectionItem?.values;
     if (!values || !pageCollectionFields?.length) return values || null;
+    // Translate referenced item values so relationship paths render in the
+    // active locale on canvas (matches server-side page fetcher).
+    const translateRefValues = (currentLocale && !currentLocale.is_default && translations)
+      ? (refItemId: string, refValues: Record<string, string>, refFields: CollectionField[]) =>
+        applyCmsTranslations(refItemId, refValues, refFields, translations, { includeIncomplete: true })
+      : undefined;
     return resolveReferenceFieldsSync(
       values,
       pageCollectionFields,
       collectionItems,
-      collectionFields
+      collectionFields,
+      new Set(),
+      translateRefValues
     );
-  }, [pageCollectionItem?.values, pageCollectionFields, collectionItems, collectionFields]);
+  }, [pageCollectionItem?.values, pageCollectionFields, collectionItems, collectionFields, currentLocale, translations]);
+
+  const enrichedPageCollectionItemDataRef = useRef(enrichedPageCollectionItemDataRaw);
+  const enrichedPageCollectionItemDataKeyRef = useRef('');
+  const enrichedPageCollectionItemData = useMemo(() => {
+    const key = JSON.stringify(enrichedPageCollectionItemDataRaw);
+    if (key !== enrichedPageCollectionItemDataKeyRef.current) {
+      enrichedPageCollectionItemDataKeyRef.current = key;
+      enrichedPageCollectionItemDataRef.current = enrichedPageCollectionItemDataRaw;
+    }
+    return enrichedPageCollectionItemDataRef.current;
+  }, [enrichedPageCollectionItemDataRaw]);
 
   // Collect layer IDs that should be hidden on canvas (display: hidden with on-load)
+  // Exclude layers that are force-visible (targets of the active interaction)
   const editorHiddenLayerIds = useMemo(() => {
-    if (disableEditorHiddenLayers) return undefined;
-    return collectEditorHiddenLayerIds(resolvedLayers);
-  }, [resolvedLayers, disableEditorHiddenLayers]);
+    const hiddenMap = collectEditorHiddenLayerIds(resolvedLayers);
+    if (forceVisibleLayerIds && forceVisibleLayerIds.length > 0) {
+      forceVisibleLayerIds.forEach(id => hiddenMap.delete(id));
+    }
+    return hiddenMap;
+  }, [resolvedLayers, forceVisibleLayerIds]);
 
   // Handle layer click with component resolution
   const handleLayerClick = useCallback((layerId: string, event?: React.MouseEvent) => {
@@ -532,7 +621,10 @@ export default function Canvas({
     onLayerClick?.(targetLayerId, event);
   }, [componentMap, editingComponentId, onLayerClick]);
 
-  // Handle hover
+  // Handle hover. We only forward the resolved id to the parent, which writes
+  // it into the editor store. `SelectionOverlay` reads the store directly to
+  // paint the outline, so we don't need any React state here — avoiding a
+  // Canvas re-render on every hover.
   const handleLayerHover = useCallback((layerId: string | null) => {
     // Resolve component root for hover (same logic as click)
     let resolvedLayerId = layerId;
@@ -546,7 +638,6 @@ export default function Canvas({
       }
     }
 
-    setInternalHoveredLayerId(resolvedLayerId);
     onLayerHover?.(resolvedLayerId);
   }, [componentMap, editingComponentId, onLayerHover]);
 
@@ -684,15 +775,56 @@ export default function Canvas({
     styleEl.textContent = colorVarCss;
   }, [iframeReady, colorVarCss]);
 
+  // Inject user-defined custom CSS from `<style>` blocks in head custom code
+  // so `:root { --x: ... }` variables (and any other CSS) live-preview in the
+  // canvas — matching the legacy `#custom-css-style` injection in IFrame.vue.
+  // Page-editing context: global head + current page head custom code.
+  // Component-editing context: global head only (no page bound to the canvas).
+  // Scripts and other head HTML are intentionally ignored to keep the canvas
+  // sandbox safe; full execution still happens on the published/preview site
+  // via PageRenderer + CustomCodeInjector.
+  const globalCustomCodeHead = useSettingsStore(
+    (state) => state.settingsByKey['custom_code_head'] as string | null
+  );
+  const pageCustomCodeHead = usePagesStore((state) => {
+    if (!pageId || editingComponentId) return null;
+    const page = state.pages.find((p) => p.id === pageId);
+    return page?.settings?.custom_code?.head || null;
+  });
+
+  const customHeadCss = useMemo(() => {
+    const segments: string[] = [];
+    const globalCss = extractStyleBlockContents(globalCustomCodeHead);
+    if (globalCss) segments.push(globalCss);
+    const pageCss = extractStyleBlockContents(pageCustomCodeHead);
+    if (pageCss) segments.push(pageCss);
+    return segments.join('\n');
+  }, [globalCustomCodeHead, pageCustomCodeHead]);
+
+  useEffect(() => {
+    if (!iframeReady || !iframeRef.current) return;
+    const iframeDoc = iframeRef.current.contentDocument;
+    if (!iframeDoc) return;
+
+    const STYLE_ID = 'ycode-custom-head-css';
+    let styleEl = iframeDoc.getElementById(STYLE_ID) as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = iframeDoc.createElement('style');
+      styleEl.id = STYLE_ID;
+      iframeDoc.head.appendChild(styleEl);
+    }
+    styleEl.textContent = customHeadCss;
+  }, [iframeReady, customHeadCss]);
+
   // Render content into iframe
   useEffect(() => {
     if (!iframeReady || !rootRef.current) return;
 
     rootRef.current.render(
       <CanvasContent
-        layers={resolvedLayers}
+        layers={localizedLayers}
         selectedLayerId={selectedLayerId}
-        hoveredLayerId={effectiveHoveredLayerId}
+        hoveredLayerId={hoveredLayerId}
         pageId={pageId}
         pageCollectionItemId={pageCollectionItem?.id}
         pageCollectionItemData={enrichedPageCollectionItemData}
@@ -706,6 +838,10 @@ export default function Canvas({
         editorHiddenLayerIds={editorHiddenLayerIds}
         editorBreakpoint={breakpoint}
         zoom={zoom}
+        onComponentEdit={onComponentEdit}
+        currentLocale={currentLocale}
+        availableLocales={availableLocales}
+        translations={translations}
       />
     );
   // selectedLayerId and hoveredLayerId are intentionally excluded from deps:
@@ -714,7 +850,7 @@ export default function Canvas({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     iframeReady,
-    resolvedLayers,
+    localizedLayers,
     editingComponentId,
     editingComponentVariables,
     pageId,
@@ -728,6 +864,10 @@ export default function Canvas({
     editorHiddenLayerIds,
     breakpoint,
     zoom,
+    onComponentEdit,
+    currentLocale,
+    availableLocales,
+    translations,
   ]);
 
   // Handle keyboard events from iframe
@@ -743,8 +883,7 @@ export default function Canvas({
                              target.tagName === 'TEXTAREA' ||
                              target.isContentEditable;
 
-      // Delete/Backspace for layer deletion
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedLayerId && !isInputFocused) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && useEditorStore.getState().selectedLayerId && !isInputFocused) {
         e.preventDefault();
         onDeleteLayer?.();
         return;
@@ -829,7 +968,7 @@ export default function Canvas({
 
     doc.addEventListener('keydown', handleKeyDown);
     return () => doc.removeEventListener('keydown', handleKeyDown);
-  }, [iframeReady, selectedLayerId, onDeleteLayer, onResetZoom, onZoomIn, onZoomOut, onZoomToFit, onAutofit, onUndo, onRedo]);
+  }, [iframeReady, onDeleteLayer, onResetZoom, onZoomIn, onZoomOut, onZoomToFit, onAutofit, onUndo, onRedo]);
 
   // Handle any click inside the iframe (capture phase to run before stopPropagation)
   useEffect(() => {
@@ -971,7 +1110,7 @@ export default function Canvas({
       clearTimeout(observerTimer);
       observer.disconnect();
     };
-  }, [iframeReady, onContentHeightChange, onContentWidthChange, resolvedLayers, referenceViewportHeight, breakpoint]);
+  }, [iframeReady, onContentHeightChange, onContentWidthChange, localizedLayers, referenceViewportHeight, breakpoint]);
 
   // Handle zoom gestures from iframe (Ctrl+wheel, trackpad pinch)
   useEffect(() => {
@@ -996,7 +1135,7 @@ export default function Canvas({
     doc.addEventListener('wheel', handleWheel, { passive: false, capture: true });
 
     return () => {
-      doc.removeEventListener('wheel', handleWheel);
+      doc.removeEventListener('wheel', handleWheel, { capture: true });
     };
   }, [iframeReady, onZoomGesture]);
 
@@ -1011,4 +1150,13 @@ export default function Canvas({
       tabIndex={-1}
     />
   );
-}
+}, (prev, next) => {
+  const keys = Object.keys(next) as Array<keyof CanvasProps>;
+  for (const key of keys) {
+    if (key === 'selectedLayerId' || key === 'hoveredLayerId') continue;
+    if (prev[key] !== next[key]) return false;
+  }
+  return true;
+});
+
+export default Canvas;

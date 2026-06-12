@@ -11,7 +11,6 @@ import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react'
 
 // 2. External libraries
 import debounce from 'lodash.debounce';
-
 // 3. ShadCN UI
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -81,24 +80,28 @@ import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useLayerStylesStore } from '@/stores/useLayerStylesStore';
 import { useCanvasTextEditorStore } from '@/stores/useCanvasTextEditorStore';
 import { useEditorActions, useEditorUrl } from '@/hooks/use-editor-url';
+import { useLocalizationMode } from '@/hooks/use-localization-mode';
+import SidebarTranslationRow from './SidebarTranslationRow';
+import { extractLayerTranslatableItemsShallow } from '@/lib/localisation-utils';
+import { useLocalisationStore } from '@/stores/useLocalisationStore';
 
 // 5.5 Hooks
 import { useLayerLocks } from '@/hooks/use-layer-locks';
 
 // 6. Utils, APIs, lib
-import { classesToDesign, mergeDesign, removeConflictsForClass, getRemovedPropertyClasses } from '@/lib/tailwind-class-mapper';
-import { resetLayerToStyle, hasStyleOverrides } from '@/lib/layer-style-utils';
-import { updateStyleAcrossStores } from '@/lib/layer-style-store-utils';
-import { useLiveLayerStyleUpdates } from '@/hooks/use-live-layer-style-updates';
+import { classesToDesign, mergeDesign, removeConflictsForClass } from '@/lib/tailwind-class-mapper';
+import { getStyleIds } from '@/lib/layer-style-utils';
+import { resolveLayerClasses, chipClasses } from '@/lib/layer-style-resolve';
+import { buildDesign } from '@/lib/import/design';
 import { cn } from '@/lib/utils';
 import { sanitizeHtmlId } from '@/lib/html-utils';
 import { isFieldVariable, getCollectionVariable, findParentCollectionLayer, findAllParentCollectionLayers, isTextEditable, isTextContentLayer, isRichTextLayer, isHeadingLayer, findLayerWithParent, resetBindingsOnCollectionSourceChange, isInputInsideFilter, resolveFilterInputId, getLayerIndexes, indexedFindLayerById, indexedFindLayerWithParent, indexedFindParentCollectionLayer } from '@/lib/layer-utils';
 import { detachSpecificLayerFromComponent } from '@/lib/component-utils';
 import { convertContentToValue, parseValueToContent } from '@/lib/cms-variables-utils';
 import { createTextComponentVariableValue } from '@/lib/variable-utils';
-import { getRichTextValue, extractPlainTextFromTiptap } from '@/lib/tiptap-utils';
+import { getRichTextValue, extractPlainTextFromTiptap, getSoleCmsFieldBinding } from '@/lib/tiptap-utils';
 import { DEFAULT_TEXT_STYLES, getTextStyle, getTiptapTextContent } from '@/lib/text-format-utils';
-import { buildFieldGroupsForLayer, getFieldIcon, isMultipleAssetField, MULTI_ASSET_COLLECTION_ID, SIMPLE_TEXT_FIELD_TYPES } from '@/lib/collection-field-utils';
+import { buildFieldGroupsForLayer, getFieldIcon, hasBoundCollectionSource, isMultipleAssetField, MULTI_ASSET_COLLECTION_ID, SIMPLE_TEXT_FIELD_TYPES } from '@/lib/collection-field-utils';
 import { getInverseReferenceFields } from '@/lib/collection-utils';
 
 // 7. Types
@@ -114,7 +117,6 @@ import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface RightSidebarProps {
-  selectedLayerId: string | null;
   onLayerUpdate: (layerId: string, updates: Partial<Layer>) => void;
 }
 
@@ -131,11 +133,31 @@ function pruneTextDescendants(children: Layer[] | undefined): Layer[] {
 }
 
 const RightSidebar = React.memo(function RightSidebar({
-  selectedLayerId,
   onLayerUpdate,
 }: RightSidebarProps) {
+  const selectedLayerId = useEditorStore((state) => state.selectedLayerId);
+
   const { openComponent, urlState, updateQueryParams } = useEditorActions();
   const { routeType } = useEditorUrl();
+  const { isLocalizing, currentLocale, defaultLocale } = useLocalizationMode();
+
+  // Translation editor state + store actions used by the per-layer Translate
+  // panel rendered inside the Settings tab when a non-default locale is active.
+  const selectedLocaleId = useLocalisationStore((state) => state.selectedLocaleId);
+  const getTranslationByKey = useLocalisationStore((state) => state.getTranslationByKey);
+  const createTranslation = useLocalisationStore((state) => state.createTranslation);
+  const updateTranslation = useLocalisationStore((state) => state.updateTranslation);
+  const [translationLocalInputValues, setTranslationLocalInputValues] = useState<Record<string, string>>({});
+  const handleTranslationLocalValueChange = useCallback((key: string, value: string) => {
+    setTranslationLocalInputValues((prev) => ({ ...prev, [key]: value }));
+  }, []);
+  const handleTranslationLocalValueClear = useCallback((key: string) => {
+    setTranslationLocalInputValues((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
 
   // Local state for immediate UI feedback
   const [activeTab, setActiveTab] = useState<'design' | 'settings' | 'interactions' | undefined>(
@@ -201,6 +223,7 @@ const RightSidebar = React.memo(function RightSidebar({
   const currentPageId = useEditorStore((state) => state.currentPageId);
   const activeBreakpoint = useEditorStore((state) => state.activeBreakpoint);
   const editingComponentId = useEditorStore((state) => state.editingComponentId);
+  const editingComponentVariantId = useEditorStore((state) => state.editingComponentVariantId);
   const setSelectedLayerId = useEditorStore((state) => state.setSelectedLayerId);
   const setInteractionHighlights = useEditorStore((state) => state.setInteractionHighlights);
   const setActiveInteraction = useEditorStore((state) => state.setActiveInteraction);
@@ -210,6 +233,7 @@ const RightSidebar = React.memo(function RightSidebar({
   const startElementPicker = useEditorStore((state) => state.startElementPicker);
   const stopElementPicker = useEditorStore((state) => state.stopElementPicker);
   const isElementPickerActive = useEditorStore((state) => !!state.elementPicker?.active);
+  const openRichTextSheet = useEditorStore((state) => state.openRichTextSheet);
 
   // Check if text is being edited on canvas
   const isTextEditingOnCanvas = useCanvasTextEditorStore((state) => state.isEditing);
@@ -235,18 +259,29 @@ const RightSidebar = React.memo(function RightSidebar({
   const fields = useCollectionsStore((state) => state.fields);
   const loadFields = useCollectionsStore((state) => state.loadFields);
 
+  // Resolve the active variant id while editing a component, falling back to
+  // the first variant if state references a stale id.
+  const activeComponentVariantId = useMemo(() => {
+    if (!editingComponentId) return null;
+    const drafts = componentDrafts[editingComponentId];
+    if (!drafts) return editingComponentVariantId || null;
+    if (editingComponentVariantId && drafts[editingComponentVariantId]) return editingComponentVariantId;
+    return Object.keys(drafts)[0] || null;
+  }, [editingComponentId, editingComponentVariantId, componentDrafts]);
+
   // Get all layers (for interactions target selection)
   const allLayers: Layer[] = useMemo(() => {
-    if (editingComponentId) {
-      return componentDrafts[editingComponentId] || [];
+    if (editingComponentId && activeComponentVariantId) {
+      return componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
     } else if (currentPageId) {
       return currentDraft ? currentDraft.layers : [];
     }
     return [];
-  }, [editingComponentId, componentDrafts, currentPageId, currentDraft]);
+  }, [editingComponentId, activeComponentVariantId, componentDrafts, currentPageId, currentDraft]);
 
-  // Cached layer index for O(1) lookups
-  const layerIndexes = useMemo(() => getLayerIndexes(allLayers), [allLayers]);
+  const layerIndexes = useMemo(() => {
+    return getLayerIndexes(allLayers);
+  }, [allLayers]);
 
   const selectedLayer: Layer | null = useMemo(() => {
     if (!selectedLayerId) return null;
@@ -255,6 +290,49 @@ const RightSidebar = React.memo(function RightSidebar({
 
   const selectedLayerRef = useRef(selectedLayer);
   selectedLayerRef.current = selectedLayer;
+
+  // Translatable items for the selected layer, computed only when actually
+  // localizing. The source resolution mirrors the server: layers inside a
+  // component are scoped to that component (via _masterComponentId on the
+  // server / editingComponentId here) so a single translation propagates to
+  // all instances of the component on the site.
+  const translationSource = useMemo(() => {
+    if (!selectedLayer || !isLocalizing) return null;
+    if (editingComponentId) {
+      return { sourceType: 'component' as const, sourceId: editingComponentId };
+    }
+    if (currentPageId) {
+      return { sourceType: 'page' as const, sourceId: currentPageId };
+    }
+    return null;
+  }, [selectedLayer, isLocalizing, editingComponentId, currentPageId]);
+
+  const translatableItemsForSelectedLayer = useMemo(() => {
+    if (!selectedLayer || !translationSource) return [];
+    return extractLayerTranslatableItemsShallow(
+      selectedLayer,
+      translationSource.sourceType,
+      translationSource.sourceId,
+    );
+  }, [selectedLayer, translationSource]);
+
+  // When the selected layer's text is a single CMS-bound variable (e.g. a
+  // heading whose only content is a `[Content]` field reference), the textarea
+  // editor in the sidebar would just show "[Content]" — the actual translation
+  // happens against the bound CMS item, not against the layer. Detect this so
+  // the panel can render a read-only "Content → variable" row instead, and
+  // hide the unhelpful textarea pair.
+  const layerCmsTextBinding = useMemo(() => {
+    if (!selectedLayer || !isLocalizing) return null;
+    if (selectedLayer.variables?.text?.type !== 'dynamic_rich_text') return null;
+    const richValue = getRichTextValue(selectedLayer.variables);
+    return getSoleCmsFieldBinding(richValue);
+  }, [selectedLayer, isLocalizing]);
+
+  const translatableItemsExcludingCmsText = useMemo(() => {
+    if (!layerCmsTextBinding) return translatableItemsForSelectedLayer;
+    return translatableItemsForSelectedLayer.filter((item) => !item.content_key.endsWith(':text'));
+  }, [translatableItemsForSelectedLayer, layerCmsTextBinding]);
 
   const hasCustomAttributes = !!(selectedLayer?.settings?.customAttributes &&
     Object.keys(selectedLayer.settings.customAttributes).length > 0);
@@ -630,7 +708,11 @@ const RightSidebar = React.memo(function RightSidebar({
     }
   }, [selectedLayer, showTextStyleControls, activeTextStyleKey]);
 
-  // Lock-aware update function
+  // Tracks the active chip so design edits route to the right per-chip override.
+  // Set during render once `activeLayerStyleId` is computed below.
+  const activeStyleIdRef = useRef<string | null>(null);
+
+  // Lock-aware update function.
   const handleLayerUpdate = useCallback((layerId: string, updates: Partial<Layer>) => {
     if (isLockedByOther) {
       console.warn('Cannot update layer - locked by another user');
@@ -646,60 +728,112 @@ const RightSidebar = React.memo(function RightSidebar({
 
   // Get applied layer style and its classes
   const getStyleById = useLayerStylesStore((state) => state.getStyleById);
-  const updateStyle = useLayerStylesStore((state) => state.updateStyle);
-  const liveLayerStyleUpdates = useLiveLayerStyleUpdates();
-  const appliedStyle = selectedLayer?.styleId ? getStyleById(selectedLayer.styleId) : undefined;
-  const styleClassesArray = useMemo(() => {
-    if (!appliedStyle || !appliedStyle.classes) return [];
-    const styleClasses = Array.isArray(appliedStyle.classes)
-      ? appliedStyle.classes.join(' ')
-      : appliedStyle.classes;
-    return styleClasses.split(' ').filter(cls => cls.trim() !== '');
-  }, [appliedStyle]);
+  const allStyles = useLayerStylesStore((state) => state.styles);
+  const stylesById = useMemo(
+    () => new Map(allStyles.map((s) => [s.id, s])),
+    [allStyles]
+  );
+  // The layer's full applied style stack (combo classes), low -> high priority.
+  const appliedStyleIds = useMemo(
+    () => (selectedLayer ? getStyleIds(selectedLayer) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedLayer?.styleIds, selectedLayer?.styleId]
+  );
 
-  // Filter layer classes to only show those NOT in the style
-  const layerOnlyClasses = useMemo(() => {
-    if (styleClassesArray.length === 0) return classesArray;
-    return classesArray.filter(cls => !styleClassesArray.includes(cls));
-  }, [classesArray, styleClassesArray]);
+  // The "active" style chip — the one whose classes/properties the design panel
+  // shows and edits. Clicking a chip in LayerStylesPanel changes it; it defaults
+  // to the highest-priority (last) style. Editing a property while a chip is
+  // active writes a per-chip override (`styleOverridesByStyle`), so only the
+  // selected element changes and the customization is unique to that chip.
+  const [activeStyleId, setActiveStyleId] = useState<string | null>(null);
+  const activeLayerStyleId = appliedStyleIds.length > 0
+    ? (activeStyleId && appliedStyleIds.includes(activeStyleId)
+      ? activeStyleId
+      : appliedStyleIds[appliedStyleIds.length - 1])
+    : null;
+  activeStyleIdRef.current = activeLayerStyleId;
 
-  // Determine which style classes are overridden by layer's custom classes or explicitly removed
-  const overriddenStyleClasses = useMemo(() => {
-    if (styleClassesArray.length === 0) return new Set<string>();
-    const overridden = new Set<string>();
+  const activeChipStyle = activeLayerStyleId ? getStyleById(activeLayerStyleId) : undefined;
 
-    // 1. Check for style classes explicitly removed (not present in layer classes at all)
-    for (const styleClass of styleClassesArray) {
-      if (!classesArray.includes(styleClass)) {
-        overridden.add(styleClass);
-      }
+  // The active chip's effective classes for THIS layer: its per-chip override if
+  // one exists, else the shared style's own classes.
+  const activeChipClassTokens = useMemo(() => {
+    if (!selectedLayer || !activeLayerStyleId) return [];
+    return chipClasses(selectedLayer, activeLayerStyleId, stylesById)
+      .split(' ')
+      .filter(cls => cls.trim() !== '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLayer?.id, activeLayerStyleId, selectedLayer?.styleOverridesByStyle, stylesById]);
+
+  // A proxy layer the design controls bind to when a chip is active: it carries
+  // the active chip's classes/design (no style links) so the panel reflects that
+  // chip. Edits are intercepted by `handleDesignUpdate` and stored as a per-chip
+  // override on the real layer.
+  const designLayer = useMemo<Layer | null>(() => {
+    if (!selectedLayer) return null;
+    if (!activeLayerStyleId) return selectedLayer;
+    const cls = activeChipClassTokens.join(' ');
+    const { styleId: _s, styleIds: _ss, styleOverrides: _so, styleOverridesByStyle: _sm, ...rest } = selectedLayer;
+    return { ...rest, classes: cls, design: buildDesign(cls) };
+  }, [selectedLayer, activeLayerStyleId, activeChipClassTokens]);
+
+  // Store an edited class string as the active chip's override (or clear it when
+  // it matches the shared style again), then re-flatten the whole stack so the
+  // canvas renders the resolved cascade. Only THIS layer changes.
+  const applyChipClasses = useCallback((chipId: string, newClassesStr: string) => {
+    if (!selectedLayer) return;
+    const map: NonNullable<Layer['styleOverridesByStyle']> = { ...(selectedLayer.styleOverridesByStyle ?? {}) };
+    const styleTokens = (stylesById.get(chipId)?.classes ?? '').split(' ').filter(Boolean).sort().join(' ');
+    const nextTokens = newClassesStr.split(' ').filter(Boolean).sort().join(' ');
+    if (nextTokens === styleTokens) {
+      delete map[chipId];
+    } else {
+      map[chipId] = { classes: newClassesStr, design: buildDesign(newClassesStr) };
     }
+    const hasMap = Object.keys(map).length > 0;
+    // Per-chip overrides supersede the legacy single-blob override; drop it so a
+    // stale blob can't mask the edit at the top of the cascade.
+    const probe: Pick<Layer, 'styleIds' | 'styleOverridesByStyle' | 'styleOverrides'> = {
+      styleIds: appliedStyleIds,
+      styleOverridesByStyle: hasMap ? map : undefined,
+    };
+    const resolved = resolveLayerClasses(probe, stylesById);
+    handleLayerUpdate(selectedLayer.id, {
+      styleOverridesByStyle: hasMap ? map : undefined,
+      styleOverrides: undefined,
+      classes: resolved,
+      design: buildDesign(resolved),
+    });
+  }, [selectedLayer, appliedStyleIds, stylesById, handleLayerUpdate]);
 
-    // 2. Check for classes overridden by layer's custom classes (conflict detection)
-    if (layerOnlyClasses.length > 0) {
-      for (const layerClass of layerOnlyClasses) {
-        const classesWithoutConflicts = removeConflictsForClass(styleClassesArray, layerClass);
-
-        for (const styleClass of styleClassesArray) {
-          if (!classesWithoutConflicts.includes(styleClass)) {
-            overridden.add(styleClass);
-          }
-        }
-      }
+  // Design-control edits while a chip is active are the chip's new classes — store
+  // them as that chip's override. Non-style fields (variables, etc.) and edits on
+  // style-less layers pass straight through to the layer.
+  const handleDesignUpdate = useCallback((layerId: string, updates: Partial<Layer>) => {
+    const chip = activeStyleIdRef.current;
+    if (!chip || updates.classes === undefined) {
+      handleLayerUpdate(layerId, updates);
+      return;
     }
+    const { classes, design: _design, styleOverrides: _so, ...rest } = updates;
+    if (Object.keys(rest).length > 0) handleLayerUpdate(layerId, rest);
+    const str = Array.isArray(classes) ? classes.join(' ') : classes;
+    applyChipClasses(chip, str);
+  }, [handleLayerUpdate, applyChipClasses]);
 
-    // 3. Check for classes from properties explicitly removed on the layer
-    if (appliedStyle?.design && selectedLayer) {
-      const removedClasses = getRemovedPropertyClasses(
-        selectedLayer.design,
-        appliedStyle.design,
-        styleClassesArray
-      );
-      removedClasses.forEach(cls => overridden.add(cls));
-    }
+  // Classes section sources. With a style stack, the panel is chip-scoped: it
+  // shows the active chip's effective classes. Style-less layers — and rich-text
+  // inline-style editing, which edits a text style rather than the layer stack —
+  // show their own classes (from `classesInput`) instead.
+  const styleClassesArray = showTextStyleControls ? [] : activeChipClassTokens;
+  const layerOnlyClasses =
+    showTextStyleControls || appliedStyleIds.length === 0 ? classesArray : [];
 
-    return overridden;
-  }, [classesArray, layerOnlyClasses, styleClassesArray, appliedStyle, selectedLayer]);
+  // Design controls bind to the active chip's proxy layer (and route edits to a
+  // per-chip override) unless we're editing a rich-text inline style, where the
+  // text-style path inside useDesignSync owns the update.
+  const controlLayer = showTextStyleControls ? selectedLayer : designLayer;
+  const controlUpdate = showTextStyleControls ? handleLayerUpdate : handleDesignUpdate;
 
   // Update local state when selected layer changes (for settings fields)
   const [prevSelectedLayerId, setPrevSelectedLayerId] = useState<string | null>(null);
@@ -731,17 +865,12 @@ const RightSidebar = React.memo(function RightSidebar({
   const addClass = useCallback((newClass: string) => {
     if (!newClass.trim() || !selectedLayer) return;
     const trimmedClass = newClass.trim();
-    if (classesArray.includes(trimmedClass)) return; // Don't add duplicates
 
-    // Remove any conflicting classes before adding the new one
-    const classesWithoutConflicts = removeConflictsForClass(classesArray, trimmedClass);
-
-    // Add the new class (after removing conflicts)
-    const newClasses = [...classesWithoutConflicts, trimmedClass].join(' ');
-
-    // In text edit mode with a text style selected, update the text style
-    // Initialize with DEFAULT_TEXT_STYLES if layer doesn't have textStyles yet
+    // Text edit mode with a text style selected: update the text style.
     if (showTextStyleControls && activeTextStyleKey) {
+      if (classesArray.includes(trimmedClass)) return;
+      const classesWithoutConflicts = removeConflictsForClass(classesArray, trimmedClass);
+      const newClasses = [...classesWithoutConflicts, trimmedClass].join(' ');
       const parsedDesign = classesToDesign([trimmedClass]);
       const currentTextStyles = selectedLayer.textStyles ?? { ...DEFAULT_TEXT_STYLES };
       const currentTextStyle = currentTextStyles[activeTextStyleKey] || { design: {}, classes: '' };
@@ -750,27 +879,34 @@ const RightSidebar = React.memo(function RightSidebar({
       handleLayerUpdate(selectedLayer.id, {
         textStyles: {
           ...currentTextStyles,
-          [activeTextStyleKey]: {
-            ...currentTextStyle,
-            classes: newClasses,
-            design: updatedDesign,
-          },
+          [activeTextStyleKey]: { ...currentTextStyle, classes: newClasses, design: updatedDesign },
         },
       });
-    } else {
-      // Otherwise, update the layer itself
-      const parsedDesign = classesToDesign([trimmedClass]);
-      const updatedDesign = mergeDesign(selectedLayer.design, parsedDesign);
-
-      handleLayerUpdate(selectedLayer.id, {
-        classes: newClasses,
-        design: updatedDesign
-      });
+      setClassesInput(newClasses);
+      setCurrentClassInput('');
+      return;
     }
 
+    // Style stack active: add the class to the active chip's override.
+    const chip = activeLayerStyleId;
+    if (chip) {
+      if (activeChipClassTokens.includes(trimmedClass)) return;
+      const withoutConflicts = removeConflictsForClass(activeChipClassTokens, trimmedClass);
+      applyChipClasses(chip, [...withoutConflicts, trimmedClass].join(' '));
+      setCurrentClassInput('');
+      return;
+    }
+
+    // Style-less layer: update the layer's own classes.
+    if (classesArray.includes(trimmedClass)) return;
+    const classesWithoutConflicts = removeConflictsForClass(classesArray, trimmedClass);
+    const newClasses = [...classesWithoutConflicts, trimmedClass].join(' ');
+    const parsedDesign = classesToDesign([trimmedClass]);
+    const updatedDesign = mergeDesign(selectedLayer.design, parsedDesign);
+    handleLayerUpdate(selectedLayer.id, { classes: newClasses, design: updatedDesign });
     setClassesInput(newClasses);
     setCurrentClassInput('');
-  }, [classesArray, handleLayerUpdate, selectedLayer, showTextStyleControls, activeTextStyleKey]);
+  }, [classesArray, activeChipClassTokens, activeLayerStyleId, applyChipClasses, handleLayerUpdate, selectedLayer, showTextStyleControls, activeTextStyleKey]);
 
   // Remove class function
   const removeClass = useCallback((classToRemove: string) => {
@@ -798,62 +934,12 @@ const RightSidebar = React.memo(function RightSidebar({
     }
   }, [classesArray, handleClassesChange, selectedLayer, showTextStyleControls, activeTextStyleKey, handleLayerUpdate]);
 
-  // Remove a class that belongs to the applied style — tracks as styleOverrides
+  // Remove a class from the active chip's override (style stack active).
   const removeStyleClass = useCallback((classToRemove: string) => {
-    if (!selectedLayer) return;
-    const newClasses = classesArray.filter(cls => cls !== classToRemove).join(' ');
-    setClassesInput(newClasses);
-    handleLayerUpdate(selectedLayer.id, {
-      classes: newClasses,
-      styleOverrides: {
-        classes: newClasses,
-        design: selectedLayer.styleOverrides?.design ?? selectedLayer.design,
-      },
-    });
-  }, [classesArray, handleLayerUpdate, selectedLayer]);
-
-  // Whether the style has any overrides (classes or design)
-  const styleHasOverrides = useMemo(() => {
-    if (!appliedStyle || !selectedLayer) return false;
-    return hasStyleOverrides(selectedLayer, appliedStyle);
-  }, [appliedStyle, selectedLayer]);
-
-  // Update the style definition with current layer values
-  const handleUpdateStyleFromClasses = useCallback(async () => {
-    if (!selectedLayer || !appliedStyle) return;
-    const currentClasses = classesInput;
-    const currentDesign = selectedLayer.design;
-
-    await updateStyle(appliedStyle.id, {
-      classes: currentClasses,
-      design: currentDesign,
-    });
-
-    updateStyleAcrossStores(appliedStyle.id, currentClasses, currentDesign);
-    handleLayerUpdate(selectedLayer.id, { styleOverrides: undefined });
-
-    if (liveLayerStyleUpdates) {
-      liveLayerStyleUpdates.broadcastStyleUpdate(appliedStyle.id, {
-        classes: currentClasses,
-        design: currentDesign,
-      });
-    }
-  }, [selectedLayer, appliedStyle, classesInput, updateStyle, handleLayerUpdate, liveLayerStyleUpdates]);
-
-  // Reset overrides back to the style's original classes/design
-  const handleResetStyleOverrides = useCallback(() => {
-    if (!selectedLayer || !appliedStyle) return;
-    const updatedLayer = resetLayerToStyle(selectedLayer, appliedStyle);
-    const resetClasses = Array.isArray(updatedLayer.classes)
-      ? updatedLayer.classes.join(' ')
-      : updatedLayer.classes || '';
-    setClassesInput(resetClasses);
-    handleLayerUpdate(selectedLayer.id, {
-      classes: updatedLayer.classes,
-      design: updatedLayer.design,
-      styleOverrides: undefined,
-    });
-  }, [selectedLayer, appliedStyle, handleLayerUpdate]);
+    const chip = activeStyleIdRef.current;
+    if (!selectedLayer || !chip) return;
+    applyChipClasses(chip, activeChipClassTokens.filter(cls => cls !== classToRemove).join(' '));
+  }, [selectedLayer, activeChipClassTokens, applyChipClasses]);
 
   // Handle key press for adding classes
   const handleKeyPress = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -933,8 +1019,8 @@ const RightSidebar = React.memo(function RightSidebar({
   /** Reset CMS bindings on child layers after the collection source changes */
   const resetChildBindings = useCallback((layerId: string) => {
     setTimeout(() => {
-      const currentLayers = editingComponentId
-        ? useComponentsStore.getState().componentDrafts[editingComponentId]
+      const currentLayers = editingComponentId && activeComponentVariantId
+        ? useComponentsStore.getState().componentDrafts[editingComponentId]?.[activeComponentVariantId]
         : currentPageId
           ? usePagesStore.getState().draftsByPageId[currentPageId]?.layers
           : null;
@@ -943,14 +1029,14 @@ const RightSidebar = React.memo(function RightSidebar({
 
       const cleanedLayers = resetBindingsOnCollectionSourceChange(currentLayers, layerId);
       if (cleanedLayers !== currentLayers) {
-        if (editingComponentId) {
-          useComponentsStore.getState().updateComponentDraft(editingComponentId, cleanedLayers);
+        if (editingComponentId && activeComponentVariantId) {
+          useComponentsStore.getState().updateComponentDraft(editingComponentId, activeComponentVariantId, cleanedLayers);
         } else if (currentPageId) {
           setDraftLayers(currentPageId, cleanedLayers);
         }
       }
     }, 0);
-  }, [editingComponentId, currentPageId, setDraftLayers]);
+  }, [editingComponentId, activeComponentVariantId, currentPageId, setDraftLayers]);
 
   // Handle collection binding change (also resets child bindings when source changes)
   const handleCollectionChange = (collectionId: string) => {
@@ -1152,7 +1238,9 @@ const RightSidebar = React.memo(function RightSidebar({
   const getDynamicPageSourceValue = useMemo(() => {
     if (!selectedLayer) return 'none';
     const collectionVariable = getCollectionVariable(selectedLayer);
-    if (!collectionVariable?.id) return 'none';
+    if (!collectionVariable) return 'none';
+    // Treat unbound bindings (e.g. multi-asset placeholder with no field chosen) as empty
+    if (!hasBoundCollectionSource(collectionVariable)) return 'none';
 
     // If source_field_id is set, check the type
     if (collectionVariable.source_field_id) {
@@ -1429,8 +1517,8 @@ const RightSidebar = React.memo(function RightSidebar({
 
   // Helper: Get current layers from the appropriate store
   const getCurrentLayersFromStore = (): Layer[] => {
-    if (editingComponentId) {
-      return useComponentsStore.getState().componentDrafts[editingComponentId] || [];
+    if (editingComponentId && activeComponentVariantId) {
+      return useComponentsStore.getState().componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
     } else if (currentPageId) {
       const draft = usePagesStore.getState().draftsByPageId[currentPageId];
       return draft ? draft.layers : [];
@@ -1781,17 +1869,21 @@ const RightSidebar = React.memo(function RightSidebar({
 
   return (
     <div className="w-64 shrink-0 bg-background border-l flex flex-col p-4 pb-0 h-full overflow-hidden">
-      {/* Tabs */}
+      {/* Tabs.
+          When the user is translating (non-default locale active) we keep the
+          tab list visible but disable Design + Interactions and force the
+          Settings tab, which is where the per-layer Translate panel renders.
+          Mirrors the disabled-tabs pattern used for component instances. */}
       <Tabs
-        value={activeTab}
-        onValueChange={handleTabChange}
+        value={isLocalizing ? 'settings' : activeTab}
+        onValueChange={isLocalizing ? () => { } : handleTabChange}
         className="flex flex-col flex-1 min-h-0 gap-0"
       >
         <div className="">
           <TabsList className="w-full">
-            <TabsTrigger value="design">Design</TabsTrigger>
+            <TabsTrigger value="design" disabled={isLocalizing}>Design</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
-            <TabsTrigger value="interactions">Interactions</TabsTrigger>
+            <TabsTrigger value="interactions" disabled={isLocalizing}>Interactions</TabsTrigger>
           </TabsList>
         </div>
 
@@ -1809,6 +1901,8 @@ const RightSidebar = React.memo(function RightSidebar({
                 pageId={currentPageId}
                 onLayerUpdate={handleLayerUpdate}
                 activeTextStyleKey={selectedLayer && isRichTextLayer(selectedLayer) ? activeTextStyleKey : null}
+                activeStyleId={activeLayerStyleId}
+                onActiveStyleChange={setActiveStyleId}
               />
             )}
 
@@ -1821,25 +1915,25 @@ const RightSidebar = React.memo(function RightSidebar({
           <div className="overflow-y-auto no-scrollbar overflow-x-hidden divide-y ">
 
           {shouldShowControl('layout', selectedLayer) && !showTextStyleControls && (
-            <LayoutControls layer={selectedLayer} onLayerUpdate={handleLayerUpdate} />
+            <LayoutControls layer={controlLayer} onLayerUpdate={controlUpdate} />
           )}
 
           {shouldShowControl('spacing', selectedLayer) && (
             <SpacingControls
-              layer={selectedLayer}
-              onLayerUpdate={handleLayerUpdate}
+              layer={controlLayer}
+              onLayerUpdate={controlUpdate}
               activeTextStyleKey={activeTextStyleKey}
             />
           )}
 
           {shouldShowControl('sizing', selectedLayer) && !showTextStyleControls && (
-            <SizingControls layer={selectedLayer} onLayerUpdate={handleLayerUpdate} />
+            <SizingControls layer={controlLayer} onLayerUpdate={controlUpdate} />
           )}
 
           {shouldShowControl('typography', selectedLayer) && (
             <TypographyControls
-              layer={selectedLayer}
-              onLayerUpdate={handleLayerUpdate}
+              layer={controlLayer}
+              onLayerUpdate={controlUpdate}
               activeTextStyleKey={activeTextStyleKey}
               fieldGroups={fieldGroups}
               allFields={fields}
@@ -1849,8 +1943,8 @@ const RightSidebar = React.memo(function RightSidebar({
 
           {shouldShowControl('backgrounds', selectedLayer) && (
             <BackgroundsControls
-              layer={selectedLayer}
-              onLayerUpdate={handleLayerUpdate}
+              layer={controlLayer}
+              onLayerUpdate={controlUpdate}
               activeTextStyleKey={activeTextStyleKey}
               fieldGroups={fieldGroups}
               allFields={fields}
@@ -1860,8 +1954,8 @@ const RightSidebar = React.memo(function RightSidebar({
 
           {shouldShowControl('borders', selectedLayer) && (
             <BorderControls
-              layer={selectedLayer}
-              onLayerUpdate={handleLayerUpdate}
+              layer={controlLayer}
+              onLayerUpdate={controlUpdate}
               activeTextStyleKey={activeTextStyleKey}
               fieldGroups={fieldGroups}
               allFields={fields}
@@ -1871,22 +1965,22 @@ const RightSidebar = React.memo(function RightSidebar({
 
           {shouldShowControl('effects', selectedLayer) && (
             <EffectControls
-              layer={selectedLayer}
-              onLayerUpdate={handleLayerUpdate}
+              layer={controlLayer}
+              onLayerUpdate={controlUpdate}
               activeTextStyleKey={activeTextStyleKey}
             />
           )}
 
           {shouldShowControl('position', selectedLayer) && !showTextStyleControls && (
-            <PositionControls layer={selectedLayer} onLayerUpdate={handleLayerUpdate} />
+            <PositionControls layer={controlLayer} onLayerUpdate={controlUpdate} />
           )}
 
           {shouldShowControl('transforms', selectedLayer) && (
-            <TransformControls layer={selectedLayer} onLayerUpdate={handleLayerUpdate} />
+            <TransformControls layer={controlLayer} onLayerUpdate={controlUpdate} />
           )}
 
           {shouldShowControl('transitions', selectedLayer) && (
-            <TransitionControls layer={selectedLayer} onLayerUpdate={handleLayerUpdate} />
+            <TransitionControls layer={controlLayer} onLayerUpdate={controlUpdate} />
           )}
 
           {/* Classes panel - shows classes for active text style or layer */}
@@ -1928,42 +2022,35 @@ const RightSidebar = React.memo(function RightSidebar({
                 </div>
               )}
 
-              {/* Layer style classes (removable, strikethrough if overridden) */}
+              {/* Active chip's classes (the style currently selected above) */}
               {styleClassesArray.length > 0 && (
                 <div className="flex flex-col gap-2.5">
                   <div className="py-1 w-full flex items-center gap-2">
                     <Separator className="flex-1" />
                     <div className="text-xs text-muted-foreground">
-                      <span className="font-semibold">{appliedStyle?.name}</span> classes
+                      <span className="font-semibold">{activeChipStyle?.name}</span> classes
                     </div>
                     <Separator className="flex-1" />
                   </div>
 
                   <div className="flex flex-wrap gap-1.5">
-                    {styleClassesArray.map((cls, index) => {
-                      const isOverridden = overriddenStyleClasses.has(cls);
-                      return (
-                        <Badge
-                          variant="secondary"
-                          key={`style-${index}`}
-                          className="opacity-60 truncate max-w-50"
+                    {styleClassesArray.map((cls, index) => (
+                      <Badge
+                        variant="secondary"
+                        key={`style-${index}`}
+                        className="truncate max-w-50"
+                      >
+                        <span className="truncate">{cls}</span>
+                        <Button
+                          onClick={() => removeStyleClass(cls)}
+                          className="size-4! p-0! -mr-1"
+                          variant="outline"
+                          disabled={isLockedByOther}
                         >
-                          <span className={isOverridden ? 'line-through truncate' : 'truncate'}>
-                            {cls}
-                          </span>
-                          {!isOverridden && (
-                            <Button
-                              onClick={() => removeStyleClass(cls)}
-                              className="size-4! p-0! -mr-1"
-                              variant="outline"
-                              disabled={isLockedByOther}
-                            >
-                              <Icon name="x" className="size-2" />
-                            </Button>
-                          )}
-                        </Badge>
-                      );
-                    })}
+                          <Icon name="x" className="size-2" />
+                        </Button>
+                      </Badge>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1976,7 +2063,92 @@ const RightSidebar = React.memo(function RightSidebar({
 
         <TabsContent value="settings" className="flex-1 overflow-y-auto no-scrollbar mt-0 data-[state=inactive]:hidden">
           <div className="flex flex-col divide-y">
-            {selectedLayerId !== 'body' && (<>
+            {/* Translate panel — replaces all design/settings controls when a
+                non-default locale is active. Stacked Framer-style layout: one
+                source + translation Textarea pair per translatable property of
+                the selected layer. */}
+            {isLocalizing && selectedLayer && currentLocale && (
+              <div className="flex flex-col gap-6 py-5">
+                {/* CMS-bound text indicator — shown when the layer's text is a
+                    single CMS variable. The translation happens on the bound
+                    CMS item (via the collection item sheet), not here, so the
+                    sidebar just surfaces the connected variable for context.
+                    No clear/X button — the binding can't be removed in
+                    translation mode. */}
+                {layerCmsTextBinding && (
+                  <div className="grid grid-cols-3 items-center">
+                    <Label variant="muted">Content</Label>
+                    <div className="col-span-2 *:w-full">
+                      <Button
+                        asChild
+                        variant="data"
+                        className="justify-between! cursor-default"
+                      >
+                        <div>
+                          <span className="flex items-center gap-1.5 truncate">
+                            <Icon name="database" className="size-3 opacity-60 shrink-0" />
+                            <span className="truncate">{layerCmsTextBinding.label || 'CMS Field'}</span>
+                          </span>
+                        </div>
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {translatableItemsExcludingCmsText.length === 0 && !layerCmsTextBinding ? (
+                  <Empty>
+                    <EmptyMedia variant="icon">
+                      <Icon name="globe" />
+                    </EmptyMedia>
+                    <EmptyTitle>Nothing to translate</EmptyTitle>
+                    <EmptyDescription>
+                      This layer has no translatable content. Select a text or media element.
+                    </EmptyDescription>
+                  </Empty>
+                ) : translatableItemsExcludingCmsText.length > 0 ? (
+                  // Group rows under language headers: all source values for
+                  // the default locale first, then the editable translations
+                  // for the active locale. Easier to scan when a layer has
+                  // multiple translatable properties (e.g. image src + alt).
+                  (['source', 'translation'] as const).map((side) => (
+                    <div key={side} className="flex flex-col gap-4">
+                      <Label className="text-xs font-medium">
+                        {side === 'source'
+                          ? defaultLocale?.label || 'Default'
+                          : currentLocale.label}
+                      </Label>
+                      {translatableItemsExcludingCmsText.map((item) => {
+                        // Rich-text element layers are previewed read-only and
+                        // edited in the dedicated RichTextEditorSheet overlay,
+                        // launched via the per-row "Expand to edit" button.
+                        const isRichTextElementContent =
+                          isRichTextLayer(selectedLayer) && item.content_type === 'richtext';
+                        return (
+                          <SidebarTranslationRow
+                            key={`${side}:${item.key}`}
+                            item={item}
+                            side={side}
+                            selectedLocaleId={selectedLocaleId}
+                            localInputValues={translationLocalInputValues}
+                            onLocalValueChange={handleTranslationLocalValueChange}
+                            onLocalValueClear={handleTranslationLocalValueClear}
+                            getTranslationByKey={getTranslationByKey}
+                            createTranslation={createTranslation}
+                            updateTranslation={updateTranslation}
+                            previewOnly={isRichTextElementContent}
+                            onExpand={isRichTextElementContent && selectedLayerId
+                              ? () => openRichTextSheet(selectedLayerId)
+                              : undefined}
+                          />
+                        );
+                      })}
+                    </div>
+                  ))
+                ) : null}
+              </div>
+            )}
+
+            {!isLocalizing && selectedLayerId !== 'body' && (<>
             {/* Attributes */}
             <div className="flex flex-col gap-2 pb-5 pt-5">
               <div className="grid grid-cols-3">
@@ -2292,10 +2464,10 @@ const RightSidebar = React.memo(function RightSidebar({
                             <SelectValue placeholder="Select..." />
                           </SelectTrigger>
                           <SelectContent>
-                            {parentReferenceFields.length > 0 && (
+                            {parentMultiAssetFields.length > 0 && (
                               <SelectGroup>
-                                <SelectLabel>Reference fields</SelectLabel>
-                                {parentReferenceFields.map((field) => (
+                                <SelectLabel>Multi-asset fields</SelectLabel>
+                                {parentMultiAssetFields.map((field) => (
                                   <SelectItem key={field.id} value={field.id}>
                                     <span className="flex items-center gap-2">
                                       <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
@@ -2305,10 +2477,10 @@ const RightSidebar = React.memo(function RightSidebar({
                                 ))}
                               </SelectGroup>
                             )}
-                            {parentMultiAssetFields.length > 0 && (
+                            {parentReferenceFields.length > 0 && (
                               <SelectGroup>
-                                <SelectLabel>Multi-asset fields</SelectLabel>
-                                {parentMultiAssetFields.map((field) => (
+                                <SelectLabel>Reference fields</SelectLabel>
+                                {parentReferenceFields.map((field) => (
                                   <SelectItem key={field.id} value={field.id}>
                                     <span className="flex items-center gap-2">
                                       <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
@@ -2350,11 +2522,11 @@ const RightSidebar = React.memo(function RightSidebar({
                             <SelectValue placeholder="Select..." />
                           </SelectTrigger>
                           <SelectContent>
-                            {dynamicPageReferenceFields.length > 0 && (
+                            {dynamicPageMultiAssetFields.length > 0 && (
                               <SelectGroup>
-                                <SelectLabel>Reference fields</SelectLabel>
-                                {dynamicPageReferenceFields.map((field) => (
-                                  <SelectItem key={field.id} value={`field:${field.id}`}>
+                                <SelectLabel>Multi-asset fields</SelectLabel>
+                                {dynamicPageMultiAssetFields.map((field) => (
+                                  <SelectItem key={field.id} value={`multi_asset:${field.id}`}>
                                     <span className="flex items-center gap-2">
                                       <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
                                       {field.name}
@@ -2363,11 +2535,11 @@ const RightSidebar = React.memo(function RightSidebar({
                                 ))}
                               </SelectGroup>
                             )}
-                            {dynamicPageMultiAssetFields.length > 0 && (
+                            {dynamicPageReferenceFields.length > 0 && (
                               <SelectGroup>
-                                <SelectLabel>Multi-asset fields</SelectLabel>
-                                {dynamicPageMultiAssetFields.map((field) => (
-                                  <SelectItem key={field.id} value={`multi_asset:${field.id}`}>
+                                <SelectLabel>Reference fields</SelectLabel>
+                                {dynamicPageReferenceFields.map((field) => (
+                                  <SelectItem key={field.id} value={`field:${field.id}`}>
                                     <span className="flex items-center gap-2">
                                       <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
                                       {field.name}
@@ -2414,11 +2586,11 @@ const RightSidebar = React.memo(function RightSidebar({
                       ) : (
                         /* When not inside a parent collection and not dynamic, show collections as source options */
                         <Select
-                          value={getCollectionVariable(selectedLayer)?.id || ''}
+                          value={hasBoundCollectionSource(getCollectionVariable(selectedLayer)) ? getCollectionVariable(selectedLayer)?.id || '' : ''}
                           onValueChange={handleCollectionChange}
                         >
                           <SelectTrigger
-                            onClear={getCollectionVariable(selectedLayer)?.id
+                            onClear={hasBoundCollectionSource(getCollectionVariable(selectedLayer))
                               ? () => handleCollectionChange('none')
                               : undefined}
                           >
@@ -2448,8 +2620,8 @@ const RightSidebar = React.memo(function RightSidebar({
                     </div>
                   </div>
 
-                  {/* Sort By - only show if collection is selected */}
-                  {getCollectionVariable(selectedLayer)?.id && (
+                  {/* Sort By - only show if a real collection source is selected */}
+                  {hasBoundCollectionSource(getCollectionVariable(selectedLayer)) && (
                     <>
                       <div className="grid grid-cols-3">
                         <Label variant="muted">Sort by</Label>
@@ -2487,19 +2659,22 @@ const RightSidebar = React.memo(function RightSidebar({
                                   <SelectItem value="random">Random</SelectItem>
                                   <SelectItem value={SORT_INPUT_VALUE_OPTION}>Input value</SelectItem>
                                 </SelectGroup>
-                                <SelectSeparator />
-                                <SelectGroup>
-                                  <SelectLabel>Fields</SelectLabel>
-                                  {selectedCollectionFields.length > 0 &&
-                                    selectedCollectionFields.map((field) => (
-                                      <SelectItem key={field.id} value={field.id}>
-                                        <span className="flex items-center gap-2">
-                                          <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
-                                          {field.name}
-                                        </span>
-                                      </SelectItem>
-                                    ))}
-                                </SelectGroup>
+                                {selectedCollectionFields.length > 0 && (
+                                  <>
+                                    <SelectSeparator />
+                                    <SelectGroup>
+                                      <SelectLabel>Fields</SelectLabel>
+                                      {selectedCollectionFields.map((field) => (
+                                        <SelectItem key={field.id} value={field.id}>
+                                          <span className="flex items-center gap-2">
+                                            <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
+                                            {field.name}
+                                          </span>
+                                        </SelectItem>
+                                      ))}
+                                    </SelectGroup>
+                                  </>
+                                )}
                               </SelectContent>
                             </Select>
                           )}
@@ -2584,8 +2759,8 @@ const RightSidebar = React.memo(function RightSidebar({
                         </div>
                       </div>
 
-                      {/* Pagination - hidden for nested collections */}
-                      {!isNestedInCollection && (
+                      {/* Pagination - hidden for nested collections and slides */}
+                      {!isNestedInCollection && selectedLayer.name !== 'slide' && (
                         <div className="grid grid-cols-3">
                           <Label variant="muted">Pagination</Label>
                           <div className="col-span-2 *:w-full">
@@ -2608,7 +2783,7 @@ const RightSidebar = React.memo(function RightSidebar({
                       )}
 
                       {/* Pagination type and items per page - only show when pagination enabled */}
-                      {!isNestedInCollection && getCollectionVariable(selectedLayer)?.pagination?.enabled && (
+                      {!isNestedInCollection && selectedLayer.name !== 'slide' && getCollectionVariable(selectedLayer)?.pagination?.enabled && (
                         <>
                           <div className="grid grid-cols-3">
                             <Label variant="muted">Type</Label>
@@ -2730,6 +2905,7 @@ const RightSidebar = React.memo(function RightSidebar({
 
             <InputSettings
               layer={selectedLayer}
+              allLayers={allLayers}
               onLayerUpdate={handleLayerUpdate}
             />
 
@@ -2738,8 +2914,8 @@ const RightSidebar = React.memo(function RightSidebar({
               onLayerUpdate={handleLayerUpdate}
             />
 
-            {/* Collection Filters - only for collection layers */}
-            {selectedLayer && getCollectionVariable(selectedLayer)?.id && (
+            {/* Collection Filters - only for layers bound to a real collection source */}
+            {selectedLayer && hasBoundCollectionSource(getCollectionVariable(selectedLayer)) && (
               <CollectionFiltersSettings
                 layer={selectedLayer}
                 onLayerUpdate={handleLayerUpdate}
@@ -2754,7 +2930,8 @@ const RightSidebar = React.memo(function RightSidebar({
             />
             </>)}
 
-            {/* Custom Attributes Panel */}
+            {/* Custom Attributes Panel — hide while translating */}
+            {!isLocalizing && (
             <SettingsPanel
               title="Custom attributes"
               isOpen={hasCustomAttributes}
@@ -2838,6 +3015,7 @@ const RightSidebar = React.memo(function RightSidebar({
                 </div>
               )}
             </SettingsPanel>
+            )}
           </div>
         </TabsContent>
 

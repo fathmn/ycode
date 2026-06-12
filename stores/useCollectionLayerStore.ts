@@ -13,6 +13,7 @@ import type { CollectionItemWithValues, CollectionPaginationMeta } from '@/types
 
 interface CollectionLayerState {
   layerData: Record<string, CollectionItemWithValues[]>; // keyed by layerId
+  layerTotal: Record<string, number>; // Total matching rows in the collection (from server count), keyed by layerId
   loading: Record<string, boolean>; // loading state per layer
   error: Record<string, string | null>; // error state per layer
   layerConfig: Record<string, { collectionId: string; sortBy?: string; sortOrder?: 'asc' | 'desc'; limit?: number; offset?: number; filters?: Array<{ fieldId: string; operator: string; value: string }> }>; // Track config per layer
@@ -36,6 +37,7 @@ interface CollectionLayerActions {
     filters?: Array<{ fieldId: string; operator: string; value: string }>
   ) => Promise<void>;
   fetchReferencedCollectionItems: (collectionId: string) => Promise<void>;
+  fetchReferencedCollectionsBatch: (collectionIds: string[]) => Promise<void>;
   clearLayerData: (layerId: string) => void;
   clearAllLayerData: () => void;
   updateItemInLayerData: (itemId: string, values: Record<string, string>) => void;
@@ -51,6 +53,7 @@ type CollectionLayerStore = CollectionLayerState & CollectionLayerActions;
 export const useCollectionLayerStore = create<CollectionLayerStore>((set, get) => ({
   // Initial state
   layerData: {},
+  layerTotal: {},
   loading: {},
   error: {},
   layerConfig: {},
@@ -90,6 +93,52 @@ export const useCollectionLayerStore = create<CollectionLayerStore>((set, get) =
     }
   },
 
+  /**
+   * Fetch reference-display items for many collections in a single round-trip.
+   * Dedupes against already-loaded/in-flight collections so it's safe to call
+   * with the full set of referenced IDs on every canvas re-render.
+   */
+  fetchReferencedCollectionsBatch: async (collectionIds: string[]) => {
+    const { referencedItems, referencedLoading } = get();
+
+    const toFetch = collectionIds.filter(
+      (id) => !referencedItems[id] && !referencedLoading[id],
+    );
+    if (toFetch.length === 0) return;
+
+    set((state) => {
+      const nextLoading = { ...state.referencedLoading };
+      for (const id of toFetch) nextLoading[id] = true;
+      return { referencedLoading: nextLoading };
+    });
+
+    try {
+      const response = await collectionsApi.getReferencedItemsBatch(toFetch, 100);
+
+      if (response.error || !response.data?.items) {
+        throw new Error(response.error || 'Empty batch reference response');
+      }
+
+      const batchItems = response.data.items;
+      set((state) => {
+        const nextReferenced = { ...state.referencedItems };
+        const nextLoading = { ...state.referencedLoading };
+        for (const id of toFetch) {
+          nextReferenced[id] = batchItems[id]?.items || [];
+          nextLoading[id] = false;
+        }
+        return { referencedItems: nextReferenced, referencedLoading: nextLoading };
+      });
+    } catch (error) {
+      console.error('[CollectionLayerStore] Error fetching referenced items batch:', error);
+      set((state) => {
+        const nextLoading = { ...state.referencedLoading };
+        for (const id of toFetch) nextLoading[id] = false;
+        return { referencedLoading: nextLoading };
+      });
+    }
+  },
+
   // Fetch data for a specific layer
   fetchLayerData: async (
     layerId: string,
@@ -100,7 +149,7 @@ export const useCollectionLayerStore = create<CollectionLayerStore>((set, get) =
     offset?: number,
     filters?: Array<{ fieldId: string; operator: string; value: string }>
   ) => {
-    const { layerData, loading, layerConfig } = get();
+    const { loading, layerConfig } = get();
 
     // Skip for virtual collections (multi-asset)
     if (collectionId === MULTI_ASSET_COLLECTION_ID) {
@@ -112,7 +161,9 @@ export const useCollectionLayerStore = create<CollectionLayerStore>((set, get) =
       return;
     }
 
-    // Check if we already have data with the same config
+    // Check if we already fetched with the same config.
+    // `layerConfig[layerId]` is only set after a successful fetch, so its presence
+    // signals "already fetched" regardless of whether the result was empty.
     const existingConfig = layerConfig[layerId];
     const filtersMatch = JSON.stringify(existingConfig?.filters) === JSON.stringify(filters);
     const configMatches = existingConfig &&
@@ -123,8 +174,9 @@ export const useCollectionLayerStore = create<CollectionLayerStore>((set, get) =
       existingConfig.offset === offset &&
       filtersMatch;
 
-    // Skip if we have data and config matches
-    if (layerData[layerId]?.length > 0 && configMatches) {
+    // Skip if config matches — prevents refetching when a collection legitimately
+    // returns an empty array (otherwise the layer would loop fetching forever).
+    if (configMatches) {
       return;
     }
 
@@ -149,10 +201,12 @@ export const useCollectionLayerStore = create<CollectionLayerStore>((set, get) =
       }
 
       const items = response.data?.items || [];
+      const total = typeof response.data?.total === 'number' ? response.data.total : items.length;
 
       // Store fetched data keyed by layerId
       set((state) => ({
         layerData: { ...state.layerData, [layerId]: items },
+        layerTotal: { ...state.layerTotal, [layerId]: total },
         loading: { ...state.loading, [layerId]: false },
         layerConfig: {
           ...state.layerConfig,
@@ -173,11 +227,13 @@ export const useCollectionLayerStore = create<CollectionLayerStore>((set, get) =
   clearLayerData: (layerId: string) => {
     set((state) => {
       const { [layerId]: _, ...restLayerData } = state.layerData;
+      const { [layerId]: _t, ...restLayerTotal } = state.layerTotal;
       const { [layerId]: __, ...restLoading } = state.loading;
       const { [layerId]: ___, ...restError } = state.error;
 
       return {
         layerData: restLayerData,
+        layerTotal: restLayerTotal,
         loading: restLoading,
         error: restError,
       };
@@ -188,6 +244,7 @@ export const useCollectionLayerStore = create<CollectionLayerStore>((set, get) =
   clearAllLayerData: () => {
     set({
       layerData: {},
+      layerTotal: {},
       loading: {},
       error: {},
       referencedItems: {},
@@ -256,9 +313,11 @@ export const useCollectionLayerStore = create<CollectionLayerStore>((set, get) =
           });
 
           if (!response.error && response.data?.items) {
+            const total = typeof response.data.total === 'number' ? response.data.total : response.data.items.length;
             // Update data silently (no loading state change)
             set((state) => ({
               layerData: { ...state.layerData, [layerId]: response.data!.items },
+              layerTotal: { ...state.layerTotal, [layerId]: total },
             }));
           }
         } catch (error) {
