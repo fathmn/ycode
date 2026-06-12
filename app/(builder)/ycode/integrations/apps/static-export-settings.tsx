@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { toast } from 'sonner'
 
 import { studioFetch } from '@/lib/api'
+import { BRAND_NAME } from '@/lib/brand'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -460,7 +461,7 @@ export default function StaticExportSettings() {
               <FieldLabel htmlFor="github-author-name">Commit Author Name (optional)</FieldLabel>
               <Input
                 id="github-author-name"
-                placeholder="Ycode Static Export"
+                placeholder={`${BRAND_NAME} Static Export`}
                 value={config.githubAuthorName}
                 onChange={(e) => updateConfig({ githubAuthorName: e.target.value })}
                 className="text-xs"

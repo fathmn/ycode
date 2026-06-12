@@ -23,6 +23,7 @@ import { uploadFile } from '@/lib/file-upload';
 import { findAssetsByFilenames } from '@/lib/repositories/assetRepository';
 import { generateCollectionItemContentHash } from '@/lib/hash-utils';
 import { noCache } from '@/lib/api-response';
+import { BRAND_USER_AGENT_PREFIX } from '@/lib/brand';
 import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 const STUDIO_WRITE_ROLES: StudioProjectRole[] = [
@@ -65,7 +66,7 @@ function extractFilenameFromUrl(url: string): string {
 async function downloadAndUploadAsset(url: string, projectId?: string | null): Promise<UploadedAsset | null> {
   try {
     const response = await fetch(sanitizeUrl(url), {
-      headers: { 'User-Agent': 'Ycode-CSV-Import/1.0' },
+      headers: { 'User-Agent': `${BRAND_USER_AGENT_PREFIX}-CSV-Import/1.0` },
     });
 
     if (!response.ok) {

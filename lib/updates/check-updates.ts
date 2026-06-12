@@ -3,6 +3,8 @@
  * Extracted for reuse and to allow cloud overlay to return "no update" in hosted deployments.
  */
 
+import { BRAND_USER_AGENT_PREFIX } from '@/lib/brand';
+
 const UPSTREAM_REPO = 'ycode/ycode'; // Official Ycode repo
 
 export interface CheckUpdatesResult {
@@ -50,7 +52,7 @@ export async function checkForUpdates(currentVersion: string): Promise<CheckUpda
       {
         headers: {
           'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'Ycode-Update-Checker',
+          'User-Agent': `${BRAND_USER_AGENT_PREFIX}-Update-Checker`,
         },
         cache: 'no-store',
       }
@@ -86,7 +88,7 @@ export async function checkForUpdates(currentVersion: string): Promise<CheckUpda
           {
             headers: {
               'Accept': 'application/vnd.github.v3+json',
-              'User-Agent': 'Ycode-Update-Checker',
+              'User-Agent': `${BRAND_USER_AGENT_PREFIX}-Update-Checker`,
             },
             cache: 'no-store',
           }

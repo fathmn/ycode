@@ -1,5 +1,6 @@
 import packageJson from '../../../../../../package.json';
 import { noCache } from '@/lib/api-response';
+import { BRAND_USER_AGENT_PREFIX } from '@/lib/brand';
 import { requireStudioProjectRole } from '@/lib/studio-platform';
 import type { NextRequest } from 'next/server';
 
@@ -46,7 +47,7 @@ export async function GET(request: NextRequest) {
       {
         headers: {
           'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'Ycode-Update-Checker',
+          'User-Agent': `${BRAND_USER_AGENT_PREFIX}-Update-Checker`,
         },
         cache: 'no-store',
       }

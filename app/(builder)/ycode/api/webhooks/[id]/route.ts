@@ -9,6 +9,7 @@ import {
   markWebhookTriggered,
   type UpdateWebhookData,
 } from '@/lib/repositories/webhookRepository';
+import { BRAND_USER_AGENT_PREFIX } from '@/lib/brand';
 import { requireStudioIntegrationManager } from '@/lib/studio-integration-access';
 
 interface RouteParams {
@@ -175,7 +176,7 @@ export async function POST(
     // Build headers
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'User-Agent': 'Ycode-Webhook/1.0',
+      'User-Agent': `${BRAND_USER_AGENT_PREFIX}-Webhook/1.0`,
       'X-Ycode-Event': 'test',
     };
 

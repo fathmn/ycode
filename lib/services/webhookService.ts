@@ -14,6 +14,7 @@ import {
   type Webhook,
   type WebhookEventType,
 } from '@/lib/repositories/webhookRepository';
+import { BRAND_USER_AGENT_PREFIX } from '@/lib/brand';
 
 // =============================================================================
 // Types
@@ -126,7 +127,7 @@ async function deliverToWebhook(webhook: Webhook, event: WebhookEvent): Promise<
   // Build headers
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'User-Agent': 'Ycode-Webhook/1.0',
+    'User-Agent': `${BRAND_USER_AGENT_PREFIX}-Webhook/1.0`,
     'X-Ycode-Event': event.type,
   };
 
