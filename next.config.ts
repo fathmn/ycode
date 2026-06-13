@@ -1,8 +1,12 @@
 import type { NextConfig } from 'next';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { STUDIO_BASE_PATH } from './lib/brand';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
+const YCODE_INTERNAL_BASE_PATH = '/ycode';
+const YCODE_PUBLIC_PAGE_REDIRECT_SOURCE =
+  `${YCODE_INTERNAL_BASE_PATH}/:path((?!api|mcp|oauth|\\.well-known).*)`;
 
 const imageRemotePatterns: NonNullable<NonNullable<NextConfig['images']>['remotePatterns']> = [
   {
@@ -91,7 +95,17 @@ const nextConfig: NextConfig = {
       {
         // Builder/studio surface must not be framed cross-origin
         // (canvas/preview iframes are same-origin)
-        source: '/ycode/:path*',
+        source: `${YCODE_INTERNAL_BASE_PATH}/:path*`,
+        headers: [
+          {
+            key: 'X-Frame-Options',
+            value: 'SAMEORIGIN',
+          },
+        ],
+      },
+      {
+        // Public Studio alias must keep the same framing policy as /ycode.
+        source: `${STUDIO_BASE_PATH}/:path*`,
         headers: [
           {
             key: 'X-Frame-Options',
@@ -110,12 +124,12 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // Apply to public pages ONLY (exclude /ycode/*, /_next/*, /a/*)
+        // Apply to public pages ONLY (exclude /ycode/*, /studio/*, /_next/*, /a/*)
         // NOTE: Do NOT set Cache-Control here. Vercel recommends letting
         // ISR manage cache headers automatically so per-URL cache-tag
         // tracking works for selective revalidateTag invalidations.
         // Manual s-maxage breaks per-URL purging on catch-all routes.
-        source: '/:path((?!ycode|_next|a/).*)*',
+        source: '/:path((?!ycode|studio|_next|a/).*)*',
         headers: [
           {
             // Open the TLS connection to fonts.gstatic.com while the document
@@ -129,6 +143,32 @@ const nextConfig: NextConfig = {
         ],
       },
     ];
+  },
+
+  async redirects() {
+    return [
+      {
+        source: YCODE_INTERNAL_BASE_PATH,
+        destination: STUDIO_BASE_PATH,
+        permanent: true,
+      },
+      {
+        source: YCODE_PUBLIC_PAGE_REDIRECT_SOURCE,
+        destination: `${STUDIO_BASE_PATH}/:path`,
+        permanent: true,
+      },
+    ];
+  },
+
+  async rewrites() {
+    return {
+      beforeFiles: [
+        {
+          source: `${STUDIO_BASE_PATH}/:path*`,
+          destination: `${YCODE_INTERNAL_BASE_PATH}/:path*`,
+        },
+      ],
+    };
   },
 
   webpack: (config, { isServer }) => {

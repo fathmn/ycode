@@ -2,6 +2,7 @@ import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 import { STUDIO_PREVIEW_NONCE_COOKIE } from '@/lib/studio-preview-nonce';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { projectLookupFromHost, projectLookupFromRequestHosts } from '@/lib/project-host';
 import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
 import { findStudioProjectHostMatches } from '@/lib/studio-project-hostnames';
@@ -316,6 +317,9 @@ const STUDIO_PUBLIC_ASSET_PATHS = new Set([
 
 function isReservedStudioPath(pathname: string): boolean {
   return pathname.startsWith('/ycode')
+    // Keep the public Studio alias out of project-prefixed published-page proxying.
+    || pathname === STUDIO_BASE_PATH
+    || pathname.startsWith(`${STUDIO_BASE_PATH}/`)
     || pathname.startsWith('/_next')
     || pathname.startsWith('/api')
     || pathname.startsWith('/a/')
@@ -1176,6 +1180,8 @@ export async function proxy(request: NextRequest) {
   }
 
   const isPublicPage = !pathname.startsWith('/ycode')
+    && pathname !== STUDIO_BASE_PATH
+    && !pathname.startsWith(`${STUDIO_BASE_PATH}/`)
     && !pathname.startsWith('/_next')
     && !pathname.startsWith('/studio-published')
     && !pathname.startsWith('/api')
