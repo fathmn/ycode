@@ -114,16 +114,6 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // Asset proxy: immutable caching (content-addressed by hash)
-        source: '/a/:path*',
-        headers: [
-          {
-            key: 'Cache-Control',
-            value: 'public, max-age=31536000, immutable',
-          },
-        ],
-      },
-      {
         // Apply to public pages ONLY (exclude /ycode/*, /studio/*, /_next/*, /a/*)
         // NOTE: Do NOT set Cache-Control here. Vercel recommends letting
         // ISR manage cache headers automatically so per-URL cache-tag

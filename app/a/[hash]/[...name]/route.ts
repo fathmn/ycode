@@ -9,10 +9,10 @@
  * If the name doesn't match the current filename, a 301 redirect is issued.
  *
  * Supports image resizing via query params (width, height, quality) using sharp.
- * Responses are cached with immutable headers so sharp only runs once per unique URL.
+ * Successful responses are cached with immutable headers so sharp only runs once per unique URL.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import sharp from 'sharp';
 import { base62ToUuid } from '@/lib/convertion-utils';
 import { getAssetProxyUrl, isAssetOfType, ASSET_CATEGORIES } from '@/lib/asset-utils';
@@ -20,8 +20,8 @@ import { getAssetForProxy } from '@/lib/repositories/assetRepository';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { STORAGE_BUCKET } from '@/lib/asset-constants';
 
-// Cache headers set at infrastructure level via next.config.ts headers()
-// to prevent Next.js proxy from overriding them
+const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+const NO_STORE_CACHE_CONTROL = 'no-store';
 
 function parseTransformParams(searchParams: URLSearchParams) {
   const width = parseInt(searchParams.get('width') || '');
@@ -49,12 +49,18 @@ export async function GET(
     try {
       assetId = base62ToUuid(hash);
     } catch {
-      return new Response('Not found', { status: 404 });
+      return new Response('Not found', {
+        status: 404,
+        headers: { 'Cache-Control': NO_STORE_CACHE_CONTROL },
+      });
     }
 
     const asset = await getAssetForProxy(assetId);
     if (!asset?.storage_path) {
-      return new Response('Not found', { status: 404 });
+      return new Response('Not found', {
+        status: 404,
+        headers: { 'Cache-Control': NO_STORE_CACHE_CONTROL },
+      });
     }
 
     const canonicalPath = getAssetProxyUrl(asset);
@@ -71,7 +77,10 @@ export async function GET(
 
     const supabase = await getSupabaseAdmin();
     if (!supabase) {
-      return new Response('Service unavailable', { status: 503 });
+      return new Response('Service unavailable', {
+        status: 503,
+        headers: { 'Cache-Control': NO_STORE_CACHE_CONTROL },
+      });
     }
 
     const { data: urlData } = supabase.storage
@@ -92,7 +101,10 @@ export async function GET(
 
     const response = await fetch(urlData.publicUrl, { headers: upstreamHeaders });
     if (!response.ok && response.status !== 206) {
-      return new Response('Not found', { status: 404 });
+      return new Response('Not found', {
+        status: 404,
+        headers: { 'Cache-Control': NO_STORE_CACHE_CONTROL },
+      });
     }
 
     const transform = parseTransformParams(url.searchParams);
@@ -118,6 +130,7 @@ export async function GET(
         headers: {
           'Content-Type': 'image/webp',
           'Content-Length': resized.length.toString(),
+          'Cache-Control': IMMUTABLE_CACHE_CONTROL,
         },
       });
     }
@@ -128,6 +141,7 @@ export async function GET(
     const headers = new Headers({
       'Content-Type': asset.mime_type || 'application/octet-stream',
       'Accept-Ranges': 'bytes',
+      'Cache-Control': IMMUTABLE_CACHE_CONTROL,
     });
 
     const contentRange = response.headers.get('content-range');
@@ -141,6 +155,9 @@ export async function GET(
       headers,
     });
   } catch {
-    return new Response('Internal server error', { status: 500 });
+    return new Response('Internal server error', {
+      status: 500,
+      headers: { 'Cache-Control': NO_STORE_CACHE_CONTROL },
+    });
   }
 }
