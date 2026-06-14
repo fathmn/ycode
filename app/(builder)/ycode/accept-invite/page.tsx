@@ -9,6 +9,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { createBrowserClient } from '@/lib/supabase-browser';
 import { applySupabaseEmailAuthUrlSession } from '@/lib/supabase-email-auth-url';
 import { Button } from '@/components/ui/button';
@@ -73,7 +74,7 @@ export default function AcceptInvitePage() {
 
         if (session?.user) {
           // User is already authenticated, redirect to app
-          router.push('/ycode');
+          router.push(STUDIO_BASE_PATH);
           return;
         }
 
@@ -133,7 +134,7 @@ export default function AcceptInvitePage() {
       }
 
       // Success! Redirect to the app
-      router.push('/ycode');
+      router.push(STUDIO_BASE_PATH);
     } catch (err) {
       console.error('Error setting password:', err);
       setError('Passwort konnte nicht gespeichert werden. Bitte versuchen Sie es erneut.');

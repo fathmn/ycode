@@ -10,6 +10,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthSession } from '@/hooks/use-auth-session';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import BuilderLoading from '@/components/BuilderLoading';
 
 export default function DevtoolsLayout({ children }: { children: React.ReactNode }) {
@@ -18,7 +19,7 @@ export default function DevtoolsLayout({ children }: { children: React.ReactNode
 
   useEffect(() => {
     if (!isLoading && !session) {
-      router.push('/ycode');
+      router.push(STUDIO_BASE_PATH);
     }
   }, [isLoading, session, router]);
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { studioFetch } from '@/lib/api';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { createBrowserClient } from '@/lib/supabase-browser';
 import { useAuthStore } from '@/stores/useAuthStore';
 import BuilderLoading from '@/components/BuilderLoading';
@@ -58,14 +59,14 @@ export default function StudioAuthGate({ children, skipSetupCheck = false }: Stu
         const data = await response.json();
 
         if (!data.is_configured) {
-          router.push('/ycode/welcome');
+          router.push(`${STUDIO_BASE_PATH}/welcome`);
           return;
         }
 
         setSupabaseConfigured(true);
       } catch (err) {
         console.error('Failed to check Supabase config:', err);
-        router.push('/ycode/welcome');
+        router.push(`${STUDIO_BASE_PATH}/welcome`);
       }
     };
 
@@ -196,7 +197,7 @@ export default function StudioAuthGate({ children, skipSetupCheck = false }: Stu
       await useAuthStore.getState().checkSession();
       toast.success('Passwort wurde gespeichert.');
       if (window.location.pathname === '/') {
-        router.replace('/ycode');
+        router.replace(STUDIO_BASE_PATH);
       }
     } catch (error) {
       setPasswordSetupError(error instanceof Error ? error.message : 'Passwort konnte nicht gespeichert werden.');

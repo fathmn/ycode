@@ -62,7 +62,7 @@ const RealtimeCursors = lazy(() => import('@/components/realtime-cursors').then(
 
 // 3. Hooks
 // useCanvasCSS removed - now handled by iframe with Tailwind JIT CDN
-import { useEditorUrl } from '@/hooks/use-editor-url';
+import { useEditorUrl, buildEditorPath } from '@/hooks/use-editor-url';
 import { useLiveLayerUpdates } from '@/hooks/use-live-layer-updates';
 import { useLivePageUpdates } from '@/hooks/use-live-page-updates';
 import { useLiveComponentUpdates } from '@/hooks/use-live-component-updates';
@@ -85,6 +85,7 @@ import { useMigrationStore } from '@/stores/useMigrationStore';
 import { useVersionsStore } from '@/stores/useVersionsStore';
 import { useRole } from '@/hooks/use-role';
 import { useImportPaste } from '@/hooks/use-import-paste';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import type { ExternalPastePlacement } from '@/stores/useExternalPasteStore';
 // Collaboration temporarily disabled
 // import { useCollaborationPresenceStore } from '@/stores/useCollaborationPresenceStore';
@@ -256,7 +257,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
       if (targetPageId) {
         navigateToLayers(targetPageId);
       } else {
-        router.replace('/ycode');
+        router.replace(buildEditorPath('/ycode'));
       }
     }
   }, [isEditor, authInitialized, routeType, currentPageId, pages, navigateToLayers, router]);
@@ -506,7 +507,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
         if (!data.is_configured) {
           // Redirect to setup wizard
-          router.push('/ycode/welcome');
+          router.push(`${STUDIO_BASE_PATH}/welcome`);
           return;
         }
 
@@ -514,7 +515,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
       } catch (err) {
         console.error('Failed to check Supabase config:', err);
         // On error, redirect to setup to be safe
-        router.push('/ycode/welcome');
+        router.push(`${STUDIO_BASE_PATH}/welcome`);
       }
     };
 

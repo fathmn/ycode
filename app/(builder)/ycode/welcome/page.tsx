@@ -13,6 +13,7 @@ import { useRouter } from 'next/navigation';
 import { useSetupStore } from '@/stores/useSetupStore';
 import { useAuthSession } from '@/hooks/use-auth-session';
 import type { SupabaseConfig } from '@/types';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import {
   connectSupabase,
   runMigrations,
@@ -134,7 +135,7 @@ export default function WelcomePage() {
         // If setup is complete, redirect unauthenticated users to /ycode (login screen)
         // Logged-in users can still access this page
         if (data.is_setup_complete && !session) {
-          router.push('/ycode');
+          router.push(STUDIO_BASE_PATH);
           return; // Keep showing loading screen during redirect
         }
 
