@@ -4,7 +4,12 @@ import { usePathname, useSearchParams, useRouter } from 'next/navigation';
 import { useCallback, useMemo } from 'react';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
-import { ycodePathnameFromStudioProjectPath } from '@/lib/studio-project-path';
+import { getSelectedStudioProjectSlug } from '@/lib/api';
+import {
+  studioProjectPathSlugFromPathname,
+  studioProjectRoutePathFromSlug,
+  ycodePathnameFromStudioProjectPath,
+} from '@/lib/studio-project-path';
 
 /**
  * Update URL query parameter using browser history API
@@ -66,6 +71,18 @@ function normalizeViewportMode(value: string | null | undefined): EditorViewport
   if (value === 'desktop' || value === 'tablet' || value === 'mobile') return value;
   if (value === 'phone') return 'mobile';
   return null;
+}
+
+function currentStudioProjectPathSlug(): string | null {
+  if (typeof window === 'undefined') return null;
+  return (
+    studioProjectPathSlugFromPathname(window.location.pathname)
+    ?? getSelectedStudioProjectSlug()
+  );
+}
+
+function buildEditorPath(ycodeRoutePath: string): string {
+  return studioProjectRoutePathFromSlug(currentStudioProjectPathSlug(), ycodeRoutePath);
 }
 
 export function useEditorUrl() {
@@ -261,7 +278,8 @@ export function useEditorUrl() {
       currentParams.set('layer', layerId || currentParams.get('layer') || 'body');
 
       const query = currentParams.toString();
-      router.push(`/ycode/layers/${pageId}?${query}`);
+      const path = buildEditorPath(`/ycode/layers/${pageId}`);
+      router.push(`${path}?${query}`);
     },
     [router]
   );
@@ -280,7 +298,8 @@ export function useEditorUrl() {
       currentParams.set('layer', layerId || currentParams.get('layer') || 'body');
 
       const query = currentParams.toString();
-      router.push(`/ycode/pages/${pageId}?${query}`);
+      const path = buildEditorPath(`/ycode/pages/${pageId}`);
+      router.push(`${path}?${query}`);
     },
     [router]
   );
@@ -308,7 +327,8 @@ export function useEditorUrl() {
       }
 
       const query = currentParams.toString();
-      router.push(`/ycode/pages/${pageId}${query ? `?${query}` : ''}`);
+      const path = buildEditorPath(`/ycode/pages/${pageId}`);
+      router.push(`${path}${query ? `?${query}` : ''}`);
     },
     [router, searchParams]
   );
@@ -335,13 +355,14 @@ export function useEditorUrl() {
         params.set('limit', pageSize.toString());
       }
       const query = params.toString();
-      router.push(`/ycode/collections/${collectionId}${query ? `?${query}` : ''}`);
+      const path = buildEditorPath(`/ycode/collections/${collectionId}`);
+      router.push(`${path}${query ? `?${query}` : ''}`);
     },
     [router]
   );
 
   const navigateToCollections = useCallback(() => {
-    router.push('/ycode/collections');
+    router.push(buildEditorPath('/ycode/collections'));
   }, [router]);
 
   const navigateToCollectionItem = useCallback(
@@ -352,7 +373,8 @@ export function useEditorUrl() {
       if (currentParams.has('page')) params.set('page', currentParams.get('page')!);
       if (currentParams.has('limit')) params.set('limit', currentParams.get('limit')!);
       if (currentParams.has('search')) params.set('search', currentParams.get('search')!);
-      router.push(`/ycode/collections/${collectionId}?${params.toString()}`);
+      const path = buildEditorPath(`/ycode/collections/${collectionId}`);
+      router.push(`${path}?${params.toString()}`);
     },
     [router]
   );
@@ -365,7 +387,8 @@ export function useEditorUrl() {
       if (currentParams.has('page')) params.set('page', currentParams.get('page')!);
       if (currentParams.has('limit')) params.set('limit', currentParams.get('limit')!);
       if (currentParams.has('search')) params.set('search', currentParams.get('search')!);
-      router.push(`/ycode/collections/${collectionId}?${params.toString()}`);
+      const path = buildEditorPath(`/ycode/collections/${collectionId}`);
+      router.push(`${path}?${params.toString()}`);
     },
     [router]
   );
@@ -386,13 +409,14 @@ export function useEditorUrl() {
       if (variantToUse) params.set('variant', variantToUse);
 
       const query = params.toString();
-      router.push(`/ycode/components/${componentId}${query ? `?${query}` : ''}`);
+      const path = buildEditorPath(`/ycode/components/${componentId}`);
+      router.push(`${path}${query ? `?${query}` : ''}`);
     },
     [router]
   );
 
   const navigateToEditor = useCallback(() => {
-    router.push('/ycode');
+    router.push(buildEditorPath('/ycode'));
   }, [router]);
 
   const updateQueryParams = useCallback(
