@@ -81,7 +81,7 @@ function currentStudioProjectPathSlug(): string | null {
   );
 }
 
-function buildEditorPath(ycodeRoutePath: string): string {
+export function buildEditorPath(ycodeRoutePath: string): string {
   return studioProjectRoutePathFromSlug(currentStudioProjectPathSlug(), ycodeRoutePath);
 }
 

@@ -37,6 +37,7 @@ import { Empty, EmptyDescription, EmptyTitle } from '@/components/ui/empty';
 import Icon from '@/components/ui/icon';
 import { toast } from 'sonner';
 
+import { buildEditorPath } from '@/hooks/use-editor-url';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { isFieldTypeCompatible, getAirtableFieldTypeLabel } from '@/lib/apps/airtable/field-mapping';
 import { formatRelativeTime } from '@/lib/utils';
@@ -696,9 +697,9 @@ export default function AirtableSettings({
                 onDelete={() => setConnectionToDelete(conn)}
                 onGoToCollection={() => {
                   if (onCloseAndNavigate) {
-                    onCloseAndNavigate(`/ycode/collections/${conn.collectionId}`);
+                    onCloseAndNavigate(buildEditorPath(`/ycode/collections/${conn.collectionId}`));
                   } else {
-                    router.push(`/ycode/collections/${conn.collectionId}`);
+                    router.push(buildEditorPath(`/ycode/collections/${conn.collectionId}`));
                   }
                 }}
                 onStartEdit={() => handleStartEdit(conn)}

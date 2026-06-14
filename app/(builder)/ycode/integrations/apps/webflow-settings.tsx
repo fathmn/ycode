@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/sheet';
 import { Spinner } from '@/components/ui/spinner';
 
+import { buildEditorPath } from '@/hooks/use-editor-url';
 import { webflowApi, type WebflowCollectionPreview } from '@/lib/apps/webflow/client';
 import { WEBFLOW_SETTINGS } from '@/lib/apps/webflow/constants';
 import { clearStylesheetCache } from '@/lib/apps/webflow/stylesheet-cache';
@@ -587,9 +588,9 @@ export default function WebflowSettings({
                   onRemove={() => setImportToRemove(importRecord)}
                   onOpenCollection={(collectionId) => {
                     if (onCloseAndNavigate) {
-                      onCloseAndNavigate(`/ycode/collections/${collectionId}`);
+                      onCloseAndNavigate(buildEditorPath(`/ycode/collections/${collectionId}`));
                     } else {
-                      router.push(`/ycode/collections/${collectionId}`);
+                      router.push(buildEditorPath(`/ycode/collections/${collectionId}`));
                     }
                   }}
                 />
