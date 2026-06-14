@@ -1,3 +1,5 @@
+import { STUDIO_BASE_PATH } from './brand';
+
 type ProjectPathInput = {
   id?: string | null;
   slug?: string | null;
@@ -9,6 +11,8 @@ type StudioProjectPathOptions = {
   projectRootIsYcode?: boolean;
 };
 
+const STUDIO_BASE_PATH_SLUG = STUDIO_BASE_PATH.split('/').filter(Boolean)[0] || 'studio';
+
 const RESERVED_STUDIO_PATH_SLUGS = new Set([
   '_next',
   'a',
@@ -19,6 +23,7 @@ const RESERVED_STUDIO_PATH_SLUGS = new Set([
   'llms',
   'robots',
   'sitemap',
+  STUDIO_BASE_PATH_SLUG,
   'ycode',
 ]);
 
