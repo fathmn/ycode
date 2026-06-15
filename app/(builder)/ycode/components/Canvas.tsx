@@ -224,7 +224,13 @@ function CanvasContent({
   // Move body layer classes from #canvas-body to the iframe's <body> element
   useEffect(() => {
     if (!bodyRef.current) return;
-    const iframeBody = bodyRef.current.ownerDocument.body;
+    const iframeDoc = bodyRef.current.ownerDocument;
+    // Mirror RootLayoutShell.tsx's <html lang="de"> so Design Canvas and
+    // Published render the same. Future locale support should derive both together.
+    if (iframeDoc.documentElement) {
+      iframeDoc.documentElement.lang = 'de';
+    }
+    const iframeBody = iframeDoc.body;
     const resolvedClasses = editingComponentId
       ? 'bg-transparent relative'
       : (bodyClasses || 'bg-white');
