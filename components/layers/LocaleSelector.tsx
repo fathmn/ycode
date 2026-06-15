@@ -1,5 +1,6 @@
 'use client';
 
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { isPreviewPathname } from '@/lib/studio-project-path';
 import type { Locale } from '@/types';
 
@@ -43,7 +44,7 @@ export default function LocaleSelector({
     // Prefer the server-resolved URL (translated slugs); fall back to naive prefixing
     const precomputed = localizedPageUrls?.[selectedLocaleId];
     const newUrl = precomputed
-      ? (isPreviewMode ? `/ycode/preview${precomputed}` : precomputed)
+      ? (isPreviewMode ? `${STUDIO_BASE_PATH}/preview${precomputed}` : precomputed)
       : buildLocalizedUrl(currentPageSlug, selectedLocale, currentLocale || null, isPreviewMode);
 
     // Redirect to the new URL
@@ -100,6 +101,6 @@ function buildLocalizedUrl(
     : pathWithoutLocale ? `${targetLocale.code}/${pathWithoutLocale}` : targetLocale.code;
 
   // Add appropriate prefix
-  const prefix = isPreviewMode ? '/ycode/preview' : '';
+  const prefix = isPreviewMode ? `${STUDIO_BASE_PATH}/preview` : '';
   return localizedPath ? `${prefix}/${localizedPath}` : (prefix || '/');
 }

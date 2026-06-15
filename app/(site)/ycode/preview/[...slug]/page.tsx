@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import { headers } from 'next/headers';
 import type { Metadata } from 'next';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { fetchPageByPath, fetchErrorPage } from '@/lib/page-fetcher';
 import PageRenderer from '@/components/PageRenderer';
 import PasswordForm from '@/components/PasswordForm';
@@ -134,7 +135,7 @@ export default async function Page({
           passwordProtection={{
             pageId: protection.protectedBy === 'page' ? protection.protectedById : undefined,
             folderId: protection.protectedBy === 'folder' ? protection.protectedById : undefined,
-            redirectUrl: buildPreviewRedirectUrl(`/ycode/preview/${slugPath}`, previewProjectParam),
+            redirectUrl: buildPreviewRedirectUrl(`${STUDIO_BASE_PATH}/preview/${slugPath}`, previewProjectParam),
             isPublished: false,
           }}
         />
@@ -151,7 +152,7 @@ export default async function Page({
           <PasswordForm
             pageId={protection.protectedBy === 'page' ? protection.protectedById : undefined}
             folderId={protection.protectedBy === 'folder' ? protection.protectedById : undefined}
-            redirectUrl={buildPreviewRedirectUrl(`/ycode/preview/${slugPath}`, previewProjectParam)}
+            redirectUrl={buildPreviewRedirectUrl(`${STUDIO_BASE_PATH}/preview/${slugPath}`, previewProjectParam)}
             isPublished={false}
           />
         </div>

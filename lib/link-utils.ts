@@ -11,10 +11,13 @@ import type {
 import { buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page-utils';
 import { isAssetFieldType, isVirtualAssetField } from '@/lib/collection-field-utils';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
+import { isPreviewPathname } from '@/lib/studio-project-path';
 
-const PREVIEW_ROUTE_PREFIX = '/ycode/preview';
+const PREVIEW_ROUTE_PREFIX_INTERNAL = '/ycode/preview';
+const PREVIEW_ROUTE_PREFIX = `${STUDIO_BASE_PATH}/preview`;
 
-const RESERVED_PREVIEW_PATH_PREFIXES = ['/ycode', '/api', '/_next'];
+const RESERVED_PREVIEW_PATH_PREFIXES = ['/ycode', STUDIO_BASE_PATH, '/api', '/_next'];
 const STATIC_ASSET_PATH_RE = /\.(?:avif|bmp|css|csv|eot|gif|ico|jpeg|jpg|js|json|map|mp3|mp4|otf|pdf|png|svg|ttf|txt|webm|webp|woff|woff2|xml|zip)(?:[?#].*)?$/i;
 const SAFE_HREF_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:']);
 
@@ -53,6 +56,10 @@ export function shouldPrefixPreviewHref(href: string): boolean {
   return true;
 }
 
+function isPreviewRouteHref(href: string): boolean {
+  return isPreviewPathname(href.split(/[?#]/)[0]);
+}
+
 export function prefixPreviewHref(href: string, previewProjectParam?: string | null): string {
   const explicitProject = typeof previewProjectParam === 'string' && previewProjectParam.trim()
     ? previewProjectParam.trim()
@@ -67,7 +74,7 @@ export function prefixPreviewHref(href: string, previewProjectParam?: string | n
     }
   };
 
-  if (href === PREVIEW_ROUTE_PREFIX || href.startsWith(`${PREVIEW_ROUTE_PREFIX}/`)) {
+  if (isPreviewRouteHref(href)) {
     if (explicitProject) return appendProjectParam(href, explicitProject);
     if (typeof window === 'undefined') return href;
     try {
@@ -91,7 +98,7 @@ export function prefixPreviewHref(href: string, previewProjectParam?: string | n
 
   try {
     const current = new URL(window.location.href);
-    if (current.pathname !== PREVIEW_ROUTE_PREFIX && !current.pathname.startsWith(`${PREVIEW_ROUTE_PREFIX}/`)) {
+    if (!isPreviewPathname(current.pathname)) {
       return prefixed;
     }
     const project = current.searchParams.get('project');
@@ -805,8 +812,8 @@ function resolveLinkTargetItemId(
 
 /**
  * Normalise an href to a comparable path: drops origin, query, hash, the
- * `/ycode/preview` prefix, and any trailing slash so two URLs that point at the
- * same page compare equal regardless of formatting.
+ * preview prefixes, and any trailing slash so two URLs that point at the same
+ * page compare equal regardless of formatting.
  */
 function normalizeLinkPath(href: string): string | null {
   let path = href.trim();
@@ -825,7 +832,8 @@ function normalizeLinkPath(href: string): string | null {
   }
 
   path = path.split('#')[0].split('?')[0];
-  path = path.replace(/^\/ycode\/preview/, '');
+  path = path.replace(new RegExp(`^${PREVIEW_ROUTE_PREFIX_INTERNAL}`), '');
+  path = path.replace(new RegExp(`^${PREVIEW_ROUTE_PREFIX}`), '');
   if (path.length > 1) path = path.replace(/\/+$/, '');
   if (path === '') path = '/';
   return path;

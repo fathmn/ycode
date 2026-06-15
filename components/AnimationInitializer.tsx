@@ -18,6 +18,7 @@ import { buildGsapProps, addTweenToTimeline, createSplitTextAnimation, generateI
 import { getCurrentBreakpoint } from '@/lib/breakpoint-utils';
 import { studioFetch } from '@/lib/api';
 import { remapLayerIdsForCollectionItem } from '@/lib/collection-utils';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { isPreviewPathname } from '@/lib/studio-project-path';
 import { useColorVariablesStore } from '@/stores/useColorVariablesStore';
 import type { Layer, LayerInteraction, Breakpoint } from '@/types';
@@ -544,8 +545,9 @@ function initializeStudioPreviewProjectLinks(): Array<() => void> {
   const project = new URL(window.location.href).searchParams.get('project');
   if (!project) return [];
 
+  const previewLinkSelector = `a[href^="/ycode/preview"], a[href^="${STUDIO_BASE_PATH}/preview"]`;
   const applyProject = (root: ParentNode = document) => {
-    const links = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href^="/ycode/preview"]'));
+    const links = Array.from(root.querySelectorAll<HTMLAnchorElement>(previewLinkSelector));
     links.forEach((link) => {
       const rawHref = link.getAttribute('href') || '';
       try {
@@ -567,7 +569,7 @@ function initializeStudioPreviewProjectLinks(): Array<() => void> {
       mutation.addedNodes.forEach((node) => {
         if (node.nodeType !== Node.ELEMENT_NODE) return;
         const element = node as Element;
-        if (element.matches('a[href^="/ycode/preview"]')) {
+        if (element.matches(previewLinkSelector)) {
           applyProject(element.parentNode || document);
         } else {
           applyProject(element);

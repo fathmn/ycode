@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { cache } from 'react';
 import { notFound } from 'next/navigation';
 import { headers } from 'next/headers';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { fetchHomepage, fetchErrorPage } from '@/lib/page-fetcher';
 import PageRenderer from '@/components/PageRenderer';
 import PasswordForm from '@/components/PasswordForm';
@@ -144,7 +145,7 @@ export default async function Home({ searchParams }: { searchParams: PreviewSear
           passwordProtection={{
             pageId: protection.protectedBy === 'page' ? protection.protectedById : undefined,
             folderId: protection.protectedBy === 'folder' ? protection.protectedById : undefined,
-            redirectUrl: buildPreviewRedirectUrl('/ycode/preview', previewProjectParam),
+            redirectUrl: buildPreviewRedirectUrl(`${STUDIO_BASE_PATH}/preview`, previewProjectParam),
             isPublished: false,
           }}
         />
@@ -159,7 +160,7 @@ export default async function Home({ searchParams }: { searchParams: PreviewSear
         <PasswordForm
           pageId={protection.protectedBy === 'page' ? protection.protectedById : undefined}
           folderId={protection.protectedBy === 'folder' ? protection.protectedById : undefined}
-          redirectUrl={buildPreviewRedirectUrl('/ycode/preview', previewProjectParam)}
+          redirectUrl={buildPreviewRedirectUrl(`${STUDIO_BASE_PATH}/preview`, previewProjectParam)}
           isPublished={false}
         />
       </div>
