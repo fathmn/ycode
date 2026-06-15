@@ -127,7 +127,8 @@ function projectForCurrentStudioPath(projects: StudioProject[]): StudioProject |
 
 function isProjectNeutralStudioEntry(): boolean {
   if (typeof window === 'undefined') return false;
-  return window.location.pathname === '/' || window.location.pathname === '/ycode';
+  const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  return path === '/' || path === '/ycode' || path === STUDIO_BASE_PATH;
 }
 
 export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCodeBuilderProps) {

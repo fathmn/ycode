@@ -8,6 +8,7 @@ import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { resolvePublishedProjectFromHeaders } from '@/lib/published-project';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 
 // Internal pagination path: always dynamic/no-store.
 export const dynamic = 'force-dynamic';
@@ -51,7 +52,7 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
             Willkommen im Studio
           </h1>
           <Link
-            href="/ycode"
+            href={STUDIO_BASE_PATH}
             className=" bg-blue-500 text-white text-sm font-medium h-8 flex items-center justify-center px-3 rounded-lg transition-colors"
           >
             Studio öffnen

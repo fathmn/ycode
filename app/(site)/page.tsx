@@ -8,6 +8,7 @@ import { generatePageMetadata, fetchGlobalPageSettings } from '@/lib/generate-pa
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
 import { resolvePublishedProjectFromHeaders } from '@/lib/published-project';
 import { getSiteBaseUrl } from '@/lib/url-utils';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import type { Metadata } from 'next';
 
 // Public pages resolve the Studio project from the request host and cache the
@@ -105,7 +106,7 @@ export default async function Home() {
             Willkommen im Studio
           </h1>
           <Link
-            href="/ycode"
+            href={STUDIO_BASE_PATH}
             className=" bg-blue-500 text-white text-sm font-medium h-8 flex items-center justify-center px-3 rounded-lg transition-colors"
           >
             Studio öffnen

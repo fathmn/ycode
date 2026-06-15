@@ -9,6 +9,7 @@ import PasswordForm from '@/components/PasswordForm';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
 import { getSiteBaseUrl } from '@/lib/url-utils';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import type { Redirect as RedirectType } from '@/types';
 
 function defaultGlobalSettings() {
@@ -147,7 +148,7 @@ function renderDefaultLanding() {
           Willkommen im Studio
         </h1>
         <Link
-          href="/ycode"
+          href={STUDIO_BASE_PATH}
           className=" bg-blue-500 text-white text-sm font-medium h-8 flex items-center justify-center px-3 rounded-lg transition-colors"
         >
           Studio öffnen

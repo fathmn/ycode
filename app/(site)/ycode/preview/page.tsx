@@ -114,7 +114,7 @@ export default async function Home({ searchParams }: { searchParams: PreviewSear
             No homepage found. Create an index page in the builder.
           </p>
           <Link
-            href="/ycode"
+            href={STUDIO_BASE_PATH}
             className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-8 rounded-lg transition-colors"
           >
             Open Builder →
