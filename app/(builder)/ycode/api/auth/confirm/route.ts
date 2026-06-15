@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 import type { EmailOtpType } from '@supabase/supabase-js';
 import { credentials } from '@/lib/credentials';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { parseSupabaseConfig } from '@/lib/supabase-config-parser';
 import type { SupabaseConfig } from '@/types';
 
@@ -22,7 +23,7 @@ function readEmailOtpType(value: string | null): EmailOtpType | null {
 function resolveRedirectUrl(request: NextRequest, type: EmailOtpType): URL {
   const requestUrl = new URL(request.url);
   const rawRedirect = requestUrl.searchParams.get('redirect_to');
-  const fallback = new URL('/ycode', request.url);
+  const fallback = new URL(STUDIO_BASE_PATH, request.url);
 
   let redirectUrl: URL;
   try {
@@ -45,7 +46,7 @@ function resolveRedirectUrl(request: NextRequest, type: EmailOtpType): URL {
 }
 
 function authErrorRedirect(request: NextRequest, error: string, type?: EmailOtpType | null): NextResponse {
-  const redirectUrl = new URL('/ycode', request.url);
+  const redirectUrl = new URL(STUDIO_BASE_PATH, request.url);
   redirectUrl.searchParams.set('auth_error', error);
   if (type === 'invite' || type === 'recovery') {
     redirectUrl.searchParams.set('auth_flow', type);

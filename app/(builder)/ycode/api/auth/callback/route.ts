@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { createRouteClient } from '@/lib/supabase-route-client';
 
 /**
@@ -20,7 +21,7 @@ export async function GET(request: NextRequest) {
 
       if (!supabase) {
         return NextResponse.redirect(
-          new URL('/ycode?auth_error=config', request.url)
+          new URL(`${STUDIO_BASE_PATH}?auth_error=config`, request.url)
         );
       }
 
@@ -29,11 +30,11 @@ export async function GET(request: NextRequest) {
       if (error) {
         console.error('Auth callback error:', error);
         return NextResponse.redirect(
-          new URL('/ycode?auth_error=auth', request.url)
+          new URL(`${STUDIO_BASE_PATH}?auth_error=auth`, request.url)
         );
       }
 
-      const redirectUrl = new URL('/ycode', request.url);
+      const redirectUrl = new URL(STUDIO_BASE_PATH, request.url);
       if (authFlow) {
         redirectUrl.searchParams.set('auth_flow', authFlow);
       }
@@ -41,11 +42,11 @@ export async function GET(request: NextRequest) {
     } catch (error) {
       console.error('Auth callback failed:', error);
       return NextResponse.redirect(
-        new URL('/ycode?auth_error=server', request.url)
+        new URL(`${STUDIO_BASE_PATH}?auth_error=server`, request.url)
       );
     }
   }
 
   // No code provided - return to the Studio auth surface.
-  return NextResponse.redirect(new URL('/ycode', request.url));
+  return NextResponse.redirect(new URL(STUDIO_BASE_PATH, request.url));
 }
