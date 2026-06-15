@@ -601,6 +601,15 @@ export async function POST(request: NextRequest) {
     {
       const stepStart = performance.now();
       try {
+        try {
+          const { regenerateDraftCssSafe } = await import('@/lib/server/cssGenerator');
+          await regenerateDraftCssSafe(studioGate.context.project.id);
+        } catch (error) {
+          console.warn('[Publish] Failed to load draft_css regeneration; continuing with CSS publish', {
+            projectId: studioGate.context.project.id,
+            error,
+          });
+        }
         result.changes.css = await publishCSS(studioGate.context.project.id);
         stats.tables.css.added = result.changes.css ? 1 : 0;
       } catch {

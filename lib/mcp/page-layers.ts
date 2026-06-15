@@ -99,6 +99,15 @@ export async function saveCachedLayers(pageId: string, layers: Layer[], projectI
 
   cache.set(key, { pageLayers: saved, expiresAt: Date.now() + CACHE_TTL_MS });
   broadcastLayersChanged(pageId, layers).catch(() => {});
+  try {
+    const { regenerateDraftCssSafe } = await import('@/lib/server/cssGenerator');
+    await regenerateDraftCssSafe(projectId);
+  } catch (error) {
+    console.warn('[MCP] Failed to load draft_css regeneration; continuing after saving layers', {
+      projectId,
+      error,
+    });
+  }
   return saved;
 }
 

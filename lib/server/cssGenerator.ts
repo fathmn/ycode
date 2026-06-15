@@ -152,6 +152,17 @@ export async function generateAndSaveDraftCSS(projectId?: string | null): Promis
   return css;
 }
 
+export async function regenerateDraftCssSafe(projectId?: string | null): Promise<void> {
+  try {
+    await generateAndSaveDraftCSS(projectId);
+  } catch (error) {
+    console.error('[CSS] Failed to regenerate draft_css; continuing without blocking caller', {
+      projectId,
+      error,
+    });
+  }
+}
+
 /**
  * Generate per-page CSS for a single page.
  *
