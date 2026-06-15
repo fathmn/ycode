@@ -39,6 +39,14 @@ const STUDIO_BUILDER_ROUTE_SEGMENTS = new Set([
   'settings',
 ]);
 
+export function isPreviewPathname(pathname: string | null | undefined): boolean {
+  if (!pathname) return false;
+  const p = pathname.split(/[?#]/)[0];
+  const ycode = '/ycode/preview';
+  const studio = `${STUDIO_BASE_PATH}/preview`;
+  return p === ycode || p.startsWith(ycode + '/') || p === studio || p.startsWith(studio + '/');
+}
+
 export function normalizeStudioProjectPathSlug(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim().replace(/^\/+|\/+$/g, '');

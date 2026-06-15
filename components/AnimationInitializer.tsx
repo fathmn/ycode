@@ -18,6 +18,7 @@ import { buildGsapProps, addTweenToTimeline, createSplitTextAnimation, generateI
 import { getCurrentBreakpoint } from '@/lib/breakpoint-utils';
 import { studioFetch } from '@/lib/api';
 import { remapLayerIdsForCollectionItem } from '@/lib/collection-utils';
+import { isPreviewPathname } from '@/lib/studio-project-path';
 import { useColorVariablesStore } from '@/stores/useColorVariablesStore';
 import type { Layer, LayerInteraction, Breakpoint } from '@/types';
 
@@ -55,7 +56,7 @@ function getStudioPreviewReportContext(location: Location, previewLocationKey: s
   const previewUrlObject = new URL(previewUrl, location.origin);
   const currentPathname = previewUrlObject.pathname;
 
-  if (currentPathname === '/ycode/preview' || currentPathname.startsWith('/ycode/preview/')) {
+  if (isPreviewPathname(currentPathname)) {
     return {
       previewUrl: `${previewUrlObject.pathname}${previewUrlObject.search}`,
       previewProjectParam: previewUrlObject.searchParams.get('project'),
@@ -538,7 +539,7 @@ function initializeStudioActiveNav(): Array<() => void> {
 
 function initializeStudioPreviewProjectLinks(): Array<() => void> {
   if (typeof window === 'undefined') return [];
-  if (window.location.pathname !== '/ycode/preview' && !window.location.pathname.startsWith('/ycode/preview/')) return [];
+  if (!isPreviewPathname(window.location.pathname)) return [];
 
   const project = new URL(window.location.href).searchParams.get('project');
   if (!project) return [];
@@ -549,7 +550,7 @@ function initializeStudioPreviewProjectLinks(): Array<() => void> {
       const rawHref = link.getAttribute('href') || '';
       try {
         const target = new URL(rawHref, window.location.origin);
-        if (target.pathname !== '/ycode/preview' && !target.pathname.startsWith('/ycode/preview/')) return;
+        if (!isPreviewPathname(target.pathname)) return;
         if (!target.searchParams.has('project')) {
           target.searchParams.set('project', project);
           link.setAttribute('href', `${target.pathname}${target.search}${target.hash}`);

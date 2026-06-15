@@ -64,6 +64,7 @@ import { buildPreviewAuthRevision, buildLocalizedSlugPath, buildLocalizedDynamic
 import { getTranslationValue, applyCmsTranslations, extractLayerTranslatableItemsShallow } from '@/lib/localisation-utils';
 import { cn } from '@/lib/utils';
 import { STUDIO_PROJECT_SELECTION_EVENT, getSelectedStudioProjectSlug } from '@/lib/api';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { getCollectionVariable, canDeleteLayer, findLayerById, findParentCollectionLayer, canLayerHaveLink, updateLayerProps, removeRichTextSublayer, isRichTextLayer, getLayerCmsFieldBinding } from '@/lib/layer-utils';
 import { CANVAS_BORDER, CANVAS_PADDING, updateViewportOverrides } from '@/lib/canvas-utils';
 import { BREAKPOINTS } from '@/lib/breakpoint-utils';
@@ -74,6 +75,7 @@ import { DropContainerIndicator, DropLineIndicator } from '@/components/DropIndi
 import { DragCaptureOverlay } from '@/components/DragCaptureOverlay';
 import ElementPickerOverlay from './ElementPickerOverlay';
 import { setDragCursor, clearDragCursor } from '@/lib/drag-cursor';
+import { isPreviewPathname } from '@/lib/studio-project-path';
 
 // 7. Types
 import type { Layer, Page, CollectionField, Asset } from '@/types';
@@ -111,7 +113,7 @@ interface CenterCanvasProps {
 }
 
 function withSelectedProjectPreviewParam(previewPath: string, projectSlug: string | null): string {
-  if (!previewPath.startsWith('/ycode/preview')) return previewPath;
+  if (!isPreviewPathname(previewPath)) return previewPath;
   if (!projectSlug) return '';
   const url = new URL(previewPath, 'http://studio.local');
   if (!url.searchParams.has('project')) {
@@ -2028,7 +2030,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
     // Error pages use special preview route
     if (currentPage.error_page !== null) {
-      return withSelectedProjectPreviewParam(`/ycode/preview/error-pages/${currentPage.error_page}`, selectedProjectSlug);
+      return withSelectedProjectPreviewParam(`${STUDIO_BASE_PATH}/preview/error-pages/${currentPage.error_page}`, selectedProjectSlug);
     }
 
     // Get collection item slug value for dynamic pages (with translation support)
@@ -2075,7 +2077,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
       ? buildLocalizedDynamicPageUrl(currentPage, folders, collectionItemSlug, selectedLocale, localeTranslations)
       : buildLocalizedSlugPath(currentPage, folders, 'page', selectedLocale, localeTranslations);
 
-    return withSelectedProjectPreviewParam(`/ycode/preview${path === '/' ? '' : path}`, selectedProjectSlug);
+    return withSelectedProjectPreviewParam(`${STUDIO_BASE_PATH}/preview${path === '/' ? '' : path}`, selectedProjectSlug);
   }, [currentPage, folders, currentPageCollectionItemId, collectionItemsFromStore, collectionFieldsFromStore, selectedLocale, localeTranslations, selectedProjectSlug]);
 
   const withPreviewRefreshParam = useCallback((url: string) => {

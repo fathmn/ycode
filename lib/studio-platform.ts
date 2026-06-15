@@ -5,7 +5,7 @@ import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { extractSupabaseAccessToken } from '@/lib/supabase-cookie-token';
 import { STUDIO_PREVIEW_NONCE_COOKIE } from '@/lib/studio-preview-nonce';
 import { getAuthUser } from '@/lib/supabase-auth';
-import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
+import { findStudioProjectPathMatches, isPreviewPathname } from '@/lib/studio-project-path';
 import { findStudioProjectHostMatches } from '@/lib/studio-project-hostnames';
 import { getConfiguredSiteAdminRoleForUser } from '@/lib/studio-site-admin';
 import { STUDIO_READ_ROLES, type StudioRole, normalizeStudioRole } from '@/lib/studio-roles';
@@ -1440,7 +1440,7 @@ function normalizePreviewUrl(value: unknown): string | null {
     return null;
   }
 
-  if (url.pathname !== '/ycode/preview' && !url.pathname.startsWith('/ycode/preview/')) return null;
+  if (!isPreviewPathname(url.pathname)) return null;
   const previewUrl = `${url.pathname}${url.search}`;
   return previewUrl;
 }

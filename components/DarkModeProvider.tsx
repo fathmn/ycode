@@ -2,7 +2,7 @@
 
 import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
-import { ycodePathnameFromStudioProjectPath } from '@/lib/studio-project-path';
+import { isPreviewPathname, ycodePathnameFromStudioProjectPath } from '@/lib/studio-project-path';
 
 /**
  * Resolves whether dark mode should be active based on the user's
@@ -38,7 +38,7 @@ export default function DarkModeProvider({ children }: { children: React.ReactNo
       rootIsYcode: isStudioHost,
       projectRootIsYcode: isStudioHost,
     });
-    const isPreviewRoute = editorPathname.startsWith('/ycode/preview');
+    const isPreviewRoute = isPreviewPathname(editorPathname);
     const isBuilderRoute = !isPreviewRoute && editorPathname.startsWith('/ycode');
     
     if (isBuilderRoute) {

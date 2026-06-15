@@ -46,6 +46,7 @@ import { Separator } from '@/components/ui/separator';
 import { BackupRestoreDialog } from '@/components/project/BackupRestoreDialog';
 import { isCloudVersion } from '@/lib/utils';
 import { useRole } from '@/hooks/use-role';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { canManageStudioIntegrations, isStudioOperatorRole } from '@/lib/studio-roles';
 import {
   studioProjectPathSlugFromPathname,
@@ -369,7 +370,7 @@ export default function HeaderBar({
 
     // Error pages use special preview route
     if (currentPage.error_page !== null) {
-      return `/ycode/preview/error-pages/${currentPage.error_page}`;
+      return `${STUDIO_BASE_PATH}/preview/error-pages/${currentPage.error_page}`;
     }
 
     // For dynamic pages, use localized dynamic URL builder
@@ -377,7 +378,7 @@ export default function HeaderBar({
       ? buildLocalizedDynamicPageUrl(currentPage, folders, collectionItemSlug, selectedLocale, localeTranslations)
       : localizedPagePath;
 
-    return `/ycode/preview${path === '/' ? '' : path}`;
+    return `${STUDIO_BASE_PATH}/preview${path === '/' ? '' : path}`;
   }, [currentPage, folders, localizedPagePath, collectionItemSlug, selectedLocale, localeTranslations]);
 
   // Build published URL (for the link in the center)

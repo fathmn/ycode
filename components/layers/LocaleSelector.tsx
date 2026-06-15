@@ -1,5 +1,6 @@
 'use client';
 
+import { isPreviewPathname } from '@/lib/studio-project-path';
 import type { Locale } from '@/types';
 
 interface LocaleSelectorProps {
@@ -27,7 +28,7 @@ export default function LocaleSelector({
   localizedPageUrls,
 }: LocaleSelectorProps) {
   // Detect if we're in preview mode
-  const isPreviewMode = typeof window !== 'undefined' && window.location.pathname.startsWith('/ycode/preview');
+  const isPreviewMode = typeof window !== 'undefined' && isPreviewPathname(window.location.pathname);
 
   // Get default locale (fallback when no locale is detected)
   const defaultLocale = availableLocales.find(l => l.is_default) || availableLocales[0];

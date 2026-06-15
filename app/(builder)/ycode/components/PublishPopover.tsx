@@ -10,6 +10,8 @@ import { Spinner } from '@/components/ui/spinner';
 import Icon from '@/components/ui/icon';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { STUDIO_PROJECT_SELECTION_EVENT, getSelectedStudioProjectSlug, publishApi } from '@/lib/api';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
+import { isPreviewPathname } from '@/lib/studio-project-path';
 import { formatRelativeTime } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -43,12 +45,12 @@ const BREAKDOWN_ITEMS: { key: keyof Omit<PublishPreviewCounts, 'total'>; label: 
 ];
 
 function getLastRenderedPreviewUrl(): string {
-  if (typeof window === 'undefined') return '/ycode/preview';
+  if (typeof window === 'undefined') return `${STUDIO_BASE_PATH}/preview`;
   const projectSlug = getSelectedStudioProjectSlug();
   const value = window.localStorage?.getItem('studio:last-rendered-preview-url') || '';
   try {
     const url = new URL(value, window.location.origin);
-    if (url.pathname === '/ycode/preview' || url.pathname.startsWith('/ycode/preview/')) {
+    if (isPreviewPathname(url.pathname)) {
       if (projectSlug && url.searchParams.get('project') !== projectSlug) {
         return getProjectPreviewUrl();
       }
@@ -62,9 +64,9 @@ function getLastRenderedPreviewUrl(): string {
 
 function getProjectPreviewUrl(): string {
   const projectSlug = getSelectedStudioProjectSlug();
-  if (!projectSlug) return '/ycode/preview';
+  if (!projectSlug) return `${STUDIO_BASE_PATH}/preview`;
   const params = new URLSearchParams({ project: projectSlug });
-  return `/ycode/preview?${params.toString()}`;
+  return `${STUDIO_BASE_PATH}/preview?${params.toString()}`;
 }
 
 function displayUrl(value: string): string {
@@ -97,7 +99,7 @@ function isRenderedPreviewForSelectedProject(value: string | null): boolean {
   if (typeof window === 'undefined' || !value) return false;
   try {
     const url = new URL(value, window.location.origin);
-    if (url.pathname !== '/ycode/preview' && !url.pathname.startsWith('/ycode/preview/')) {
+    if (!isPreviewPathname(url.pathname)) {
       return false;
     }
     const projectSlug = getSelectedStudioProjectSlug();
