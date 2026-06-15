@@ -35,6 +35,7 @@ export interface TypographyDesign {
   letterSpacing?: string;
   textAlign?: string;
   textTransform?: string;
+  hyphens?: string;
   textDecoration?: string;
   lineClamp?: string;
   textDecorationColor?: string;

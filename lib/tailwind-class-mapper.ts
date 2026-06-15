@@ -312,6 +312,7 @@ const CLASS_PROPERTY_MAP: Record<string, RegExp> = {
   textAlign: /^text-(left|center|right|justify|start|end)$/,
   textWrap: /^text-(wrap|nowrap|balance|pretty)$/,
   textTransform: /^(uppercase|lowercase|capitalize|normal-case)$/,
+  hyphens: /^hyphens-(auto|manual|none)$/,
   textDecoration: /^(underline|overline|line-through|no-underline)$/,
   textDecorationColor: /^decoration-\[.+\](\/\d+)?$/,
   textDecorationThickness: /^decoration-(\d+|auto|from-font|\[(?!#|rgb|hsl).+\])$/,
@@ -663,6 +664,8 @@ export function propertyToClass(
       case 'textTransform':
         if (value === 'none') return 'normal-case';
         return value; // uppercase, lowercase, capitalize
+      case 'hyphens':
+        return `hyphens-${value}`;
       case 'textDecoration':
         if (value === 'none') return 'no-underline';
         return value; // underline, line-through, overline
@@ -1387,6 +1390,11 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
     if (cls === 'lowercase') design.typography!.textTransform = 'lowercase';
     if (cls === 'capitalize') design.typography!.textTransform = 'capitalize';
     if (cls === 'normal-case') design.typography!.textTransform = 'none';
+
+    // Hyphens
+    if (cls === 'hyphens-auto') design.typography!.hyphens = 'auto';
+    if (cls === 'hyphens-manual') design.typography!.hyphens = 'manual';
+    if (cls === 'hyphens-none') design.typography!.hyphens = 'none';
 
     // Text Decoration
     if (cls === 'underline') design.typography!.textDecoration = 'underline';

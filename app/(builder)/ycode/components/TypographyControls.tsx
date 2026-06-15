@@ -66,6 +66,7 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
   const textDecorationThickness = getDesignProperty('typography', 'textDecorationThickness') || '';
   const underlineOffset = getDesignProperty('typography', 'underlineOffset') || '';
   const placeholderColor = getDesignProperty('typography', 'placeholderColor') || '';
+  const hyphens = getDesignProperty('typography', 'hyphens') || '';
   const lineClamp = getDesignProperty('typography', 'lineClamp') || '';
   const fontSizeHint = formatDesignValueHint(fontSize);
   const letterSpacingHint = formatDesignValueHint(letterSpacing);
@@ -80,6 +81,9 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
 
   // Detect if text transform is active
   const hasTransform = textTransform !== 'none' && textTransform !== '';
+
+  // Detect if hyphens is active
+  const hasHyphens = hyphens !== '' && hyphens !== 'none' && hyphens != null;
 
   // Detect if line clamp is active
   const hasLineClamp = lineClamp !== '' && lineClamp !== 'none';
@@ -262,6 +266,18 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
     updateDesignProperty('typography', 'textTransform', value);
   };
 
+  const handleAddHyphens = () => {
+    updateDesignProperty('typography', 'hyphens', 'auto');
+  };
+
+  const handleRemoveHyphens = () => {
+    updateDesignProperty('typography', 'hyphens', null);
+  };
+
+  const handleHyphensChange = (value: string) => {
+    updateDesignProperty('typography', 'hyphens', value);
+  };
+
   const handleAddLineClamp = () => {
     updateDesignProperty('typography', 'lineClamp', '2');
   };
@@ -375,6 +391,12 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
                 disabled={hasTransform}
               >
                 Transform
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={handleAddHyphens}
+                disabled={hasHyphens}
+              >
+                Hyphens
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={handleAddLineClamp}
@@ -711,6 +733,37 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
                 tabIndex={0}
                 className="p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
                 onClick={handleRemoveTransform}
+              >
+                <Icon name="x" className="size-2.5" />
+              </span>
+            </div>
+          </div>
+        )}
+
+        {!isIcon && hasHyphens && (
+          <div className="grid grid-cols-3 items-start">
+            <Label variant="muted" className="h-8">Hyphens</Label>
+            <div className="col-span-2 flex items-center gap-2">
+              <Select
+                value={hyphens}
+                onValueChange={handleHyphensChange}
+              >
+                <SelectTrigger className="flex-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="auto">Auto</SelectItem>
+                    <SelectItem value="manual">Manual</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <span
+                role="button"
+                tabIndex={0}
+                className="p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
+                onClick={handleRemoveHyphens}
               >
                 <Icon name="x" className="size-2.5" />
               </span>

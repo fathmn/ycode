@@ -69,6 +69,7 @@ export const designSchema = z.object({
     letterSpacing: z.string().optional(),
     textAlign: z.string().optional(),
     textTransform: z.string().optional(),
+    hyphens: z.string().optional(),
     textDecoration: z.string().optional(),
     textDecorationColor: z.string().optional(),
     textDecorationThickness: z.string().optional(),
