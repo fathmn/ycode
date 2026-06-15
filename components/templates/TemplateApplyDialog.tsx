@@ -19,6 +19,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import Icon from '@/components/ui/icon';
+import { buildEditorPath } from '@/hooks/use-editor-url';
 
 interface Template {
   id: string;
@@ -64,7 +65,7 @@ export function TemplateApplyDialog({
       onSuccess?.();
 
       // Navigate to /ycode to refresh the whole app with new content
-      window.location.href = '/ycode';
+      window.location.href = buildEditorPath('/ycode');
     } catch (err) {
       console.error('[TemplateApplyDialog] Error:', err);
       setError(err instanceof Error ? err.message : 'Failed to apply template');

@@ -1,6 +1,7 @@
 'use client';
 
 import { studioFetch } from '@/lib/api';
+import { buildEditorPath } from '@/hooks/use-editor-url';
 
 import React, { useState, useRef } from 'react';
 import {
@@ -140,7 +141,7 @@ export function BackupRestoreDialog({
 
       toast.success('Project successfully restored', { description: 'The builder will now reload' });
       handleClose();
-      setTimeout(() => { window.location.href = '/ycode'; }, 500);
+      setTimeout(() => { window.location.href = buildEditorPath('/ycode'); }, 500);
     } catch (err) {
       showError(err, 'Restore failed');
     } finally {

@@ -5,6 +5,7 @@ import { studioFetch } from '@/lib/api';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 
 export default function ResetDatabasePage() {
   const [loading, setLoading] = useState(false);
@@ -35,7 +36,7 @@ export default function ResetDatabasePage() {
         throw new Error(result.error || 'Failed to reset database');
       }
 
-      window.location.href = '/ycode';
+      window.location.href = STUDIO_BASE_PATH;
     } catch (err) {
       console.error('Error resetting database:', err);
       setError(err instanceof Error ? err.message : 'Failed to reset database');

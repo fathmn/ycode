@@ -57,7 +57,7 @@ export default function StudioProjectSelector() {
 
       const pathProject = findProjectForCurrentPath(response.data);
       if (pathProject) {
-        setSelectedStudioProjectSlug(pathProject.slug);
+        setSelectedStudioProjectSlug(pathProject.studio_path_slug ?? pathProject.slug);
         setSelectedSlug(pathProject.slug);
         return;
       }
@@ -67,7 +67,7 @@ export default function StudioProjectSelector() {
       const isSiteAdmin = hasSiteAdminProjectRole(response.data);
 
       if (!hasStoredProject && response.data.length > 0 && !isSiteAdmin) {
-        setSelectedStudioProjectSlug(response.data[0].slug);
+        setSelectedStudioProjectSlug(response.data[0].studio_path_slug ?? response.data[0].slug);
         setSelectedSlug(response.data[0].slug);
       }
     };
@@ -95,7 +95,7 @@ export default function StudioProjectSelector() {
   const handleSelect = (project: StudioProject) => {
     if (!project.studio_path_slug) return;
     if (project.slug === selectedProject?.slug) return;
-    setSelectedStudioProjectSlug(project.slug);
+    setSelectedStudioProjectSlug(project.studio_path_slug ?? project.slug);
     setSelectedSlug(project.slug);
     window.location.assign(studioProjectPathFromSlug(project.studio_path_slug));
   };

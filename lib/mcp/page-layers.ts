@@ -31,6 +31,15 @@ interface CacheEntry {
 }
 
 const CACHE_TTL_MS = 5_000;
+const DRAFT_CSS_REGEN_DEBOUNCE_MS = 750;
+
+type RegenState = {
+  timer: ReturnType<typeof setTimeout> | null;
+  running: boolean;
+  rerun: boolean;
+};
+
+const draftCssRegenState = new Map<string, RegenState>();
 
 const globalForPageCache = globalThis as unknown as {
   __mcpPageLayersCache?: Map<string, CacheEntry>;
@@ -47,6 +56,53 @@ function isFresh(entry: CacheEntry | undefined): entry is CacheEntry {
 // never serve another project's draft from the shared in-memory cache.
 function cacheKey(pageId: string, projectId?: string | null): string {
   return `${projectId ?? 'default'}:${pageId}`;
+}
+
+function regenKeyFor(projectId?: string | null): string {
+  return projectId ?? 'default';
+}
+
+async function runDraftCssRegen(projectId: string | null | undefined, key: string): Promise<void> {
+  const state = draftCssRegenState.get(key);
+  if (!state) return;
+  if (state.running) {
+    state.rerun = true;
+    return;
+  }
+
+  state.running = true;
+  state.rerun = false;
+  try {
+    const { regenerateDraftCssSafe } = await import('@/lib/server/cssGenerator');
+    await regenerateDraftCssSafe(projectId);
+  } catch (error) {
+    console.warn('[MCP] Failed to load draft_css regeneration; continuing', {
+      projectId,
+      error,
+    });
+  } finally {
+    state.running = false;
+    if (state.rerun) {
+      state.rerun = false;
+      void runDraftCssRegen(projectId, key);
+    }
+  }
+}
+
+function scheduleDraftCssRegen(projectId?: string | null): void {
+  const key = regenKeyFor(projectId);
+  let state = draftCssRegenState.get(key);
+  if (!state) {
+    state = { timer: null, running: false, rerun: false };
+    draftCssRegenState.set(key, state);
+  }
+
+  if (state.timer) clearTimeout(state.timer);
+  state.timer = setTimeout(() => {
+    const currentState = draftCssRegenState.get(key);
+    if (currentState) currentState.timer = null;
+    void runDraftCssRegen(projectId, key);
+  }, DRAFT_CSS_REGEN_DEBOUNCE_MS);
 }
 
 /**
@@ -99,15 +155,7 @@ export async function saveCachedLayers(pageId: string, layers: Layer[], projectI
 
   cache.set(key, { pageLayers: saved, expiresAt: Date.now() + CACHE_TTL_MS });
   broadcastLayersChanged(pageId, layers).catch(() => {});
-  try {
-    const { regenerateDraftCssSafe } = await import('@/lib/server/cssGenerator');
-    await regenerateDraftCssSafe(projectId);
-  } catch (error) {
-    console.warn('[MCP] Failed to load draft_css regeneration; continuing after saving layers', {
-      projectId,
-      error,
-    });
-  }
+  scheduleDraftCssRegen(projectId);
   return saved;
 }
 

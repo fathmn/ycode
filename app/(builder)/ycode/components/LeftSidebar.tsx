@@ -22,7 +22,7 @@ import { usePagesStore } from '@/stores/usePagesStore';
 import { resetBindingsAfterMove } from '@/lib/layer-utils';
 
 // 5.5 Hooks
-import { useEditorUrl } from '@/hooks/use-editor-url';
+import { buildEditorPath, useEditorUrl } from '@/hooks/use-editor-url';
 
 import type { EditorTab } from '@/hooks/use-editor-url';
 import { useLayerLocks } from '@/hooks/use-layer-locks';
@@ -127,7 +127,7 @@ const LeftSidebar = React.memo(function LeftSidebar({
 
     window.addEventListener('toggleElementLibrary', handleToggleElementLibrary);
     return () => window.removeEventListener('toggleElementLibrary', handleToggleElementLibrary);
-  }, []);
+  }, [setActiveSidebarTab]);
 
   // Listen for close ElementLibrary event (e.g., when clicking on canvas)
   useEffect(() => {
@@ -337,7 +337,7 @@ const LeftSidebar = React.memo(function LeftSidebar({
               const targetPageId = currentPageId || (pages.length > 0 ? pages[0].id : null);
               if (targetPageId) {
                 const segment = newTab === 'layers' ? 'layers' : 'pages';
-                const newPath = `/ycode/${segment}/${targetPageId}${window.location.search}`;
+                const newPath = `${buildEditorPath(`/ycode/${segment}/${targetPageId}`)}${window.location.search}`;
                 window.history.replaceState(null, '', newPath);
               }
             }}

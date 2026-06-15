@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
+import { buildEditorPath } from '@/hooks/use-editor-url';
 import type { Layer } from '@/types';
 import { useFontsStore } from '@/stores/useFontsStore';
 import { YCODE_FIGMA_SIGNATURE, isYcodeFigmaPayload } from '@/lib/figma/types';
@@ -169,7 +170,7 @@ export function useImportPaste({
 
   /** Point the user at the Webflow Design settings to connect a published site. */
   const openWebflowSettings = useCallback(() => {
-    router.push('/ycode/integrations/apps?app=webflow');
+    router.push(`${buildEditorPath('/ycode/integrations/apps')}?app=webflow`);
   }, [router]);
 
   const importWebflow = useCallback(async (text: string, placement?: ExternalPastePlacement) => {

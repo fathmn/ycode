@@ -566,7 +566,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
         const pathProject = projectForCurrentStudioPath(projects);
         if (pathProject) {
-          setSelectedStudioProjectSlug(pathProject.slug);
+          setSelectedStudioProjectSlug(pathProject.studio_path_slug ?? pathProject.slug);
           setProjectSelectionReady(true);
           return;
         }
@@ -590,7 +590,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
             setProjectSelectionReady(true);
             return;
           }
-          setSelectedStudioProjectSlug(projects[0].slug);
+          setSelectedStudioProjectSlug(projects[0].studio_path_slug ?? projects[0].slug);
         }
 
         setProjectSelectionReady(true);
@@ -2214,7 +2214,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
                 disabled={!project.studio_path_slug}
                 onClick={() => {
                   if (!project.studio_path_slug) return;
-                  setSelectedStudioProjectSlug(project.slug);
+                  setSelectedStudioProjectSlug(project.studio_path_slug ?? project.slug);
                   window.location.assign(studioProjectPathFromSlug(project.studio_path_slug));
                 }}
               >

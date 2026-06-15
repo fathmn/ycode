@@ -15,6 +15,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import Icon from '@/components/ui/icon';
 import { Label } from '@/components/ui/label';
 import BuilderLoading from '@/components/BuilderLoading';
+import { buildEditorPath } from '@/hooks/use-editor-url';
 interface Template {
   id: string;
   name: string;
@@ -93,7 +94,7 @@ export function TemplateGallery({
       }
 
       onApplySuccess?.();
-      window.location.href = '/ycode';
+      window.location.href = buildEditorPath('/ycode');
     } catch (err) {
       console.error('[TemplateGallery] Apply error:', err);
       setApplyError(

@@ -3,7 +3,6 @@
 import { studioFetch } from '@/lib/api';
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
@@ -45,9 +44,9 @@ import { Spinner } from '@/components/ui/spinner';
 import FileManagerDialog from '../../components/FileManagerDialog';
 import { toast } from 'sonner';
 import { ASSET_CATEGORIES } from '@/lib/asset-constants';
+import { buildEditorPath } from '@/hooks/use-editor-url';
 
 export default function GeneralSettingsPage() {
-  const router = useRouter();
   const [activeTab, setActiveTab] = useState('website');
   const { getSettingByKey, saveSettings } = useSettingsStore();
 
@@ -300,14 +299,14 @@ export default function GeneralSettingsPage() {
         throw new Error(result.error || 'Projekt konnte nicht zurückgesetzt werden');
       }
 
-      window.location.href = '/ycode';
+      window.location.href = buildEditorPath('/ycode');
     } catch (err) {
       console.error('Error resetting project:', err);
       toast.error(err instanceof Error ? err.message : 'Projekt konnte nicht zurückgesetzt werden');
       setIsResetting(false);
       setShowResetDialog(false);
     }
-  }, [router]);
+  }, []);
 
   return (
     <div className="p-8">
