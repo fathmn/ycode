@@ -11,6 +11,7 @@ import { getPageById } from '@/lib/repositories/pageRepository';
 import { getCachedDraft, saveCachedLayers } from '@/lib/mcp/page-layers';
 import { findLayerById, updateLayerById } from '@/lib/mcp/utils';
 import { findParentCollectionLayer } from '@/lib/layer-utils';
+import type { McpProjectContext } from '@/lib/mcp/project-context';
 import {
   fieldConditionSchema,
   itemIdConditionSchema,
@@ -113,7 +114,7 @@ function findCollectionLayer(layers: Layer[], layerId: string):
   return { layer, collection };
 }
 
-export function registerCollectionLayerTools(server: McpServer) {
+export function registerCollectionLayerTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
     'bind_collection_layer',
     `Bind a Collection List element (add_layer template "collection") to a CMS collection so it
@@ -155,7 +156,7 @@ visitors control sorting at runtime.`,
       sort_order_input_layer_id: z.string().nullable().optional().describe('Link sort_order to a filter input layer (null clears).'),
     },
     async ({ page_id, layer_id, collection_id, sort_by, sort_order, limit, pagination, source_field_id, source_field_type, source_field_source, sort_by_input_layer_id, sort_order_input_layer_id }) => {
-      const pageLayers = await getCachedDraft(page_id);
+      const pageLayers = await getCachedDraft(page_id, projectContext.projectId);
       if (!pageLayers) {
         return { content: [{ type: 'text' as const, text: `Error: Page "${page_id}" has no layers.` }], isError: true };
       }
@@ -220,7 +221,7 @@ visitors control sorting at runtime.`,
         ...l,
         variables: { ...l.variables, collection: nextVariable },
       }));
-      await saveCachedLayers(page_id, updated);
+      await saveCachedLayers(page_id, updated, projectContext.projectId);
 
       return {
         content: [{
@@ -272,7 +273,7 @@ at runtime instead of a static value (use input_layer_id2 for the second bound o
       })).describe('Filter groups joined by AND. Empty array clears all filters.'),
     },
     async ({ page_id, layer_id, groups }) => {
-      const pageLayers = await getCachedDraft(page_id);
+      const pageLayers = await getCachedDraft(page_id, projectContext.projectId);
       if (!pageLayers) {
         return { content: [{ type: 'text' as const, text: `Error: Page "${page_id}" has no layers.` }], isError: true };
       }
@@ -308,7 +309,7 @@ at runtime instead of a static value (use input_layer_id2 for the second bound o
         ...l,
         variables: { ...l.variables, collection: nextVariable },
       }));
-      await saveCachedLayers(page_id, updated);
+      await saveCachedLayers(page_id, updated, projectContext.projectId);
 
       return {
         content: [{
@@ -355,7 +356,7 @@ page_id_target = the dynamic page, and NO collection_item_id (it resolves to the
       suffix: z.string().optional().describe('Text layers only: literal text rendered after the field value.'),
     },
     async ({ page_id, layer_id, field_id, source, target, format, prefix, suffix }) => {
-      const pageLayers = await getCachedDraft(page_id);
+      const pageLayers = await getCachedDraft(page_id, projectContext.projectId);
       if (!pageLayers) {
         return { content: [{ type: 'text' as const, text: `Error: Page "${page_id}" has no layers.` }], isError: true };
       }
@@ -435,7 +436,7 @@ page_id_target = the dynamic page, and NO collection_item_id (it resolves to the
       }
 
       const updated = updateLayerById(layers, layer_id, (l) => ({ ...l, variables: nextVariables }));
-      await saveCachedLayers(page_id, updated);
+      await saveCachedLayers(page_id, updated, projectContext.projectId);
 
       return {
         content: [{
@@ -470,7 +471,7 @@ or on a dynamic CMS page (source "page").`,
       ])).min(1).describe('Ordered segments interleaving literal text and field references.'),
     },
     async ({ page_id, layer_id, source, segments }) => {
-      const pageLayers = await getCachedDraft(page_id);
+      const pageLayers = await getCachedDraft(page_id, projectContext.projectId);
       if (!pageLayers) {
         return { content: [{ type: 'text' as const, text: `Error: Page "${page_id}" has no layers.` }], isError: true };
       }
@@ -516,7 +517,7 @@ or on a dynamic CMS page (source "page").`,
         text: { type: 'dynamic_rich_text', data: { content: paragraphDoc(content) } },
       };
       const updated = updateLayerById(layers, layer_id, (l) => ({ ...l, variables: nextVariables }));
-      await saveCachedLayers(page_id, updated);
+      await saveCachedLayers(page_id, updated, projectContext.projectId);
 
       return {
         content: [{
@@ -555,7 +556,7 @@ CONDITION SOURCES:
       })).describe('Condition groups joined by AND. Empty array clears all conditions (always visible).'),
     },
     async ({ page_id, layer_id, groups }) => {
-      const pageLayers = await getCachedDraft(page_id);
+      const pageLayers = await getCachedDraft(page_id, projectContext.projectId);
       if (!pageLayers) {
         return { content: [{ type: 'text' as const, text: `Error: Page "${page_id}" has no layers.` }], isError: true };
       }
@@ -595,7 +596,7 @@ CONDITION SOURCES:
           conditionalVisibility: builtGroups.length > 0 ? { groups: builtGroups } : undefined,
         },
       }));
-      await saveCachedLayers(page_id, updated);
+      await saveCachedLayers(page_id, updated, projectContext.projectId);
 
       return {
         content: [{

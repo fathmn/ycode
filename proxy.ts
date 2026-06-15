@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { STUDIO_PREVIEW_NONCE_COOKIE } from '@/lib/studio-preview-nonce';
 import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { projectLookupFromHost, projectLookupFromRequestHosts } from '@/lib/project-host';
-import { findStudioProjectPathMatches } from '@/lib/studio-project-path';
+import { findStudioProjectPathMatches, isPreviewPathname } from '@/lib/studio-project-path';
 import { findStudioProjectHostMatches } from '@/lib/studio-project-hostnames';
 import { getConfiguredSiteAdminRoleForUser } from '@/lib/studio-site-admin';
 import {
@@ -264,7 +264,7 @@ function getRequiredRoles(pathname: string, method: string): StudioRole[] | null
     return WRITE_ROLES;
   }
 
-  if (pathname.startsWith('/ycode/api') || pathname.startsWith('/ycode/preview')) {
+  if (pathname.startsWith('/ycode/api') || isPreviewPathname(pathname)) {
     return READ_ROLES;
   }
 
@@ -1159,11 +1159,11 @@ export async function proxy(request: NextRequest) {
   }
 
   // Protect API and preview routes with auth
-  if (pathname.startsWith('/ycode/api') || pathname.startsWith('/ycode/preview')) {
+  if (pathname.startsWith('/ycode/api') || isPreviewPathname(pathname)) {
     const authResult = await verifyApiAuth(request);
     if (!authResult.ok) {
-      if (pathname.startsWith('/ycode/preview')) {
-        const redirect = NextResponse.redirect(new URL('/ycode', request.url));
+      if (isPreviewPathname(pathname)) {
+        const redirect = NextResponse.redirect(new URL(STUDIO_BASE_PATH, request.url));
         redirect.cookies.set(STUDIO_PREVIEW_NONCE_COOKIE, '', { path: '/ycode', maxAge: 0 });
         return redirect;
       }
@@ -1233,7 +1233,7 @@ export async function proxy(request: NextRequest) {
   // Add pathname header for layout to determine dark mode
   response.headers.set('x-pathname', pathname);
 
-  if (pathname.startsWith('/ycode/preview') && request.method === 'GET') {
+  if (isPreviewPathname(pathname) && request.method === 'GET') {
     await applyPreviewNonceCookie(request, response, `${pathname}${request.nextUrl.search}`);
   }
 

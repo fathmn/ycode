@@ -4,14 +4,15 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Layer, LayerInteraction } from '@/types';
 import { getCachedLayers as getPageLayers, saveCachedLayers } from '@/lib/mcp/page-layers';
 import { findLayerById, updateLayerById, generateId } from '@/lib/mcp/utils';
+import type { McpProjectContext } from '@/lib/mcp/project-context';
 import {
   ANIMATION_EASES,
   ANIMATION_PRESETS,
   buildInteractionFromPreset,
 } from '@/lib/mcp/animation-presets';
 
-async function savePageLayers(pageId: string, layers: Layer[]): Promise<void> {
-  await saveCachedLayers(pageId, layers);
+async function savePageLayers(pageId: string, layers: Layer[], projectId?: string | null): Promise<void> {
+  await saveCachedLayers(pageId, layers, projectId);
 }
 
 const presetEnum = z.enum(ANIMATION_PRESETS);
@@ -85,7 +86,7 @@ function ensureIds(interaction: z.infer<typeof interactionSchema>): LayerInterac
   };
 }
 
-export function registerAnimationTools(server: McpServer) {
+export function registerAnimationTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
     'add_animation',
     `Add a curated animation to a layer using one of YCode's preset patterns.
@@ -132,7 +133,7 @@ Options vary by preset:
       }).optional(),
     },
     async ({ page_id, layer_id, preset, trigger, targets, options }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       const owner = findLayerById(layers, layer_id);
       if (!owner) {
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
@@ -159,7 +160,7 @@ Options vary by preset:
         interactions: [...(l.interactions || []), interaction],
       }));
 
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return {
         content: [{
           type: 'text' as const,
@@ -181,7 +182,7 @@ Options vary by preset:
       layer_id: z.string().describe('The layer ID'),
     },
     async ({ page_id, layer_id }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
@@ -206,7 +207,7 @@ Options vary by preset:
       interaction_id: z.string().describe('The interaction ID to remove'),
     },
     async ({ page_id, layer_id, interaction_id }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
@@ -218,7 +219,7 @@ Options vary by preset:
       }
 
       const updated = updateLayerById(layers, layer_id, (l) => ({ ...l, interactions: next }));
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: `Removed interaction "${interaction_id}"` }] };
     },
   );
@@ -231,14 +232,14 @@ Options vary by preset:
       layer_id: z.string().describe('The layer ID'),
     },
     async ({ page_id, layer_id }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
       }
       const removed = (layer.interactions || []).length;
       const updated = updateLayerById(layers, layer_id, (l) => ({ ...l, interactions: [] }));
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
       return { content: [{ type: 'text' as const, text: `Cleared ${removed} animation(s) from "${layer.customName || layer.name}"` }] };
     },
   );
@@ -272,7 +273,7 @@ position can be a number (seconds), ">" (after previous), or "<" (with previous)
         .describe('Replaces the entire interactions array. Pass [] to clear (or use clear_layer_animations).'),
     },
     async ({ page_id, layer_id, interactions }) => {
-      const layers = await getPageLayers(page_id);
+      const layers = await getPageLayers(page_id, projectContext.projectId);
       const layer = findLayerById(layers, layer_id);
       if (!layer) {
         return { content: [{ type: 'text' as const, text: `Error: Layer "${layer_id}" not found.` }], isError: true };
@@ -281,7 +282,7 @@ position can be a number (seconds), ">" (after previous), or "<" (with previous)
       const normalized = interactions.map(ensureIds);
 
       const updated = updateLayerById(layers, layer_id, (l) => ({ ...l, interactions: normalized }));
-      await savePageLayers(page_id, updated);
+      await savePageLayers(page_id, updated, projectContext.projectId);
 
       return {
         content: [{

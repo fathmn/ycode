@@ -110,6 +110,10 @@ export function ycodePathnameFromStudioProjectPath(
   const [pathWithoutQuery] = pathname.split(/[?#]/);
   if (!pathWithoutQuery || pathWithoutQuery === '/') return options.rootIsYcode ? '/ycode' : (pathWithoutQuery || '/');
   if (pathWithoutQuery === '/ycode' || pathWithoutQuery.startsWith('/ycode/')) return pathWithoutQuery;
+  if (pathWithoutQuery === STUDIO_BASE_PATH) return '/ycode';
+  if (pathWithoutQuery.startsWith(`${STUDIO_BASE_PATH}/`)) {
+    return `/ycode${pathWithoutQuery.slice(STUDIO_BASE_PATH.length)}`;
+  }
 
   const segments = pathWithoutQuery.split('/').filter(Boolean);
   const projectPathSlug = normalizeStudioProjectPathSlug(segments[0]);

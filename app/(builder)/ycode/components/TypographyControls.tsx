@@ -83,7 +83,7 @@ const TypographyControls = memo(function TypographyControls({ layer, onLayerUpda
   const hasTransform = textTransform !== 'none' && textTransform !== '';
 
   // Detect if hyphens is active
-  const hasHyphens = hyphens !== '' && hyphens !== 'none' && hyphens != null;
+  const hasHyphens = hyphens != null && hyphens !== '';
 
   // Detect if line clamp is active
   const hasLineClamp = lineClamp !== '' && lineClamp !== 'none';

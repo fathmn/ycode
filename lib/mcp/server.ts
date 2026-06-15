@@ -41,7 +41,7 @@ export function createMcpServer(projectContext: McpProjectContext = {}): McpServ
   registerBatchTools(server, projectContext);
   registerLayoutTools(server, projectContext);
   registerCollectionTools(server);
-  registerCollectionLayerTools(server);
+  registerCollectionLayerTools(server, projectContext);
   registerStyleTools(server, projectContext);
   registerAssetTools(server);
   registerAssetFolderTools(server);
@@ -52,7 +52,7 @@ export function createMcpServer(projectContext: McpProjectContext = {}): McpServ
   registerFormTools(server, projectContext);
   registerSettingsTools(server, projectContext);
   registerPublishingTools(server, projectContext);
-  registerAnimationTools(server);
+  registerAnimationTools(server, projectContext);
 
   registerReferenceResources(server);
   registerSiteResources(server, projectContext);

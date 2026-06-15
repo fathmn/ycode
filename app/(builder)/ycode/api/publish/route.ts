@@ -601,17 +601,25 @@ export async function POST(request: NextRequest) {
     {
       const stepStart = performance.now();
       try {
+        let cssRegenerated = false;
         try {
           const { regenerateDraftCssSafe } = await import('@/lib/server/cssGenerator');
-          await regenerateDraftCssSafe(studioGate.context.project.id);
+          cssRegenerated = await regenerateDraftCssSafe(studioGate.context.project.id);
         } catch (error) {
-          console.warn('[Publish] Failed to load draft_css regeneration; continuing with CSS publish', {
+          console.warn('[Publish] Failed to load draft_css regeneration; skipping CSS publish to avoid stale CSS', {
             projectId: studioGate.context.project.id,
             error,
           });
+          cssRegenerated = false;
         }
-        result.changes.css = await publishCSS(studioGate.context.project.id);
-        stats.tables.css.added = result.changes.css ? 1 : 0;
+        if (cssRegenerated) {
+          result.changes.css = await publishCSS(studioGate.context.project.id);
+          stats.tables.css.added = result.changes.css ? 1 : 0;
+        } else {
+          console.warn('[Publish] Skipped publishCSS because draft_css regeneration did not succeed (avoiding stale published_css)', {
+            projectId: studioGate.context.project.id,
+          });
+        }
       } catch {
         // Don't fail the entire publish if CSS fails
       }

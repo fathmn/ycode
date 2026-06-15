@@ -152,14 +152,16 @@ export async function generateAndSaveDraftCSS(projectId?: string | null): Promis
   return css;
 }
 
-export async function regenerateDraftCssSafe(projectId?: string | null): Promise<void> {
+export async function regenerateDraftCssSafe(projectId?: string | null): Promise<boolean> {
   try {
     await generateAndSaveDraftCSS(projectId);
+    return true;
   } catch (error) {
     console.error('[CSS] Failed to regenerate draft_css; continuing without blocking caller', {
       projectId,
       error,
     });
+    return false;
   }
 }
 
