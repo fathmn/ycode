@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getLayersByPageId, upsertDraftLayers } from '@/lib/repositories/pageLayersRepository';
+import { scheduleDraftCssRegen } from '@/lib/mcp/page-layers';
 import { noCache } from '@/lib/api-response';
 import { recordStudioCustomCodeMutation, requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 import type { Layer } from '@/types';
@@ -99,6 +100,7 @@ export async function PUT(request: NextRequest) {
     if (!roleCheck.ok) return roleCheck.response;
 
     const draft = await upsertDraftLayers(pageId, layers as Layer[], undefined, undefined, roleCheck.context.project.id);
+    scheduleDraftCssRegen(roleCheck.context.project.id);
     const htmlEmbedCode = collectHtmlEmbedCode(layers as Layer[]);
 
     if (htmlEmbedCode.length > 0) {

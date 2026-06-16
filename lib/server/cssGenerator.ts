@@ -46,11 +46,8 @@ function extractClassesFromLayers(layers: Layer[]): Set<string> {
   function processLayer(layer: Layer): void {
     if (layer.settings?.hidden) return;
 
-    if (layer.componentId) {
-      if (processedComponentIds.has(layer.componentId)) return;
-      processedComponentIds.add(layer.componentId);
-    }
-
+    // Per-instance classes/styles must always be collected (the Set dedupes), even for
+    // repeated component instances — otherwise a second instance's class overrides are lost.
     extractClasses(layer.classes);
 
     if (layer.textStyles) {
@@ -63,6 +60,12 @@ function extractClassesFromLayers(layers: Layer[]): Set<string> {
       Object.values(DEFAULT_TEXT_STYLES).forEach(style => {
         extractClasses(style.classes);
       });
+    }
+
+    // Guard only the children recursion against repeated component subtrees.
+    if (layer.componentId) {
+      if (processedComponentIds.has(layer.componentId)) return;
+      processedComponentIds.add(layer.componentId);
     }
 
     if (layer.children && Array.isArray(layer.children)) {

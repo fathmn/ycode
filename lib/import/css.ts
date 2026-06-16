@@ -193,7 +193,7 @@ function mapDeclaration(prop: string, val: string): string[] {
     case 'font-size': out.push(`text-[${val}]`); break;
     case 'font-weight': out.push(`font-[${val}]`); break;
     case 'font-family':
-      out.push(`font-[${val.replace(/,\s*/g, ',').replace(/\s+/g, '_')}]`);
+      out.push(`font-[family-name:${val.replace(/,\s*/g, ',').replace(/\s+/g, '_')}]`);
       break;
     case 'color': out.push(`text-[${val}]`); break;
     case 'line-height': out.push(`leading-[${val}]`); break;

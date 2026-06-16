@@ -89,7 +89,7 @@ async function runDraftCssRegen(projectId: string | null | undefined, key: strin
   }
 }
 
-function scheduleDraftCssRegen(projectId?: string | null): void {
+export function scheduleDraftCssRegen(projectId?: string | null): void {
   const key = regenKeyFor(projectId);
   let state = draftCssRegenState.get(key);
   if (!state) {

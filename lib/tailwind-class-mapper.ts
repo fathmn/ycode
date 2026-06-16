@@ -1348,7 +1348,7 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
     }
 
     // Font Weight (arbitrary values)
-    if (cls.startsWith('font-[') && !cls.includes('sans') && !cls.includes('serif') && !cls.includes('mono')) {
+    if (cls.match(/^font-\[\d/)) {
       const value = extractArbitraryValue(cls);
       if (value) design.typography!.fontWeight = value;
     }
