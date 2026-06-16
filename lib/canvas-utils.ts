@@ -17,7 +17,7 @@ export const CANVAS_PADDING = CANVAS_BORDER * 2;
 const VIEWPORT_HEIGHT_UNITS = ['vh', 'svh', 'dvh', 'lvh'] as const;
 // 0.2.1.11 was used in a prior Studio CSS deploy; bump again to invalidate
 // cached canvas.css after merging upstream 1.21.1 canvas.css changes.
-const CANVAS_CSS_VERSION = '0.2.2.0';
+const CANVAS_CSS_VERSION = '0.2.2.1';
 
 /**
  * Maps a Tailwind utility prefix to the CSS properties it sets.

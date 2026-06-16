@@ -1097,6 +1097,17 @@ body [data-studio-mobile-drawer-link] {
   cursor: text !important;
 }
 
+.ycode-text-editor p,
+.ycode-text-editor h1,
+.ycode-text-editor h2,
+.ycode-text-editor h3,
+.ycode-text-editor h4,
+.ycode-text-editor h5,
+.ycode-text-editor h6 {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
 .ycode-text-editor * {
   cursor: text !important;
 }
