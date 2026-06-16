@@ -161,13 +161,13 @@ async function deliverToWebhook(webhook: Webhook, event: WebhookEvent): Promise<
         response_status: response.status,
         response_body: responseBody.slice(0, 1000),
         duration_ms: duration,
-      }).catch((err) => {
+      }, event.projectId).catch((err) => {
         console.error('Failed to update webhook delivery log:', err);
       });
     }
 
     // Update webhook trigger status
-    await markWebhookTriggered(webhook.id, response.ok);
+    await markWebhookTriggered(webhook.id, response.ok, event.projectId);
 
     if (!response.ok) {
       console.error(`Webhook failed for ${webhook.name}: ${response.status}`);
@@ -181,13 +181,13 @@ async function deliverToWebhook(webhook: Webhook, event: WebhookEvent): Promise<
         status: 'failed',
         response_body: error instanceof Error ? error.message : 'Unknown error',
         duration_ms: duration,
-      }).catch((err) => {
+      }, event.projectId).catch((err) => {
         console.error('Failed to update webhook delivery log:', err);
       });
     }
 
     // Mark webhook as failed
-    await markWebhookTriggered(webhook.id, false);
+    await markWebhookTriggered(webhook.id, false, event.projectId);
 
     console.error(`Webhook delivery failed for ${webhook.name}:`, error);
   }
@@ -232,11 +232,16 @@ export async function dispatchFormSubmittedEvent(data: {
 export async function dispatchSitePublishedEvent(data: {
   pages_count?: number;
   collections_count?: number;
+  projectId?: string | null;
 }): Promise<void> {
   await dispatchWebhookEvent({
     type: 'site.published',
     timestamp: new Date().toISOString(),
-    data,
+    data: {
+      pages_count: data.pages_count,
+      collections_count: data.collections_count,
+    },
+    projectId: data.projectId,
   });
 }
 

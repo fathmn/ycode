@@ -7,7 +7,7 @@
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT, SUPABASE_WRITE_BATCH_SIZE } from '@/lib/supabase-constants';
-import { applyProjectScopeToQuery } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
 
 /** Direction of the sync operation */
 export type SyncDirection = 'publish' | 'revert';
@@ -30,7 +30,8 @@ export function getSyncFlags(direction: SyncDirection) {
 export async function syncTableRows(
   tableName: string,
   direction: SyncDirection,
-  options?: { ids?: string[]; excludeColumns?: string[] }
+  options?: { ids?: string[]; excludeColumns?: string[] },
+  projectId?: string | null
 ): Promise<number> {
   const client = await getSupabaseAdmin();
 
@@ -51,6 +52,7 @@ export async function syncTableRows(
     query = query.in('id', options.ids);
   }
 
+  query = (await applyProjectScopeToQuery(query, client, tableName, projectId)).query;
   const { data: sourceRows, error: fetchError } = await query;
 
   if (fetchError) {
@@ -63,9 +65,13 @@ export async function syncTableRows(
 
   const now = new Date().toISOString();
   const exclude = new Set(options?.excludeColumns || []);
+  const hasProjectScope = await resolveProjectScopeForWrite(client, tableName, projectId);
   const targetRows = sourceRows.map(row => {
     const mapped = { ...row, is_published: target, updated_at: now };
     for (const col of exclude) delete (mapped as Record<string, unknown>)[col];
+    if (hasProjectScope && projectId) {
+      (mapped as Record<string, unknown>).project_id = projectId;
+    }
     return mapped;
   });
 
@@ -107,7 +113,8 @@ export async function cleanupOrphanedRows(
     preserveFilter?: { column: string; value: unknown };
     excludeByColumn?: { column: string; ids: Set<string> };
     collectColumns?: string[];
-  }
+  },
+  projectId?: string | null
 ): Promise<CleanupResult> {
   const client = await getSupabaseAdmin();
 
@@ -118,12 +125,14 @@ export async function cleanupOrphanedRows(
   const { source, target } = getSyncFlags(direction);
 
   // Get all source IDs
-  const { data: sourceRows, error: sourceError } = await client
+  let sourceQuery = client
     .from(tableName)
     .select('id')
     .eq('is_published', source)
     .is('deleted_at', null)
     .limit(SUPABASE_QUERY_LIMIT);
+  sourceQuery = (await applyProjectScopeToQuery(sourceQuery, client, tableName, projectId)).query;
+  const { data: sourceRows, error: sourceError } = await sourceQuery;
 
   if (sourceError) {
     throw new Error(`Failed to fetch source ${tableName} IDs: ${sourceError.message}`);
@@ -132,11 +141,13 @@ export async function cleanupOrphanedRows(
   const sourceIds = new Set((sourceRows || []).map(r => r.id));
 
   // Get all target rows
-  const { data: targetRows, error: targetError } = await client
+  let targetQuery = client
     .from(tableName)
     .select('*')
     .eq('is_published', target)
     .limit(SUPABASE_QUERY_LIMIT);
+  targetQuery = (await applyProjectScopeToQuery(targetQuery, client, tableName, projectId)).query;
+  const { data: targetRows, error: targetError } = await targetQuery;
 
   if (targetError) {
     throw new Error(`Failed to fetch target ${tableName} IDs: ${targetError.message}`);
@@ -182,11 +193,13 @@ export async function cleanupOrphanedRows(
   let deletedCount = 0;
   for (let i = 0; i < orphanedIds.length; i += SUPABASE_WRITE_BATCH_SIZE) {
     const batch = orphanedIds.slice(i, i + SUPABASE_WRITE_BATCH_SIZE);
-    const { error: deleteError } = await client
+    let deleteQuery = client
       .from(tableName)
       .delete()
       .eq('is_published', target)
       .in('id', batch);
+    deleteQuery = (await applyProjectScopeToQuery(deleteQuery, client, tableName, projectId)).query;
+    const { error: deleteError } = await deleteQuery;
 
     if (deleteError) {
       throw new Error(`Failed to cleanup orphaned ${tableName}: ${deleteError.message}`);

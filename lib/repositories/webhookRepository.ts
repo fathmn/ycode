@@ -1,5 +1,10 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { applyProjectScopeToQuery, isSharedDbProjectScopeRequired, tableHasProjectScopeColumn } from '@/lib/project-scope';
+import {
+  applyProjectScopeToQuery,
+  isSharedDbProjectScopeRequired,
+  resolveProjectScopeForWrite,
+  tableHasProjectScopeColumn,
+} from '@/lib/project-scope';
 
 /**
  * Webhook Repository
@@ -286,7 +291,7 @@ export async function deleteWebhook(id: string, projectId?: string | null): Prom
 /**
  * Update webhook trigger timestamp and reset failure count on success
  */
-export async function markWebhookTriggered(id: string, success: boolean): Promise<void> {
+export async function markWebhookTriggered(id: string, success: boolean, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -294,7 +299,7 @@ export async function markWebhookTriggered(id: string, success: boolean): Promis
   }
 
   if (success) {
-    await client
+    let query = client
       .from('webhooks')
       .update({
         last_triggered_at: new Date().toISOString(),
@@ -302,33 +307,31 @@ export async function markWebhookTriggered(id: string, success: boolean): Promis
         updated_at: new Date().toISOString(),
       })
       .eq('id', id);
+    if (projectId !== undefined) {
+      query = (await applyProjectScopeToQuery(query, client, 'webhooks', projectId)).query;
+    }
+    await query;
   } else {
-    // Increment failure count
-    await client.rpc('increment_webhook_failure_count', { webhook_id: id });
+    await incrementWebhookFailureCount(id, projectId);
   }
 }
 
 /**
  * Increment webhook failure count (called when delivery fails)
  */
-export async function incrementWebhookFailureCount(id: string): Promise<void> {
+export async function incrementWebhookFailureCount(id: string, projectId?: string | null): Promise<void> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
     throw new Error('Supabase client not configured');
   }
 
-  // Use raw SQL to increment
-  const { error } = await client
-    .from('webhooks')
-    .update({
-      failure_count: client.rpc('increment', { x: 1 }) as unknown as number,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', id);
+  if (projectId === undefined) {
+    const { error } = await client.rpc('increment_webhook_failure_count', { webhook_id: id });
+    if (!error) {
+      return;
+    }
 
-  // Fallback: fetch and update if rpc fails
-  if (error) {
     const webhook = await getWebhookById(id);
     if (webhook) {
       await client
@@ -339,6 +342,38 @@ export async function incrementWebhookFailureCount(id: string): Promise<void> {
         })
         .eq('id', id);
     }
+    return;
+  }
+
+  let fetchQuery = client
+    .from('webhooks')
+    .select('failure_count')
+    .eq('id', id);
+  fetchQuery = (await applyProjectScopeToQuery(fetchQuery, client, 'webhooks', projectId)).query;
+
+  const { data: webhook, error: fetchError } = await fetchQuery.maybeSingle();
+
+  if (fetchError) {
+    throw new Error(`Failed to fetch webhook failure count: ${fetchError.message}`);
+  }
+
+  if (!webhook) {
+    return;
+  }
+
+  let updateQuery = client
+    .from('webhooks')
+    .update({
+      failure_count: (webhook.failure_count || 0) + 1,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+  updateQuery = (await applyProjectScopeToQuery(updateQuery, client, 'webhooks', projectId)).query;
+
+  const { error: updateError } = await updateQuery;
+
+  if (updateError) {
+    throw new Error(`Failed to increment webhook failure count: ${updateError.message}`);
   }
 }
 
@@ -368,11 +403,9 @@ export async function createWebhookDelivery(
     created_at: new Date().toISOString(),
   };
   if (projectId !== undefined) {
-    const hasProjectScope = await tableHasProjectScopeColumn(client, 'webhook_deliveries');
+    const hasProjectScope = await resolveProjectScopeForWrite(client, 'webhook_deliveries', projectId);
     if (hasProjectScope && projectId) {
       row.project_id = projectId;
-    } else if (hasProjectScope && isSharedDbProjectScopeRequired()) {
-      throw new Error('Project scope is required for webhook_deliveries');
     }
   }
 
@@ -394,7 +427,8 @@ export async function createWebhookDelivery(
  */
 export async function updateWebhookDelivery(
   id: string,
-  updates: UpdateWebhookDeliveryData
+  updates: UpdateWebhookDeliveryData,
+  projectId?: string | null
 ): Promise<void> {
   const client = await getSupabaseAdmin();
 
@@ -402,10 +436,14 @@ export async function updateWebhookDelivery(
     throw new Error('Supabase client not configured');
   }
 
-  const { error } = await client
+  let query = client
     .from('webhook_deliveries')
     .update(updates)
     .eq('id', id);
+  if (projectId !== undefined) {
+    query = (await applyProjectScopeToQuery(query, client, 'webhook_deliveries', projectId)).query;
+  }
+  const { error } = await query;
 
   if (error) {
     throw new Error(`Failed to update webhook delivery: ${error.message}`);

@@ -201,7 +201,7 @@ export async function POST(request: NextRequest) {
     // on both draft and published rows (legacy migrations and templates
     // insert rows without computing hashes).
     try {
-      await backfillMissingPageHashes();
+      await backfillMissingPageHashes(projectId);
     } catch (error) {
       console.error('[publish] Failed to backfill page hashes:', error);
     }
@@ -458,7 +458,7 @@ export async function POST(request: NextRequest) {
     if (changedLayerStyleIds.length > 0) {
       try {
         const { syncLayerStyleChangesToDrafts } = await import('@/lib/repositories/layerStyleRepository');
-        const sync = await syncLayerStyleChangesToDrafts(changedLayerStyleIds);
+        const sync = await syncLayerStyleChangesToDrafts(changedLayerStyleIds, projectId);
 
         if (sync.affectedComponentIds.length > 0) {
           // Re-publish components whose draft layers just got rewritten so
@@ -643,7 +643,7 @@ export async function POST(request: NextRequest) {
       let globalChanged = false;
       let globalChangedReason = '';
       try {
-        const currentColorHash = await getColorVariablesHash();
+        const currentColorHash = await getColorVariablesHash(projectId);
         const lastColorHash = await getSettingByKey('color_variables_published_hash', projectId);
         if (currentColorHash !== lastColorHash) {
           globalChanged = true;
@@ -706,7 +706,7 @@ export async function POST(request: NextRequest) {
       if (cssAffectedPageIds.length > 0) {
         try {
           const { generateCSSForPages } = await import('@/lib/server/cssGenerator');
-          await generateCSSForPages(cssAffectedPageIds);
+          await generateCSSForPages(cssAffectedPageIds, projectId);
 
           // Re-publish layers for these pages so published version has fresh CSS.
           // force=true: the draft layers' JSONB still references the changed
@@ -857,6 +857,7 @@ export async function POST(request: NextRequest) {
       await dispatchSitePublishedEvent({
         pages_count: result.changes.pages,
         collections_count: result.changes.collectionItems,
+        projectId,
       });
     } catch {
       // Silently handle — webhook failures must not break a successful publish

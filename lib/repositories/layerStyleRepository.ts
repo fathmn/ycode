@@ -519,22 +519,26 @@ export async function hardDeleteSoftDeletedLayerStyles(projectId?: string | null
 
   const ids = deletedDrafts.map(s => s.id);
 
-  const { error: pubError } = await client
+  let pubDeleteQuery = client
     .from('layer_styles')
     .delete()
     .in('id', ids)
     .eq('is_published', true);
+  pubDeleteQuery = (await applyProjectScopeToQuery(pubDeleteQuery, client, 'layer_styles', projectId)).query;
+  const { error: pubError } = await pubDeleteQuery;
 
   if (pubError) {
     console.error('Failed to delete published layer styles:', pubError);
   }
 
-  const { error: draftError } = await client
+  let draftDeleteQuery = client
     .from('layer_styles')
     .delete()
     .in('id', ids)
     .eq('is_published', false)
     .not('deleted_at', 'is', null);
+  draftDeleteQuery = (await applyProjectScopeToQuery(draftDeleteQuery, client, 'layer_styles', projectId)).query;
+  const { error: draftError } = await draftDeleteQuery;
 
   if (draftError) {
     throw new Error(`Failed to delete draft layer styles: ${draftError.message}`);
@@ -864,6 +868,7 @@ function layersReferenceAnyStyle(layers: Layer[], styleIds: Set<string>): boolea
  */
 export async function syncLayerStyleChangesToDrafts(
   styleIds: string[],
+  projectId?: string | null,
 ): Promise<{ affectedPageIds: string[]; affectedComponentIds: string[] }> {
   if (styleIds.length === 0) {
     return { affectedPageIds: [], affectedComponentIds: [] };
@@ -876,12 +881,14 @@ export async function syncLayerStyleChangesToDrafts(
 
   // Use the just-published versions of the changed styles as the source of
   // truth: they were just upserted by publishLayerStyles with the new values.
-  const { data: styles } = await client
+  let stylesQuery = client
     .from('layer_styles')
     .select('id, classes, design')
     .in('id', styleIds)
     .eq('is_published', true)
     .is('deleted_at', null);
+  stylesQuery = (await applyProjectScopeToQuery(stylesQuery, client, 'layer_styles', projectId)).query;
+  const { data: styles } = await stylesQuery;
 
   if (!styles || styles.length === 0) {
     return { affectedPageIds: [], affectedComponentIds: [] };
@@ -892,21 +899,25 @@ export async function syncLayerStyleChangesToDrafts(
   // Combo-class layers reference a stack of styles, so re-flattening needs
   // every style a layer might point at — not just the changed ones. Snapshot
   // all published styles, then overlay the just-published changed values.
-  const { data: allStyles } = await client
+  let allStylesQuery = client
     .from('layer_styles')
     .select('id, classes, design')
     .eq('is_published', true)
     .is('deleted_at', null);
+  allStylesQuery = (await applyProjectScopeToQuery(allStylesQuery, client, 'layer_styles', projectId)).query;
+  const { data: allStyles } = await allStylesQuery;
   const stylesById = new Map<string, LayerStyle>();
   for (const s of allStyles ?? []) stylesById.set(s.id, s as LayerStyle);
   for (const s of styles) stylesById.set(s.id, s as LayerStyle);
 
   // --- Sync draft page_layers ---
-  const { data: pageLayersRecords } = await client
+  let pageLayersQuery = client
     .from('page_layers')
     .select('id, page_id, layers, generated_css, content_hash')
     .eq('is_published', false)
     .is('deleted_at', null);
+  pageLayersQuery = (await applyProjectScopeToQuery(pageLayersQuery, client, 'page_layers', projectId)).query;
+  const { data: pageLayersRecords } = await pageLayersQuery;
 
   const affectedPageIds: string[] = [];
   const now = new Date().toISOString();
@@ -948,20 +959,24 @@ export async function syncLayerStyleChangesToDrafts(
       // writing the new layers + hash but NOT a fresh generated_css. That
       // breaks the published render (new class names, old CSS file) AND
       // makes batchPublishPageLayers below think nothing changed.
-      await client
+      let updateQuery = client
         .from('page_layers')
         .update({ layers, content_hash: newHash, updated_at: now })
         .eq('id', record.id)
         .eq('is_published', false);
+      updateQuery = (await applyProjectScopeToQuery(updateQuery, client, 'page_layers', projectId)).query;
+      await updateQuery;
     }
   }
 
   // --- Sync draft components ---
-  const { data: componentRecords } = await client
+  let componentsQuery = client
     .from('components')
     .select('id, name, layers, variants, variables, content_hash')
     .eq('is_published', false)
     .is('deleted_at', null);
+  componentsQuery = (await applyProjectScopeToQuery(componentsQuery, client, 'components', projectId)).query;
+  const { data: componentRecords } = await componentsQuery;
 
   const affectedComponentIds: string[] = [];
 
@@ -1011,7 +1026,7 @@ export async function syncLayerStyleChangesToDrafts(
       affectedComponentIds.push(record.id);
       // Same composite-key trap as page_layers: components share an `id`
       // across draft/published. Always scope the update to the draft row.
-      await client
+      let updateQuery = client
         .from('components')
         .update({
           layers,
@@ -1021,6 +1036,8 @@ export async function syncLayerStyleChangesToDrafts(
         })
         .eq('id', record.id)
         .eq('is_published', false);
+      updateQuery = (await applyProjectScopeToQuery(updateQuery, client, 'components', projectId)).query;
+      await updateQuery;
     }
   }
 

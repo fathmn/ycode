@@ -176,11 +176,11 @@ export async function regenerateDraftCssSafe(projectId?: string | null): Promise
  * result in the page_layers.generated_css column. The content_hash
  * is recalculated automatically since it includes generated_css.
  */
-export async function generateCSSForPage(pageId: string): Promise<string | null> {
-  const pageLayers = await getDraftLayers(pageId);
+export async function generateCSSForPage(pageId: string, projectId?: string | null): Promise<string | null> {
+  const pageLayers = await getDraftLayers(pageId, projectId);
   if (!pageLayers?.layers) return null;
 
-  const components = await getAllComponents(false);
+  const components = await getAllComponents(false, projectId);
 
   const layersForCss = collectLayersWithComponents(pageLayers.layers, components);
   const classes = extractClassesFromLayers(layersForCss);
@@ -195,14 +195,14 @@ export async function generateCSSForPage(pageId: string): Promise<string | null>
  * Generate per-page CSS for multiple pages in batch.
  * Loads components once and shares them across all pages.
  */
-export async function generateCSSForPages(pageIds: string[]): Promise<number> {
+export async function generateCSSForPages(pageIds: string[], projectId?: string | null): Promise<number> {
   if (pageIds.length === 0) return 0;
 
-  const components = await getAllComponents(false);
+  const components = await getAllComponents(false, projectId);
   let updated = 0;
 
   for (const pageId of pageIds) {
-    const pageLayers = await getDraftLayers(pageId);
+    const pageLayers = await getDraftLayers(pageId, projectId);
     if (!pageLayers?.layers) continue;
 
     const layersForCss = collectLayersWithComponents(pageLayers.layers, components);

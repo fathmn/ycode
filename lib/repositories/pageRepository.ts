@@ -5,7 +5,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { applyProjectScopeToQuery, resolveProjectScopeForWrite } from '@/lib/project-scope';
+import { applyProjectScopeToQuery, resolveProjectScopeForWrite, tableHasProjectScopeColumn } from '@/lib/project-scope';
 import { reorderSiblings } from '@/lib/repositories/pageFolderRepository';
 import type { Page, PageSettings } from '../../types';
 import { isHomepage } from '../page-utils';
@@ -998,7 +998,7 @@ export async function duplicatePage(pageId: string, projectId?: string | null): 
  *
  * Safe to call repeatedly — converges to a no-op once all rows have a hash.
  */
-export async function backfillMissingPageHashes(): Promise<{
+export async function backfillMissingPageHashes(projectId?: string | null): Promise<{
   pagesUpdated: number;
   layersUpdated: number;
 }> {
@@ -1007,12 +1007,16 @@ export async function backfillMissingPageHashes(): Promise<{
 
   let pagesUpdated = 0;
   let layersUpdated = 0;
+  const pagesHaveProjectScope = await resolveProjectScopeForWrite(client, 'pages', projectId);
+  const pageLayersHaveProjectScope = await tableHasProjectScopeColumn(client, 'page_layers');
 
-  const { data: pagesToBackfill } = await client
+  let pagesQuery = client
     .from('pages')
     .select('*')
     .is('content_hash', null)
     .is('deleted_at', null);
+  pagesQuery = (await applyProjectScopeToQuery(pagesQuery, client, 'pages', projectId)).query;
+  const { data: pagesToBackfill } = await pagesQuery;
 
   if (pagesToBackfill && pagesToBackfill.length > 0) {
     const upsertRows = pagesToBackfill.map((page) => ({
@@ -1025,6 +1029,7 @@ export async function backfillMissingPageHashes(): Promise<{
         is_dynamic: page.is_dynamic || false,
         error_page: page.error_page ?? null,
       }),
+      ...(pagesHaveProjectScope && projectId ? { project_id: projectId } : {}),
     }));
 
     const { error } = await client
@@ -1038,11 +1043,36 @@ export async function backfillMissingPageHashes(): Promise<{
     }
   }
 
-  const { data: layersToBackfill } = await client
+  let projectPageIds: string[] | null = null;
+  if (projectId) {
+    let pageIdsQuery = client
+      .from('pages')
+      .select('id')
+      .is('deleted_at', null);
+    pageIdsQuery = (await applyProjectScopeToQuery(pageIdsQuery, client, 'pages', projectId)).query;
+    const { data: scopedPages, error: pageIdsError } = await pageIdsQuery;
+
+    if (pageIdsError) {
+      throw new Error(`Failed to fetch project pages for page_layers backfill: ${pageIdsError.message}`);
+    }
+
+    projectPageIds = (scopedPages || []).map((page) => page.id);
+  }
+
+  if (projectPageIds && projectPageIds.length === 0) {
+    return { pagesUpdated, layersUpdated };
+  }
+
+  let layersQuery = client
     .from('page_layers')
     .select('*')
     .is('content_hash', null)
     .is('deleted_at', null);
+  if (projectPageIds) {
+    layersQuery = layersQuery.in('page_id', projectPageIds);
+  }
+  layersQuery = (await applyProjectScopeToQuery(layersQuery, client, 'page_layers', projectId)).query;
+  const { data: layersToBackfill } = await layersQuery;
 
   if (layersToBackfill && layersToBackfill.length > 0) {
     const upsertRows = layersToBackfill.map((row) => ({
@@ -1051,6 +1081,7 @@ export async function backfillMissingPageHashes(): Promise<{
         layers: row.layers || [],
         generated_css: row.generated_css ?? null,
       }),
+      ...(pageLayersHaveProjectScope && projectId ? { project_id: projectId } : {}),
     }));
 
     const { error } = await client
@@ -1081,7 +1112,7 @@ function hashesDiffer(a: string | null, b: string | null): boolean {
  * Uses 2 bulk queries instead of N+1 per-page lookups.
  */
 export async function getUnpublishedPagesCount(projectId?: string | null): Promise<number> {
-  await backfillMissingPageHashes();
+  await backfillMissingPageHashes(projectId);
 
   const client = await getSupabaseAdmin();
 
@@ -1179,7 +1210,7 @@ export async function getUnpublishedPagesCount(projectId?: string | null): Promi
  * Uses content_hash for efficient change detection
  */
 export async function getUnpublishedPages(projectId?: string | null): Promise<Page[]> {
-  await backfillMissingPageHashes();
+  await backfillMissingPageHashes(projectId);
 
   const client = await getSupabaseAdmin();
 

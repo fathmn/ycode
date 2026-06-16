@@ -258,8 +258,8 @@ export async function reorderColorVariables(
  * draft/published model so we compare the current state against a
  * stored snapshot hash.
  */
-export async function getColorVariablesHash(): Promise<string> {
-  const variables = await getAllColorVariables();
+export async function getColorVariablesHash(projectId?: string | null): Promise<string> {
+  const variables = await getAllColorVariables(projectId);
   return generateContentHash(
     variables.map(v => ({ id: v.id, name: v.name, value: v.value, sort_order: v.sort_order }))
   );

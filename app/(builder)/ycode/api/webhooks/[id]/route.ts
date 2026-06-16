@@ -214,10 +214,10 @@ export async function POST(
         response_status: response.status,
         response_body: responseBody.slice(0, 1000),
         duration_ms: duration,
-      });
+      }, roleCheck.context.project.id);
 
       // Update webhook trigger status
-      await markWebhookTriggered(webhook.id, response.ok);
+      await markWebhookTriggered(webhook.id, response.ok, roleCheck.context.project.id);
 
       if (response.ok) {
         return NextResponse.json({
@@ -247,10 +247,10 @@ export async function POST(
         status: 'failed',
         response_body: fetchError instanceof Error ? fetchError.message : 'Unknown error',
         duration_ms: duration,
-      });
+      }, roleCheck.context.project.id);
 
       // Increment failure count
-      await markWebhookTriggered(webhook.id, false);
+      await markWebhookTriggered(webhook.id, false, roleCheck.context.project.id);
 
       return NextResponse.json({
         data: {

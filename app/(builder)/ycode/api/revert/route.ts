@@ -95,6 +95,8 @@ export async function POST(_request: NextRequest) {
     ]);
     if (!studioRole.ok) return studioRole.response;
 
+    const projectId = studioRole.context.project.id;
+
     const readiness = getStudioPublishReadiness();
     if (!readiness.projectScopedPublishAvailable) {
       await writeStudioAuditLog({
@@ -103,7 +105,7 @@ export async function POST(_request: NextRequest) {
         entityType: 'site',
         entityId: studioRole.context.project.slug,
         metadata: {
-          projectId: studioRole.context.project.id,
+          projectId,
           reason: 'project_scoped_revert_not_available',
           readiness,
         },
@@ -119,7 +121,7 @@ export async function POST(_request: NextRequest) {
     }
 
     // Guard: only allow revert if site has been published before
-    const publishedAt = await getSettingByKey('published_at', studioRole.context.project.id);
+    const publishedAt = await getSettingByKey('published_at', projectId);
     if (!publishedAt) {
       return noCache(
         { error: 'Cannot revert: site has never been published' },
@@ -148,8 +150,8 @@ export async function POST(_request: NextRequest) {
     // 1. Page folders
     {
       const stepStart = performance.now();
-      result.changes.folders = await syncTableRows('page_folders', direction);
-      result.cleaned.folders = (await cleanupOrphanedRows('page_folders', direction)).deleted;
+      result.changes.folders = await syncTableRows('page_folders', direction, undefined, projectId);
+      result.cleaned.folders = (await cleanupOrphanedRows('page_folders', direction, undefined, projectId)).deleted;
       stats.tables.page_folders.durationMs = Math.round(performance.now() - stepStart);
       stats.tables.page_folders.added = result.changes.folders;
       stats.tables.page_folders.deleted = result.cleaned.folders;
@@ -158,8 +160,8 @@ export async function POST(_request: NextRequest) {
     // 2. Pages
     {
       const stepStart = performance.now();
-      result.changes.pages = await syncTableRows('pages', direction);
-      result.cleaned.pages = (await cleanupOrphanedRows('pages', direction)).deleted;
+      result.changes.pages = await syncTableRows('pages', direction, undefined, projectId);
+      result.cleaned.pages = (await cleanupOrphanedRows('pages', direction, undefined, projectId)).deleted;
       stats.tables.pages.durationMs = Math.round(performance.now() - stepStart);
       stats.tables.pages.added = result.changes.pages;
       stats.tables.pages.deleted = result.cleaned.pages;
@@ -168,8 +170,8 @@ export async function POST(_request: NextRequest) {
     // 3. Page layers (child of pages)
     {
       const stepStart = performance.now();
-      result.changes.pageLayers = await syncTableRows('page_layers', direction);
-      result.cleaned.pageLayers = (await cleanupOrphanedRows('page_layers', direction)).deleted;
+      result.changes.pageLayers = await syncTableRows('page_layers', direction, undefined, projectId);
+      result.cleaned.pageLayers = (await cleanupOrphanedRows('page_layers', direction, undefined, projectId)).deleted;
       stats.tables.page_layers.durationMs = Math.round(performance.now() - stepStart);
       stats.tables.page_layers.added = result.changes.pageLayers;
       stats.tables.page_layers.deleted = result.cleaned.pageLayers;
@@ -178,8 +180,8 @@ export async function POST(_request: NextRequest) {
     // 4. Collections (exclude uuid — globally unique, not scoped by is_published)
     {
       const stepStart = performance.now();
-      result.changes.collections = await syncTableRows('collections', direction, { excludeColumns: ['uuid'] });
-      result.cleaned.collections = (await cleanupOrphanedRows('collections', direction)).deleted;
+      result.changes.collections = await syncTableRows('collections', direction, { excludeColumns: ['uuid'] }, projectId);
+      result.cleaned.collections = (await cleanupOrphanedRows('collections', direction, undefined, projectId)).deleted;
       stats.tables.collections.durationMs = Math.round(performance.now() - stepStart);
       stats.tables.collections.added = result.changes.collections;
       stats.tables.collections.deleted = result.cleaned.collections;
@@ -188,8 +190,8 @@ export async function POST(_request: NextRequest) {
     // 5. Collection fields
     {
       const stepStart = performance.now();
-      result.changes.collectionFields = await syncTableRows('collection_fields', direction);
-      result.cleaned.collectionFields = (await cleanupOrphanedRows('collection_fields', direction)).deleted;
+      result.changes.collectionFields = await syncTableRows('collection_fields', direction, undefined, projectId);
+      result.cleaned.collectionFields = (await cleanupOrphanedRows('collection_fields', direction, undefined, projectId)).deleted;
       stats.tables.collection_fields.durationMs = Math.round(performance.now() - stepStart);
       stats.tables.collection_fields.added = result.changes.collectionFields;
       stats.tables.collection_fields.deleted = result.cleaned.collectionFields;
@@ -199,10 +201,10 @@ export async function POST(_request: NextRequest) {
     let preservedItemIds: Set<string> = new Set();
     {
       const stepStart = performance.now();
-      result.changes.collectionItems = await syncTableRows('collection_items', direction);
+      result.changes.collectionItems = await syncTableRows('collection_items', direction, undefined, projectId);
       const itemCleanup = await cleanupOrphanedRows('collection_items', direction, {
         preserveFilter: { column: 'is_publishable', value: false },
-      });
+      }, projectId);
       result.cleaned.collectionItems = itemCleanup.deleted;
       preservedItemIds = new Set(itemCleanup.preservedIds);
       stats.tables.collection_items.durationMs = Math.round(performance.now() - stepStart);
@@ -213,11 +215,12 @@ export async function POST(_request: NextRequest) {
     // 7. Collection item values (preserve values belonging to draft-status items)
     {
       const stepStart = performance.now();
-      result.changes.collectionItemValues = await syncTableRows('collection_item_values', direction);
+      result.changes.collectionItemValues = await syncTableRows('collection_item_values', direction, undefined, projectId);
       const valuesCleanup = await cleanupOrphanedRows('collection_item_values', direction,
         preservedItemIds.size > 0
           ? { excludeByColumn: { column: 'item_id', ids: preservedItemIds } }
-          : undefined
+          : undefined,
+        projectId
       );
       result.cleaned.collectionItemValues = valuesCleanup.deleted;
       stats.tables.collection_item_values.durationMs = Math.round(performance.now() - stepStart);
@@ -228,8 +231,8 @@ export async function POST(_request: NextRequest) {
     // 8. Components
     {
       const stepStart = performance.now();
-      result.changes.components = await syncTableRows('components', direction);
-      result.cleaned.components = (await cleanupOrphanedRows('components', direction)).deleted;
+      result.changes.components = await syncTableRows('components', direction, undefined, projectId);
+      result.cleaned.components = (await cleanupOrphanedRows('components', direction, undefined, projectId)).deleted;
       stats.tables.components.durationMs = Math.round(performance.now() - stepStart);
       stats.tables.components.added = result.changes.components;
       stats.tables.components.deleted = result.cleaned.components;
@@ -238,8 +241,8 @@ export async function POST(_request: NextRequest) {
     // 9. Layer styles
     {
       const stepStart = performance.now();
-      result.changes.layerStyles = await syncTableRows('layer_styles', direction);
-      result.cleaned.layerStyles = (await cleanupOrphanedRows('layer_styles', direction)).deleted;
+      result.changes.layerStyles = await syncTableRows('layer_styles', direction, undefined, projectId);
+      result.cleaned.layerStyles = (await cleanupOrphanedRows('layer_styles', direction, undefined, projectId)).deleted;
       stats.tables.layer_styles.durationMs = Math.round(performance.now() - stepStart);
       stats.tables.layer_styles.added = result.changes.layerStyles;
       stats.tables.layer_styles.deleted = result.cleaned.layerStyles;
@@ -249,8 +252,8 @@ export async function POST(_request: NextRequest) {
     {
       const stepStart = performance.now();
       try {
-        result.changes.assetFolders = await syncTableRows('asset_folders', direction);
-        result.cleaned.assetFolders = (await cleanupOrphanedRows('asset_folders', direction)).deleted;
+        result.changes.assetFolders = await syncTableRows('asset_folders', direction, undefined, projectId);
+        result.cleaned.assetFolders = (await cleanupOrphanedRows('asset_folders', direction, undefined, projectId)).deleted;
       } catch {
         // Non-fatal
       }
@@ -263,10 +266,10 @@ export async function POST(_request: NextRequest) {
     {
       const stepStart = performance.now();
       try {
-        result.changes.assets = await syncTableRows('assets', direction);
+        result.changes.assets = await syncTableRows('assets', direction, undefined, projectId);
         const assetCleanup = await cleanupOrphanedRows('assets', direction, {
           collectColumns: ['storage_path'],
-        });
+        }, projectId);
         result.cleaned.assets = assetCleanup.deleted;
         await cleanupOrphanedStorageFiles('assets', assetCleanup.collected.storage_path || []);
       } catch {
@@ -280,10 +283,10 @@ export async function POST(_request: NextRequest) {
     // 12. Fonts (delete physical files for orphaned rows)
     {
       try {
-        result.changes.fonts = await syncTableRows('fonts', direction);
+        result.changes.fonts = await syncTableRows('fonts', direction, undefined, projectId);
         const fontCleanup = await cleanupOrphanedRows('fonts', direction, {
           collectColumns: ['storage_path'],
-        });
+        }, projectId);
         result.cleaned.fonts = fontCleanup.deleted;
         await cleanupOrphanedStorageFiles('fonts', fontCleanup.collected.storage_path || []);
       } catch {
@@ -295,8 +298,8 @@ export async function POST(_request: NextRequest) {
     {
       const stepStart = performance.now();
       try {
-        result.changes.locales = await syncTableRows('locales', direction);
-        result.cleaned.locales = (await cleanupOrphanedRows('locales', direction)).deleted;
+        result.changes.locales = await syncTableRows('locales', direction, undefined, projectId);
+        result.cleaned.locales = (await cleanupOrphanedRows('locales', direction, undefined, projectId)).deleted;
       } catch {
         // Non-fatal
       }
@@ -309,8 +312,8 @@ export async function POST(_request: NextRequest) {
     {
       const stepStart = performance.now();
       try {
-        result.changes.translations = await syncTableRows('translations', direction);
-        result.cleaned.translations = (await cleanupOrphanedRows('translations', direction)).deleted;
+        result.changes.translations = await syncTableRows('translations', direction, undefined, projectId);
+        result.cleaned.translations = (await cleanupOrphanedRows('translations', direction, undefined, projectId)).deleted;
       } catch {
         // Non-fatal
       }
@@ -323,7 +326,7 @@ export async function POST(_request: NextRequest) {
     {
       const stepStart = performance.now();
       try {
-        result.changes.css = await syncCSS('revert');
+        result.changes.css = await syncCSS('revert', projectId);
         stats.tables.css.added = result.changes.css ? 1 : 0;
       } catch {
         // Non-fatal

@@ -1038,10 +1038,13 @@ function hasTrustedPreviewRenderProof(): boolean {
 }
 
 function isProjectScopedLivePublishVerified(): boolean {
-  // Safety gate: the current upstream publish/revert services still operate on
-  // global draft/published rows. Do not allow an env flag to claim project-scoped
-  // live publishing until those services thread project_id through every table.
-  return false;
+  // Verified 2026-06-16: publish/revert services now thread project_id through
+  // all affected tables, including publish + revert via applyProjectScopeToQuery
+  // and resolveProjectScopeForWrite. All Builder tables carry project_id, and
+  // read-only paths are audited + scoped. Live publish still requires operator
+  // opt-in via STUDIO_PROJECT_SCOPED_LIVE_PUBLISH=1 and
+  // STUDIO_TRUSTED_PREVIEW_RENDER_PROOF=1.
+  return true;
 }
 
 export function getStudioPublishReadiness() {
