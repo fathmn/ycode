@@ -219,14 +219,24 @@ export default function PublishPopover({
       setLastRenderedPreviewUrl(window.localStorage?.getItem('studio:last-rendered-preview-url'));
       if (isOpen) loadPublishReadiness();
     };
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible' && isOpen) {
+        setLastRenderedPreviewUrl(window.localStorage?.getItem('studio:last-rendered-preview-url'));
+        loadPublishReadiness();
+      }
+    };
     window.addEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
     window.addEventListener('storage', handleStorage);
     window.addEventListener('studio:preview-rendered', handlePreviewRendered);
+    document.addEventListener('visibilitychange', handleVisible);
+    window.addEventListener('focus', handleVisible);
     updateSelectedProject();
     return () => {
       window.removeEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('studio:preview-rendered', handlePreviewRendered);
+      document.removeEventListener('visibilitychange', handleVisible);
+      window.removeEventListener('focus', handleVisible);
     };
   }, [isOpen, loadPublishReadiness]);
 

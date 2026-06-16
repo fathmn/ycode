@@ -33,6 +33,7 @@
     "lint:fix": "eslint --fix .",
     "studio:fetch-guard": "node scripts/check-studio-fetch-guard.mjs",
     "studio:regen-draft-css": "node --require ./scripts/server-only-stub.cjs --require ts-node/register --require tsconfig-paths/register scripts/regenerate-draft-css.ts",
+    "studio:flatten-headings": "node --require ./scripts/server-only-stub.cjs --require ts-node/register --require tsconfig-paths/register scripts/flatten-heading-linebreaks.ts",
     "studio:repair-font-classes": "node --require ./scripts/server-only-stub.cjs --require ts-node/register --require tsconfig-paths/register scripts/repair-broken-font-classes.ts",
     "type-check": "tsc --noEmit",
     "test": "TS_NODE_TRANSPILE_ONLY=1 TS_NODE_PROJECT=tsconfig.test.json node --test --require ts-node/register --require tsconfig-paths/register lib/layer-style-resolve.test.ts lib/import/adapters/webflow/global-styles.test.ts lib/current-page-filter.test.ts lib/studio-route-policy.test.ts",
