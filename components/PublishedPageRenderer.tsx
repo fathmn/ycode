@@ -18,6 +18,7 @@ import { renderPageLayersToHtml } from '@/lib/page-fetcher';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { extractPriorityImagePreload } from '@/lib/published-image-preload';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
+import { getInlinedGoogleFontsCss } from '@/lib/server/googleFontsInline';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
 import { getAllPages } from '@/lib/repositories/pageRepository';
@@ -607,6 +608,7 @@ export default async function PublishedPageRenderer({
   });
 
   let fontsCss = '';
+  let googleFontsInlinedCss = '';
   let googleFontLinkUrls: string[] = [];
   try {
     const { getPublishedFonts } = await import('@/lib/repositories/fontRepository');
@@ -619,6 +621,7 @@ export default async function PublishedPageRenderer({
       dedupedGlobalCustomCodeHead,
       dedupedPageCustomCodeHead,
     );
+    googleFontsInlinedCss = await getInlinedGoogleFontsCss(googleFontLinkUrls);
   } catch (error) {
     console.error('[PublishedPageRenderer] Error loading fonts:', error);
     if (isProjectScopeRequired()) throw error;
@@ -699,23 +702,32 @@ export default async function PublishedPageRenderer({
 
       {googleFontLinkUrls.length > 0 && (
         <>
-          <link rel="preconnect" href="https://fonts.googleapis.com" />
+          {!googleFontsInlinedCss && (
+            <link rel="preconnect" href="https://fonts.googleapis.com" />
+          )}
           <link
             rel="preconnect" href="https://fonts.gstatic.com"
-            crossOrigin=""
+            crossOrigin="anonymous"
           />
         </>
       )}
-      {googleFontLinkUrls.map((url, i) => (
-        <Fragment key={`gfont-${i}`}>
-          <script dangerouslySetInnerHTML={{ __html: fontStylesheetLoaderScript(url) }} />
-          <noscript
-            dangerouslySetInnerHTML={{
-              __html: `<link rel="stylesheet" href="${url.replace(/"/g, '&quot;')}">`,
-            }}
-          />
-        </Fragment>
-      ))}
+      {googleFontsInlinedCss ? (
+        <style
+          id="ycode-google-fonts"
+          dangerouslySetInnerHTML={{ __html: googleFontsInlinedCss }}
+        />
+      ) : (
+        googleFontLinkUrls.map((url, i) => (
+          <Fragment key={`gfont-${i}`}>
+            <script dangerouslySetInnerHTML={{ __html: fontStylesheetLoaderScript(url) }} />
+            <noscript
+              dangerouslySetInnerHTML={{
+                __html: `<link rel="stylesheet" href="${url.replace(/"/g, '&quot;')}">`,
+              }}
+            />
+          </Fragment>
+        ))
+      )}
 
       {fontsCss && <style id="ycode-fonts" dangerouslySetInnerHTML={{ __html: escapeStyleBoundary(fontsCss) }} />}
       {ssrBodyStyle && <style id="ycode-body-layer-style" dangerouslySetInnerHTML={{ __html: escapeStyleBoundary(`body{${ssrBodyStyle}}`) }} />}

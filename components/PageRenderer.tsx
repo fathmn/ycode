@@ -12,8 +12,9 @@ import { unstable_cache } from 'next/cache';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
-import { buildCustomFontsCss, buildFontClassesCss, fetchGoogleFontsCss, filterGoogleFontLinksAgainstHeadHtml, getGoogleFontLinks, removeDuplicateGoogleFontLinksFromHeadHtml } from '@/lib/font-utils';
+import { buildCustomFontsCss, buildFontClassesCss, filterGoogleFontLinksAgainstHeadHtml, getGoogleFontLinks, removeDuplicateGoogleFontLinksFromHeadHtml } from '@/lib/font-utils';
 import { buildImageSizes, collectLayerAssetIds, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
+import { getInlinedGoogleFontsCss } from '@/lib/server/googleFontsInline';
 import { getAllPages } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { getMapboxAccessToken, getGoogleMapsEmbedApiKey } from '@/lib/map-server';
@@ -905,13 +906,7 @@ export default async function PageRenderer({
     // Inline the resolved @font-face CSS so the browser skips the blocking
     // round-trip to fonts.googleapis.com and goes straight to gstatic for
     // the woff2 binaries. Cached per font config across requests.
-    if (googleFontLinkUrls.length > 0) {
-      googleFontsInlinedCss = await unstable_cache(
-        async () => fetchGoogleFontsCss(googleFontLinkUrls),
-        [`google-fonts-css-${googleFontLinkUrls.join('|')}`],
-        { tags: ['all-pages'], revalidate: false },
-      )();
-    }
+    googleFontsInlinedCss = await getInlinedGoogleFontsCss(googleFontLinkUrls);
   } catch (error) {
     handleRenderFetchError('Error loading fonts', error);
   }
