@@ -1,3 +1,6 @@
+/* Canvas carries a deliberate Studio design variant using
+   [data-ycode-editor-breakpoint] instead of @media. It is not part of the
+   `lint:css-sync` equality check, but must be considered on Studio design changes. */
 /* Editor-specific styles - using outline to prevent conflicts with user box-shadow */
 .ycode-selected {
   outline: 1px solid #0b7efd !important;

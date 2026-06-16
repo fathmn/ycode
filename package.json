@@ -29,6 +29,7 @@
     "start": "next start -p 3102",
     "cache:clear": "rm -rf .next",
     "lint": "eslint .",
+    "lint:css-sync": "node scripts/check-studio-css-sync.mjs",
     "lint:fix": "eslint --fix .",
     "studio:fetch-guard": "node scripts/check-studio-fetch-guard.mjs",
     "type-check": "tsc --noEmit",

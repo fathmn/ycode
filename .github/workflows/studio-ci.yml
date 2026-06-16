@@ -26,6 +26,8 @@ jobs:
         run: npm run type-check
       - name: Lint
         run: npm run lint
+      - name: Studio CSS sync
+        run: npm run lint:css-sync
       - name: Studio fetch guard
         run: npm run studio:fetch-guard
       - name: Audit production dependencies

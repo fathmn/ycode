@@ -1,3 +1,5 @@
+/* Canonical Studio design rules mirrored in app/globals.css.
+   Keep both files in sync and run `npm run lint:css-sync`; CI gates drift. */
 @layer base {
   [data-studio-import-id] h1,
   [data-studio-import-id] h2,
