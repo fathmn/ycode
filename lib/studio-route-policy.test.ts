@@ -1,9 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { STUDIO_ROUTE_POLICIES } from '@/lib/studio-route-policy';
 
 const VALID_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const VALID_SCOPES = new Set(['project', 'integration', 'none']);
+const STUDIO_WRITE_ROLE_NAMES = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 function routePatternFromKey(key: string, method?: string): string {
   const prefix = method ? `${method} ` : '';
@@ -44,4 +52,36 @@ test('studio route policies are well-formed', () => {
       );
     }
   }
+});
+
+test('css generation routes are project-scoped Studio write policies', () => {
+  for (const route of [
+    'POST /ycode/api/css/generate',
+    'POST /ycode/api/css/generate-pages',
+  ]) {
+    const policy = STUDIO_ROUTE_POLICIES[route];
+    assert.ok(policy, `${route} must be registered in Studio route policies`);
+    assert.equal(policy.method, 'POST');
+    assert.equal(policy.scope, 'project');
+    assert.deepEqual(policy.requiredRoles, STUDIO_WRITE_ROLE_NAMES);
+  }
+});
+
+test('css generation handlers use the authenticated project scope', () => {
+  const generateRoute = fs.readFileSync(
+    path.join(process.cwd(), 'app/(builder)/ycode/api/css/generate/route.ts'),
+    'utf8',
+  );
+  assert.match(generateRoute, /requireStudioProjectRole\(request,\s*CSS_GENERATE_ROLES\)/);
+  assert.match(generateRoute, /const projectId = roleCheck\.context\.project\.id;/);
+  assert.match(generateRoute, /generateAndSaveDraftCSS\(projectId\)/);
+
+  const generatePagesRoute = fs.readFileSync(
+    path.join(process.cwd(), 'app/(builder)/ycode/api/css/generate-pages/route.ts'),
+    'utf8',
+  );
+  assert.match(generatePagesRoute, /requireStudioProjectRole\(request,\s*CSS_GENERATE_PAGE_ROLES\)/);
+  assert.match(generatePagesRoute, /const projectId = roleCheck\.context\.project\.id;/);
+  assert.match(generatePagesRoute, /generateCSSForPage\(pageIds\[0\], projectId\)/);
+  assert.match(generatePagesRoute, /generateCSSForPages\(pageIds, projectId\)/);
 });

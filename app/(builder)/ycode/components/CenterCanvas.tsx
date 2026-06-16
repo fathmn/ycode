@@ -66,7 +66,7 @@ import { cn } from '@/lib/utils';
 import { STUDIO_PROJECT_SELECTION_EVENT, getSelectedStudioProjectSlug } from '@/lib/api';
 import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { getCollectionVariable, canDeleteLayer, findLayerById, findParentCollectionLayer, canLayerHaveLink, updateLayerProps, removeRichTextSublayer, isRichTextLayer, getLayerCmsFieldBinding } from '@/lib/layer-utils';
-import { CANVAS_BORDER, CANVAS_PADDING, updateViewportOverrides } from '@/lib/canvas-utils';
+import { CANVAS_BORDER, CANVAS_PADDING } from '@/lib/canvas-utils';
 import { BREAKPOINTS } from '@/lib/breakpoint-utils';
 import { buildFieldGroupsForLayer, flattenFieldGroups, filterFieldGroupsByType, SIMPLE_TEXT_FIELD_TYPES } from '@/lib/collection-field-utils';
 import { buildFieldVariableData } from '@/lib/variable-format-utils';
@@ -964,10 +964,6 @@ const CenterCanvas = React.memo(function CenterCanvas({
         ? containerEl.clientHeight - CANVAS_PADDING
         : 0);
 
-      if (refHeight > 0) {
-        updateViewportOverrides(doc, refHeight);
-      }
-
       let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
       const observeBodyChildren = () => {
@@ -991,8 +987,6 @@ const CenterCanvas = React.memo(function CenterCanvas({
             : refHeight);
 
           if (freshRefHeight <= 0) return;
-
-          updateViewportOverrides(doc, freshRefHeight);
 
           // Disconnect observer before temporary style changes — setting
           // body/html height to auto causes h-full children to resize,

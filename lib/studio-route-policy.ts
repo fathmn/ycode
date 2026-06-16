@@ -112,6 +112,9 @@ export const STUDIO_ROUTE_POLICIES: Record<string, StudioRoutePolicy> = {
   [k('DELETE', '/ycode/api/components/[id]')]: projectPolicy('DELETE', STUDIO_WRITE_ROLES, 'id'),
   [k('GET', '/ycode/api/components/unpublished')]: projectPolicy('GET', STUDIO_READ_ROLES),
 
+  [k('POST', '/ycode/api/css/generate')]: projectPolicy('POST', STUDIO_WRITE_ROLES),
+  [k('POST', '/ycode/api/css/generate-pages')]: projectPolicy('POST', STUDIO_WRITE_ROLES),
+
   [k('GET', '/ycode/api/editor/init')]: projectPolicy('GET', STUDIO_READ_ROLES),
   [k('GET', '/ycode/api/error-page')]: projectPolicy('GET', STUDIO_READ_ROLES),
 

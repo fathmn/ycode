@@ -268,8 +268,14 @@ export default function HeaderBar({
     };
   }, []);
 
-  // Check for updates on mount
+  // Check for upstream updates only for Novum operator roles. Customer roles
+  // must not hit the operator-only endpoint on every editor load.
   useEffect(() => {
+    if (!selectedProjectRole || !isStudioOperator) {
+      setHasUpdate(false);
+      return;
+    }
+
     const checkForUpdates = async () => {
       try {
         const response = await studioFetch('/ycode/api/updates/check');
@@ -282,7 +288,7 @@ export default function HeaderBar({
       }
     };
     checkForUpdates();
-  }, []);
+  }, [isStudioOperator, selectedProjectRole]);
 
   // Get selected locale (computed from subscribed store values)
   const selectedLocale = useMemo(() => {

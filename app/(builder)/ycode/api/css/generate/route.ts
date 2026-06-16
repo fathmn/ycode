@@ -1,7 +1,15 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { generateAndSaveDraftCSS } from '@/lib/server/cssGenerator';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 export const dynamic = 'force-dynamic';
+
+const CSS_GENERATE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * POST /ycode/api/css/generate
@@ -10,16 +18,12 @@ export const dynamic = 'force-dynamic';
  * Called by the MCP server after saving layers so that published
  * sites always have up-to-date CSS.
  */
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
-    let projectId: string | null = null;
-    try {
-      const body = await request.json();
-      projectId = typeof body?.projectId === 'string' ? body.projectId : null;
-    } catch {
-      projectId = null;
-    }
+    const roleCheck = await requireStudioProjectRole(request, CSS_GENERATE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
 
+    const projectId = roleCheck.context.project.id;
     const css = await generateAndSaveDraftCSS(projectId);
 
     return NextResponse.json({

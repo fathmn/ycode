@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateCSSForPage, generateCSSForPages } from '@/lib/server/cssGenerator';
+import { requireStudioProjectRole, type StudioProjectRole } from '@/lib/studio-platform';
 
 export const dynamic = 'force-dynamic';
+
+const CSS_GENERATE_PAGE_ROLES: StudioProjectRole[] = [
+  'studio_admin',
+  'studio_developer',
+  'customer_owner',
+  'customer_editor',
+];
 
 /**
  * POST /ycode/api/css/generate-pages
@@ -14,6 +22,10 @@ export const dynamic = 'force-dynamic';
  */
 export async function POST(request: NextRequest) {
   try {
+    const roleCheck = await requireStudioProjectRole(request, CSS_GENERATE_PAGE_ROLES);
+    if (!roleCheck.ok) return roleCheck.response;
+
+    const projectId = roleCheck.context.project.id;
     const { pageIds } = await request.json();
 
     if (!pageIds || !Array.isArray(pageIds) || pageIds.length === 0) {
@@ -24,13 +36,13 @@ export async function POST(request: NextRequest) {
     }
 
     if (pageIds.length === 1) {
-      const css = await generateCSSForPage(pageIds[0]);
+      const css = await generateCSSForPage(pageIds[0], projectId);
       return NextResponse.json({
         data: { updated: css ? 1 : 0, length: css?.length ?? 0 },
       });
     }
 
-    const updated = await generateCSSForPages(pageIds);
+    const updated = await generateCSSForPages(pageIds, projectId);
     return NextResponse.json({
       data: { updated },
     });
