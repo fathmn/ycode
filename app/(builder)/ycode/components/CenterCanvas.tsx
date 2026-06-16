@@ -2811,7 +2811,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
                         editingComponentVariables={editingComponentVariables}
                         forceVisibleLayerIds={activeInteractionTriggerLayerId ? activeInteractionTargetLayerIds : undefined}
                         zoom={zoom}
-                        referenceViewportHeight={defaultCanvasHeight}
+                        referenceViewportHeight={finalIframeHeight}
                       />
 
                       {/* Drop indicator overlay - subscribes to store directly */}
