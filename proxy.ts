@@ -1220,7 +1220,8 @@ export async function proxy(request: NextRequest) {
         : `/studio-published/${encodeURIComponent(projectId)}${pathname}`;
       const rewriteResponse = NextResponse.rewrite(rewriteUrl);
       rewriteResponse.headers.set('x-pathname', pathname);
-      rewriteResponse.headers.set('Cache-Control', 'public, s-maxage=31536000, stale-while-revalidate=31536000');
+      // Short TTL keeps publishes visible within ~1 min; a 1-year freeze broke purge invalidation (see next.config).
+      rewriteResponse.headers.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
       return rewriteResponse;
     }
   }
@@ -1238,7 +1239,7 @@ export async function proxy(request: NextRequest) {
   }
 
   if (isPublicPage && request.method === 'GET') {
-    response.headers.set('Cache-Control', 'public, s-maxage=31536000, stale-while-revalidate=31536000');
+    response.headers.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
   }
 
   return response;

@@ -4,8 +4,7 @@ import {
   renderPublishedSlug,
 } from '@/app/(site)/published-route';
 
-export const revalidate = false;
-export const dynamic = 'force-static';
+export const revalidate = 60;
 export const dynamicParams = true;
 
 interface PageProps {

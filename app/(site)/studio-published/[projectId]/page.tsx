@@ -4,8 +4,7 @@ import {
   renderPublishedHome,
 } from '@/app/(site)/published-route';
 
-export const revalidate = false;
-export const dynamic = 'force-static';
+export const revalidate = 60;
 
 interface PageProps {
   params: Promise<{ projectId: string }>;
