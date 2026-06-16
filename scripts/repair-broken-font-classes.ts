@@ -1,9 +1,7 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 
-const BROKEN_FONT_CLASS_PREFIX = 'font-[family-name:var(--font-display),';
-const CANONICAL_FONT_CLASS = 'font-[family-name:var(--font-display,"Spectral",Georgia,serif)]';
-const BROKEN_FONT_DESIGN_VALUE_PREFIX = 'var(--font-display),';
-const CANONICAL_FONT_DESIGN_VALUE = 'var(--font-display,"Spectral",Georgia,serif)';
+const BROKEN_FONT_CLASS_TOKEN_PATTERN = /^font-\[family-name:var\(--font-([a-z0-9-]+)\),(.+)\]$/;
+const BROKEN_FONT_DESIGN_VALUE_PATTERN = /^var\(--font-([a-z0-9-]+)\),(.*)$/;
 const FETCH_PAGE_SIZE = 1000;
 const PAGE_ID_CHUNK_SIZE = 200;
 
@@ -60,8 +58,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function repairClassToken(token: string): { value: string; replacements: number } {
-  if (token.startsWith(BROKEN_FONT_CLASS_PREFIX)) {
-    return { value: CANONICAL_FONT_CLASS, replacements: 1 };
+  const match = token.match(BROKEN_FONT_CLASS_TOKEN_PATTERN);
+  if (match) {
+    return {
+      value: `font-[family-name:var(--font-${match[1]},${match[2]})]`,
+      replacements: 1,
+    };
   }
 
   return { value: token, replacements: 0 };
@@ -126,8 +128,12 @@ function repairClassesValue(value: unknown): { value: unknown; replacements: num
 }
 
 function repairDesignFontValue(value: string): { value: string; replacements: number } {
-  if (value.trim().startsWith(BROKEN_FONT_DESIGN_VALUE_PREFIX)) {
-    return { value: CANONICAL_FONT_DESIGN_VALUE, replacements: 1 };
+  const match = value.trim().match(BROKEN_FONT_DESIGN_VALUE_PATTERN);
+  if (match) {
+    return {
+      value: `var(--font-${match[1]},${match[2]})`,
+      replacements: 1,
+    };
   }
 
   return { value, replacements: 0 };
