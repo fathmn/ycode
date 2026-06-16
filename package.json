@@ -149,6 +149,8 @@
   },
   "overrides": {
     "punycode": "$punycode",
+    "hono": "4.12.25",
+    "markdown-it": "14.2.0",
     "whatwg-url": "^14.2.0",
     "tr46": "^5.1.0",
     "diff": ">=8.0.3",
