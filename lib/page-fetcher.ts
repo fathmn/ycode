@@ -7,7 +7,7 @@ import { getValuesByItemIds } from '@/lib/repositories/collectionItemValueReposi
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import { enrichItemsWithCountValues } from '@/lib/repositories/collectionCountRepository';
 import type { Page, PageFolder, PageLayers, Component, ComponentVariable, CollectionItemWithValues, CollectionField, Layer, CollectionPaginationMeta, Translation, Locale, Asset } from '@/types';
-import { getCollectionVariable, resolveFieldValue, evaluateVisibility, evaluateCondition, getLayerHtmlTag, filterDisabledSliderLayers } from '@/lib/layer-utils';
+import { getCollectionVariable, resolveFieldValue, evaluateVisibility, evaluateCondition, getLayerHtmlTag, filterDisabledSliderLayers, isTextContentLayer } from '@/lib/layer-utils';
 import { isFieldVariable, isAssetVariable, createDynamicTextVariable, createDynamicRichTextVariable, createAssetVariable, getDynamicTextContent, getVariableStringValue, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
 import { buildImageSizes, generateImageSrcset, getOptimizedImageUrl, getAssetProxyUrl, DEFAULT_ASSETS, collectLayerAssetIds, buildSvgDataUrl, parseImageDimension, getSvgAspectRatioStyle } from '@/lib/asset-utils';
 import {
@@ -22,7 +22,7 @@ import { resolveComponents, applyComponentOverrides } from '@/lib/resolve-compon
 import { getComponentVariantLayers } from '@/lib/component-variant-utils';
 import { isTiptapDoc, hasBlockElementsWithResolver } from '@/lib/tiptap-utils';
 import { castValue, parseMultiReferenceValue, remapLayerIdsForCollectionItem } from '@/lib/collection-utils';
-import { DEFAULT_TEXT_STYLES } from '@/lib/text-format-utils';
+import { DEFAULT_TEXT_STYLES, flattenTiptapParagraphs } from '@/lib/text-format-utils';
 
 // Pagination context passed through to resolveCollectionLayers
 export interface PaginationContext {
@@ -5083,7 +5083,12 @@ export function layerToHtml(
         layerDataMap: effectiveLayerDataMap,
         pageCollectionSortedItemIds: pageLinkContext?.pageCollectionSortedItemIds,
       };
-      textContent = renderTiptapToHtml(textVariable.data.content, layer.textStyles, componentRenderer, richTextLinkContext);
+      const blockCheckValues = { ...(pageCollectionItemData || {}), ...(effectiveCollectionItemData || {}) };
+      const richTextContent = (isTextContentLayer(layer)
+        && !hasBlockElementsInInlineVariables(textVariable.data.content, blockCheckValues))
+        ? flattenTiptapParagraphs(textVariable.data.content)
+        : textVariable.data.content;
+      textContent = renderTiptapToHtml(richTextContent, layer.textStyles, componentRenderer, richTextLinkContext);
       isRichText = true;
     }
   }
