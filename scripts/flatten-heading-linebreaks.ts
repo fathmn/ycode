@@ -7,6 +7,7 @@ const FETCH_PAGE_SIZE = 1000;
 const PAGE_ID_CHUNK_SIZE = 200;
 
 type Mode = 'dry-run' | 'apply';
+type Operation = 'flatten' | 'split';
 
 type ProjectPage = {
   id: string;
@@ -29,16 +30,16 @@ type ReportRow = {
 
 type LayerMatch = Pick<ReportRow, 'layerId' | 'changed'>;
 
-type FlattenCandidate = {
+type TransformCandidate = {
   row: PageLayerRow;
   changedCount: number;
 };
 
 function printUsage() {
-  console.error('Usage: npm run studio:flatten-headings -- <projectId> [layerId ...] [--apply]');
+  console.error('Usage: npm run studio:flatten-headings -- <projectId> [layerId ...] [--split] [--apply]');
 }
 
-function parseArgs(): { projectId: string; mode: Mode; targetLayerIds: string[] } {
+function parseArgs(): { projectId: string; mode: Mode; operation: Operation; targetLayerIds: string[] } {
   const projectId = process.argv[2]?.trim();
   const extraArgs = process.argv.slice(3);
 
@@ -49,6 +50,7 @@ function parseArgs(): { projectId: string; mode: Mode; targetLayerIds: string[] 
 
   const targetLayerIds: string[] = [];
   let apply = false;
+  let operation: Operation = 'flatten';
 
   for (const rawArg of extraArgs) {
     const arg = rawArg.trim();
@@ -56,6 +58,11 @@ function parseArgs(): { projectId: string; mode: Mode; targetLayerIds: string[] 
 
     if (arg === '--apply') {
       apply = true;
+      continue;
+    }
+
+    if (arg === '--split') {
+      operation = 'split';
       continue;
     }
 
@@ -70,6 +77,7 @@ function parseArgs(): { projectId: string; mode: Mode; targetLayerIds: string[] 
   return {
     projectId,
     mode: apply ? 'apply' : 'dry-run',
+    operation,
     targetLayerIds: targetLayerIds.length > 0 ? Array.from(new Set(targetLayerIds)) : [DEFAULT_TARGET_LAYER_ID],
   };
 }
@@ -85,24 +93,70 @@ function hasMultipleTopLevelBlocks(content: unknown): boolean {
     && content.content.length > 1;
 }
 
+function splitTiptapParagraphHardBreaks(content: object): object {
+  if (!isRecord(content) || content.type !== 'doc' || !Array.isArray(content.content) || content.content.length !== 1) {
+    return content;
+  }
+
+  const [paragraph] = content.content;
+  if (!isRecord(paragraph) || paragraph.type !== 'paragraph' || !Array.isArray(paragraph.content)) {
+    return content;
+  }
+
+  const segments: unknown[][] = [[]];
+  let hasHardBreak = false;
+
+  for (const node of paragraph.content) {
+    if (isRecord(node) && node.type === 'hardBreak') {
+      hasHardBreak = true;
+      segments.push([]);
+      continue;
+    }
+
+    segments[segments.length - 1].push(node);
+  }
+
+  if (!hasHardBreak) return content;
+
+  return {
+    type: 'doc',
+    content: segments.map((segment) => ({
+      type: 'paragraph',
+      content: segment,
+    })),
+  };
+}
+
 function isSameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function flattenTargetLayer(layer: Layer, targetLayerIds: Set<string>): LayerMatch | null {
+function transformRichTextContent(content: object, operation: Operation): object {
+  if (operation === 'split') {
+    return splitTiptapParagraphHardBreaks(content);
+  }
+
+  if (hasMultipleTopLevelBlocks(content)) {
+    return flattenTiptapParagraphs(content);
+  }
+
+  return content;
+}
+
+function transformTargetLayer(layer: Layer, targetLayerIds: Set<string>, operation: Operation): LayerMatch | null {
   if (!targetLayerIds.has(layer.id)) return null;
 
   let changed = false;
   const textVariable = layer.variables?.text;
 
-  if (textVariable?.type === 'dynamic_rich_text' && hasMultipleTopLevelBlocks(textVariable.data?.content)) {
+  if (textVariable?.type === 'dynamic_rich_text') {
     const previousContent = textVariable.data.content;
-    const flattenedContent = flattenTiptapParagraphs(previousContent);
+    const transformedContent = transformRichTextContent(previousContent, operation);
 
-    if (!isSameJson(previousContent, flattenedContent)) {
+    if (!isSameJson(previousContent, transformedContent)) {
       textVariable.data = {
         ...textVariable.data,
-        content: flattenedContent,
+        content: transformedContent,
       };
       changed = true;
     }
@@ -114,17 +168,17 @@ function flattenTargetLayer(layer: Layer, targetLayerIds: Set<string>): LayerMat
   };
 }
 
-function flattenLayerTree(layers: unknown, targetLayerIds: Set<string>): LayerMatch[] {
+function transformLayerTree(layers: unknown, targetLayerIds: Set<string>, operation: Operation): LayerMatch[] {
   if (!Array.isArray(layers)) return [];
 
   const rows: LayerMatch[] = [];
 
   for (const layer of layers as Layer[]) {
-    const match = flattenTargetLayer(layer, targetLayerIds);
+    const match = transformTargetLayer(layer, targetLayerIds, operation);
     if (match) rows.push(match);
 
     if (Array.isArray(layer.children) && layer.children.length > 0) {
-      rows.push(...flattenLayerTree(layer.children, targetLayerIds));
+      rows.push(...transformLayerTree(layer.children, targetLayerIds, operation));
     }
   }
 
@@ -223,7 +277,7 @@ async function fetchPageLayers(
 
 async function updatePageLayerRows(
   client: NonNullable<Awaited<ReturnType<typeof getSupabaseAdmin>>>,
-  candidates: FlattenCandidate[]
+  candidates: TransformCandidate[]
 ) {
   for (const candidate of candidates) {
     const { error } = await client
@@ -241,7 +295,7 @@ async function updatePageLayerRows(
 }
 
 async function main() {
-  const { projectId, mode, targetLayerIds } = parseArgs();
+  const { projectId, mode, operation, targetLayerIds } = parseArgs();
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -256,10 +310,10 @@ async function main() {
     : [];
 
   const reportRows: ReportRow[] = [];
-  const candidates: FlattenCandidate[] = [];
+  const candidates: TransformCandidate[] = [];
 
   for (const row of pageLayerRows) {
-    const matches = flattenLayerTree(row.layers, targetLayerIdSet);
+    const matches = transformLayerTree(row.layers, targetLayerIdSet, operation);
     if (matches.length === 0) continue;
 
     const page = pageById.get(row.page_id);
@@ -286,6 +340,7 @@ async function main() {
   console.log(JSON.stringify({
     projectId,
     mode,
+    operation,
     targetLayerIds,
     rows: reportRows,
     totalChanged,
