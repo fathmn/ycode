@@ -15,17 +15,21 @@ const PROJECT_ID = '11111111-1111-4111-8111-111111111111';
 const FOREIGN_PROJECT_ID = '22222222-2222-4222-8222-222222222222';
 
 type RecordedInsert = { table: string; value: Record<string, unknown> };
+type RecordedGte = { table: string; column: string; value: unknown };
 
 class StubQuery {
   private operation: 'select' | 'insert' | 'update' | 'delete' = 'select';
   private insertedValue: Record<string, unknown> | null = null;
   private selectedColumns: string | undefined;
   private equalFilters = new Map<string, unknown>();
+  private gteFilters = new Map<string, unknown>();
 
   constructor(
     private readonly table: string,
     private readonly inserts: RecordedInsert[],
-    private readonly previewApproved: boolean
+    private readonly previewApproved: boolean,
+    private readonly renderedPreviewCreatedAt: string | null,
+    private readonly recordedGte: RecordedGte[]
   ) {}
 
   select(columns?: string) {
@@ -40,7 +44,11 @@ class StubQuery {
   not() { return this; }
   in() { return this; }
   is() { return this; }
-  gte() { return this; }
+  gte(column: string, value: unknown) {
+    this.gteFilters.set(column, value);
+    this.recordedGte.push({ table: this.table, column, value });
+    return this;
+  }
   gt() { return this; }
   order() { return this; }
   limit() { return this; }
@@ -81,6 +89,38 @@ class StubQuery {
         },
         error: null,
       };
+    }
+    if (
+      this.table === 'studio_preview_runs'
+      && this.selectedColumns === 'id, preview_url, actor_user_id, created_at, metadata'
+      && this.renderedPreviewCreatedAt
+    ) {
+      const previewNonceHash = 'a'.repeat(64);
+      const cutoff = this.gteFilters.get('created_at');
+      const rows = [{
+        id: 'rendered-preview-run-id',
+        preview_url: '/studio/preview?project=kundenprojekt',
+        actor_user_id: '33333333-3333-4333-8333-333333333333',
+        created_at: this.renderedPreviewCreatedAt,
+        metadata: {
+          serverSideRenderProof: true,
+          rawNonceHash: 'b'.repeat(64),
+          previewNonceHash,
+          previewNonceDraftHash: 'c'.repeat(64),
+          previewNonceIssuedAt: this.renderedPreviewCreatedAt,
+          renderArtifact: {
+            kind: 'studio-preview-server-render',
+            reportPath: '/studio/preview?project=kundenprojekt',
+            generatedAt: this.renderedPreviewCreatedAt,
+            pairCount: 1,
+            failingPairs: [],
+            previewNonceHash,
+          },
+        },
+      }].filter((row) => (
+        typeof cutoff !== 'string' || row.created_at >= cutoff
+      ));
+      return { data: rows, error: null };
     }
     if (this.table === 'studio_preview_runs' && this.previewApproved) {
       if (single && this.equalFilters.get('id') === 'rendered-preview-run-id') {
@@ -140,15 +180,24 @@ function createStubContext(options: {
   role?: StudioProjectContext['role'];
   source?: string;
   previewApproved?: boolean;
-} = {}): { context: StudioProjectContext; inserts: RecordedInsert[] } {
+  renderedPreviewCreatedAt?: string;
+} = {}): { context: StudioProjectContext; inserts: RecordedInsert[]; recordedGte: RecordedGte[] } {
   const inserts: RecordedInsert[] = [];
+  const recordedGte: RecordedGte[] = [];
   const client = {
     from(table: string) {
-      return new StubQuery(table, inserts, options.previewApproved === true);
+      return new StubQuery(
+        table,
+        inserts,
+        options.previewApproved === true,
+        options.renderedPreviewCreatedAt || null,
+        recordedGte
+      );
     },
   };
   return {
     inserts,
+    recordedGte,
     context: {
       client,
       project: { id: PROJECT_ID, slug: 'kundenprojekt-studio', metadata: {} },
@@ -253,6 +302,49 @@ test('approve_preview verlangt einen Browser-Render-Proof und erzeugt selbst kei
     )
   );
   assert.equal(inserts.filter(({ table }) => table === 'studio_preview_runs').length, 0);
+});
+
+test('approve_preview akzeptiert einen 45 Minuten alten gespeicherten Render-Nachweis', { concurrency: false }, async () => {
+  const renderedPreviewCreatedAt = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+  const { context, inserts, recordedGte } = createStubContext({ renderedPreviewCreatedAt });
+
+  const result = await recordStudioPreviewApprovalForContext(
+    context,
+    '/studio/preview?project=kundenprojekt'
+  );
+
+  const renderProofCutoff = recordedGte.find(({ table, column }) => (
+    table === 'studio_preview_runs' && column === 'created_at'
+  ));
+  assert.ok(renderProofCutoff);
+  assert.ok(renderedPreviewCreatedAt >= String(renderProofCutoff.value));
+  assert.equal(result.data.preview_url, '/studio/preview?project=kundenprojekt');
+  assert.ok(inserts.some(({ table, value }) => (
+    table === 'studio_preview_runs'
+    && (value.metadata as Record<string, unknown>).renderedPreviewRunId === 'rendered-preview-run-id'
+  )));
+});
+
+test('approve_preview weist einen mehr als 24 Stunden alten Render-Nachweis weiterhin ab', { concurrency: false }, async () => {
+  const renderedPreviewCreatedAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  const { context, recordedGte } = createStubContext({ renderedPreviewCreatedAt });
+
+  await assert.rejects(
+    () => recordStudioPreviewApprovalForContext(
+      context,
+      '/studio/preview?project=kundenprojekt'
+    ),
+    (error: unknown) => (
+      error instanceof StudioPreviewApprovalError
+      && error.code === 'STUDIO_PREVIEW_RENDER_REQUIRED'
+    )
+  );
+
+  const renderProofCutoff = recordedGte.find(({ table, column }) => (
+    table === 'studio_preview_runs' && column === 'created_at'
+  ));
+  assert.ok(renderProofCutoff);
+  assert.ok(renderedPreviewCreatedAt < String(renderProofCutoff.value));
 });
 
 test('approve_preview über MCP ohne Actor wird abgewiesen und schreibt keinen Preview-Run', { concurrency: false }, async () => {

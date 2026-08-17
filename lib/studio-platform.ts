@@ -1854,11 +1854,7 @@ async function getRecentRenderedPreview(
   draftHash: string,
   previewUrl: string
 ): Promise<{ id: string; preview_url: string; actor_user_id: string | null } | null> {
-  const maxAgeMs = Math.min(
-    PREVIEW_MAX_AGE_HOURS * 60 * 60 * 1000,
-    PREVIEW_NONCE_MAX_AGE_MINUTES * 60 * 1000
-  );
-  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  const cutoff = new Date(Date.now() - PREVIEW_MAX_AGE_HOURS * 60 * 60 * 1000).toISOString();
   let query = client
     .from('studio_preview_runs')
     .select('id, preview_url, actor_user_id, created_at, metadata')

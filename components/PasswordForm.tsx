@@ -122,15 +122,21 @@ export default function PasswordForm({ pageId, folderId, redirectUrl, isPublishe
         {isLoading ? 'Wird geprüft …' : 'Weiter'}
       </button>
 
+      {/*
+        Surface-adaptive on purpose: the gate renders on top of a customer's own
+        401 page, which may be light or dark. Everything derives from
+        `currentColor`, so the form inherits the page's text colour instead of
+        forcing a blue-on-white widget onto a dark brand surface.
+      */}
       <style jsx>{`
         .ycode-password-form {
           display: flex;
           flex-direction: column;
-          gap: 12px;
+          gap: 18px;
           width: 100%;
-          max-width: 300px;
+          max-width: 340px;
           margin: 0 auto;
-          padding: 0 16px 48px;
+          color: inherit;
         }
 
         .ycode-password-form-field {
@@ -139,60 +145,71 @@ export default function PasswordForm({ pageId, folderId, redirectUrl, isPublishe
 
         .ycode-password-input {
           width: 100%;
-          padding: 10px 14px;
-          font-size: 14px;
-          border: 1px solid #d1d5db;
-          border-radius: 8px;
+          padding: 10px 2px;
+          font: inherit;
+          font-size: 15px;
+          color: inherit;
+          background: transparent;
+          border: 0;
+          border-bottom: 1px solid currentColor;
+          border-radius: 0;
           outline: none;
-          transition: border-color 0.15s ease, box-shadow 0.15s ease;
+          opacity: 0.75;
+          transition: opacity 0.15s ease;
+        }
+
+        .ycode-password-input::placeholder {
+          color: currentColor;
+          opacity: 0.45;
         }
 
         .ycode-password-input:focus {
-          border-color: #3b82f6;
-          box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+          opacity: 1;
         }
 
         .ycode-password-input:disabled {
-          background-color: #f3f4f6;
+          opacity: 0.4;
           cursor: not-allowed;
         }
 
         .ycode-password-error {
-          color: #dc2626;
           font-size: 13px;
           text-align: center;
+          opacity: 0.85;
         }
 
         .ycode-password-rate-limited {
           display: flex;
           align-items: center;
           justify-content: center;
-          background-color: #fef2f2;
-          border: 1px solid #fecaca;
+          gap: 6px;
+          border: 1px solid currentColor;
           border-radius: 6px;
           padding: 10px 12px;
-          font-weight: 500;
+          opacity: 0.85;
         }
 
         .ycode-password-submit {
-          width: 100%;
-          padding: 10px 16px;
-          font-size: 14px;
-          font-weight: 500;
-          color: white;
-          background-color: #3b82f6;
-          border: none;
-          border-radius: 8px;
+          align-self: center;
+          padding: 11px 26px;
+          font: inherit;
+          font-size: 13px;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          color: inherit;
+          background: transparent;
+          border: 1px solid currentColor;
+          border-radius: 999px;
           cursor: pointer;
-          transition: background-color 0.15s ease;
+          transition: opacity 0.15s ease;
         }
 
         .ycode-password-submit:hover:not(:disabled) {
-          background-color: #2563eb;
+          opacity: 0.65;
         }
 
         .ycode-password-submit:disabled {
-          background-color: #9ca3af;
+          opacity: 0.35;
           cursor: not-allowed;
         }
       `}</style>
