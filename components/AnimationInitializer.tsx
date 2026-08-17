@@ -1261,7 +1261,12 @@ async function waitForStudioPreviewRenderedReady(signal: AbortSignal): Promise<v
     waitForWindowLoad(signal),
   ]), 2500, signal);
   await waitForPageTransition(signal);
-  await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  // `requestAnimationFrame` never fires while the tab is hidden, so this last
+  // settle step used to hang forever in a background tab — the rendered-preview
+  // report was never even attempted and the publish gate stayed unsatisfiable.
+  await waitWithCap(new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }), 500, signal);
 }
 
 function getVisiblePreviewLayerCount(): { visibleLayerCount: number; contentLayerCount: number; revealedLayerCount: number } {
