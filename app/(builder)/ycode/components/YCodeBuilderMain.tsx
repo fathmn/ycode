@@ -1777,7 +1777,11 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
         // Copy: Cmd/Ctrl + C (supports multi-select)
         if ((e.metaKey || e.ctrlKey) && e.key === 'c' && !isContentOnlyRole) {
-          if (!isInputFocused && (currentPageId || editingComponentId)) {
+          // A real text selection (e.g. the preview URL in the publish popover)
+          // must reach the browser's own copy: claiming the OS clipboard for the
+          // internal layer clipboard would overwrite it with the layer marker.
+          const hasTextSelection = Boolean(window.getSelection()?.toString().trim());
+          if (!isInputFocused && !hasTextSelection && (currentPageId || editingComponentId)) {
             e.preventDefault();
 
             // Get layers from the correct context

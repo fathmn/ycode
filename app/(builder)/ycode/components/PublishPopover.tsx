@@ -219,6 +219,12 @@ export default function PublishPopover({
       setLastRenderedPreviewUrl(window.localStorage?.getItem('studio:last-rendered-preview-url'));
       if (isOpen) loadPublishReadiness();
     };
+    const handlePreviewRenderFailed = (event: Event) => {
+      const reason = (event as CustomEvent<{ reason?: string }>).detail?.reason;
+      toast.error(reason
+        ? `Vorschau konnte nicht bestätigt werden: ${reason}`
+        : 'Vorschau konnte nicht bestätigt werden');
+    };
     const handleVisible = () => {
       if (document.visibilityState === 'visible' && isOpen) {
         setLastRenderedPreviewUrl(window.localStorage?.getItem('studio:last-rendered-preview-url'));
@@ -228,6 +234,7 @@ export default function PublishPopover({
     window.addEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
     window.addEventListener('storage', handleStorage);
     window.addEventListener('studio:preview-rendered', handlePreviewRendered);
+    window.addEventListener('studio:preview-render-failed', handlePreviewRenderFailed);
     document.addEventListener('visibilitychange', handleVisible);
     window.addEventListener('focus', handleVisible);
     updateSelectedProject();
@@ -235,6 +242,7 @@ export default function PublishPopover({
       window.removeEventListener(STUDIO_PROJECT_SELECTION_EVENT, updateSelectedProject);
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('studio:preview-rendered', handlePreviewRendered);
+      window.removeEventListener('studio:preview-render-failed', handlePreviewRenderFailed);
       document.removeEventListener('visibilitychange', handleVisible);
       window.removeEventListener('focus', handleVisible);
     };
@@ -401,9 +409,16 @@ export default function PublishPopover({
             variant="secondary"
             className="w-full"
             onClick={() => {
+              // Open first: a blocked pop-up used to leave the render marker
+              // cleared and the approve button disabled forever, with no hint
+              // that anything went wrong.
+              const previewWindow = window.open(getProjectPreviewUrl(), '_blank');
+              if (!previewWindow) {
+                toast.error('Vorschau konnte nicht geöffnet werden — bitte Pop-ups für diese Seite erlauben.');
+                return;
+              }
               window.localStorage?.removeItem('studio:last-rendered-preview-url');
               setLastRenderedPreviewUrl(null);
-              window.open(getProjectPreviewUrl(), '_blank');
             }}
             disabled={requiresProjectSelection}
           >

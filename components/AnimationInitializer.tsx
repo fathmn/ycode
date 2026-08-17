@@ -1264,31 +1264,38 @@ async function waitForStudioPreviewRenderedReady(signal: AbortSignal): Promise<v
   await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 }
 
-function getVisiblePreviewLayerCount(): { visibleLayerCount: number; contentLayerCount: number } {
+function getVisiblePreviewLayerCount(): { visibleLayerCount: number; contentLayerCount: number; revealedLayerCount: number } {
   return Array.from(document.querySelectorAll<HTMLElement>('[data-layer-id]'))
     .reduce((counts, element) => {
       const rect = element.getBoundingClientRect();
       const style = window.getComputedStyle(element);
-      const isVisible = rect.width > 0
+      // Opacity is deliberately NOT part of the presence test: scroll reveals
+      // start at `opacity: 0` and never run in a background tab, so counting
+      // them as absent made the heartbeat unsendable and blocked the publish
+      // gate. Geometry plus display/visibility prove the render; opacity is
+      // reported separately as `revealedLayerCount`.
+      const isPresent = rect.width > 0
         && rect.height > 0
         && style.display !== 'none'
-        && style.visibility !== 'hidden'
-        && Number(style.opacity || '1') > 0;
-      if (!isVisible) return counts;
+        && style.visibility !== 'hidden';
+      if (!isPresent) return counts;
 
       counts.visibleLayerCount += 1;
+      if (Number(style.opacity || '1') > 0) {
+        counts.revealedLayerCount += 1;
+      }
       const layerId = element.getAttribute('data-layer-id') || '';
       const isScaffold = layerId === 'body' || element.id === 'ybody';
       if (!isScaffold) {
         counts.contentLayerCount += 1;
       }
       return counts;
-    }, { visibleLayerCount: 0, contentLayerCount: 0 });
+    }, { visibleLayerCount: 0, contentLayerCount: 0, revealedLayerCount: 0 });
 }
 
 function buildPreviewClientHeartbeat() {
   const bodyRect = document.body.getBoundingClientRect();
-  const { visibleLayerCount, contentLayerCount } = getVisiblePreviewLayerCount();
+  const { visibleLayerCount, contentLayerCount, revealedLayerCount } = getVisiblePreviewLayerCount();
   const bodyTextLength = (document.body.innerText || '').trim().length;
   const bodyVisible = bodyRect.width > 0 && bodyRect.height > 0;
   const viewportWidth = Math.round(window.innerWidth || document.documentElement.clientWidth || 0);
@@ -1301,10 +1308,15 @@ function buildPreviewClientHeartbeat() {
     bodyHeight: Math.round(bodyRect.height),
     visibleLayerCount,
     contentLayerCount,
+    revealedLayerCount,
     bodyTextLength,
     ok: bodyVisible && visibleLayerCount > 0 && contentLayerCount > 0,
   };
 }
+
+/** Rendered-preview reporting is retried: reveals and fonts settle late. */
+const PREVIEW_RENDER_REPORT_ATTEMPTS = 5;
+const PREVIEW_RENDER_REPORT_RETRY_MS = 1500;
 
 export default function AnimationInitializer({ layers, injectInitialCSS, initializeGlobalRuntime = false }: AnimationInitializerProps) {
   const cleanupRef = useRef<(() => void)[]>([]);
@@ -1346,27 +1358,54 @@ export default function AnimationInitializer({ layers, injectInitialCSS, initial
     const { previewUrl, previewProjectParam } = previewContext;
 
     const controller = new AbortController();
-    waitForStudioPreviewRenderedReady(controller.signal).then(() => {
-      if (controller.signal.aborted) return;
-      const clientHeartbeat = buildPreviewClientHeartbeat();
-      if (!clientHeartbeat.ok) return;
-      studioFetch('/ycode/api/studio/preview-rendered', {
-        method: 'POST',
-        headers: previewProjectParam
-          ? { 'content-type': 'application/json', 'x-studio-project-slug': previewProjectParam }
-          : { 'content-type': 'application/json' },
-        body: JSON.stringify({ previewUrl, clientHeartbeat }),
-        credentials: 'same-origin',
-        signal: controller.signal,
-      }).then((response) => {
-        if (response.ok) {
-          window.localStorage?.setItem('studio:last-rendered-preview-url', previewUrl);
-          window.dispatchEvent(new CustomEvent('studio:preview-rendered', { detail: { previewUrl } }));
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (previewProjectParam) headers['x-studio-project-slug'] = previewProjectParam;
+
+    // A single attempt used to give up silently whenever the heartbeat was not
+    // ready yet, leaving "Vorschau freigeben" permanently disabled without any
+    // feedback. Retry, then report the reason so the failure is diagnosable.
+    const reportRendered = async () => {
+      let lastFailure = 'unbekannt';
+
+      for (let attempt = 1; attempt <= PREVIEW_RENDER_REPORT_ATTEMPTS; attempt += 1) {
+        if (controller.signal.aborted) return;
+
+        const clientHeartbeat = buildPreviewClientHeartbeat();
+        if (!clientHeartbeat.ok) {
+          lastFailure = 'Vorschau ist noch nicht vollständig gerendert';
+        } else {
+          try {
+            const response = await studioFetch('/ycode/api/studio/preview-rendered', {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ previewUrl, clientHeartbeat }),
+              credentials: 'same-origin',
+              signal: controller.signal,
+            });
+            if (response.ok) {
+              window.localStorage?.setItem('studio:last-rendered-preview-url', previewUrl);
+              window.dispatchEvent(new CustomEvent('studio:preview-rendered', { detail: { previewUrl } }));
+              return;
+            }
+            const payload = await response.json().catch(() => null);
+            lastFailure = payload?.error || `HTTP ${response.status}`;
+          } catch (error) {
+            if (controller.signal.aborted) return;
+            lastFailure = error instanceof Error ? error.message : 'Netzwerkfehler';
+          }
         }
-      }).catch(() => {
-        // The publish gate reports a clear error if no rendered preview is recorded.
-      });
-    });
+
+        if (attempt === PREVIEW_RENDER_REPORT_ATTEMPTS) break;
+        await new Promise((resolve) => setTimeout(resolve, PREVIEW_RENDER_REPORT_RETRY_MS));
+      }
+
+      console.warn(`[studio-preview] Vorschau-Render konnte nicht erfasst werden: ${lastFailure}`);
+      window.dispatchEvent(new CustomEvent('studio:preview-render-failed', {
+        detail: { previewUrl, reason: lastFailure },
+      }));
+    };
+
+    waitForStudioPreviewRenderedReady(controller.signal).then(reportRendered);
 
     return () => controller.abort();
   }, [initializeGlobalRuntime, previewLocationKey]);

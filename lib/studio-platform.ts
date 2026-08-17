@@ -4,6 +4,7 @@ import { noCache } from '@/lib/api-response';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { extractSupabaseAccessToken } from '@/lib/supabase-cookie-token';
 import { STUDIO_PREVIEW_NONCE_COOKIE } from '@/lib/studio-preview-nonce';
+import { DRAFT_FINGERPRINT_EXCLUDED_SETTING_KEYS_FILTER } from '@/lib/studio-draft-fingerprint';
 import { getAuthUser } from '@/lib/supabase-auth';
 import { findStudioProjectPathMatches, isPreviewPathname } from '@/lib/studio-project-path';
 import { findStudioProjectHostMatches } from '@/lib/studio-project-hostnames';
@@ -1244,7 +1245,7 @@ async function selectSettingsRows(client: any, projectId: string): Promise<unkno
     const { data, error } = await client
       .from('settings')
       .select('key, value, updated_at')
-      .neq('key', 'published_at')
+      .not('key', 'in', DRAFT_FINGERPRINT_EXCLUDED_SETTING_KEYS_FILTER)
       .eq('project_id', projectId)
       .order('key', { ascending: true });
 
@@ -1261,7 +1262,7 @@ async function selectSettingsRows(client: any, projectId: string): Promise<unkno
   const { data, error } = await client
     .from('settings')
     .select('key, value, updated_at')
-    .neq('key', 'published_at')
+    .not('key', 'in', DRAFT_FINGERPRINT_EXCLUDED_SETTING_KEYS_FILTER)
     .order('key', { ascending: true });
 
   if (error) {

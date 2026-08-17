@@ -2,6 +2,7 @@ import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
 import { STUDIO_PREVIEW_NONCE_COOKIE } from '@/lib/studio-preview-nonce';
+import { DRAFT_FINGERPRINT_EXCLUDED_SETTING_KEYS_FILTER } from '@/lib/studio-draft-fingerprint';
 import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { projectLookupFromHost, projectLookupFromRequestHosts } from '@/lib/project-host';
 import { findStudioProjectPathMatches, isPreviewPathname } from '@/lib/studio-project-path';
@@ -469,7 +470,7 @@ async function computeDraftFingerprint(client: any, projectId: string): Promise<
         let query = client
           .from('settings')
           .select('key, value, updated_at')
-          .neq('key', 'published_at')
+          .not('key', 'in', DRAFT_FINGERPRINT_EXCLUDED_SETTING_KEYS_FILTER)
           .order('key', { ascending: true });
         if (hasProjectScope) query = query.eq('project_id', projectId);
         const { data, error } = await query;
