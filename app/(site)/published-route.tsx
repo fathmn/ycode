@@ -328,8 +328,10 @@ export async function generatePublishedHomeMetadata(projectId: string | null): P
     const protection = getPasswordProtection(data.page, folders, authCookie);
     if (!protection.isUnlocked) {
       return {
-        title: 'Password Protected',
-        description: 'This page is password protected.',
+        // German-facing Studio: the gate is what visitors see in the browser
+        // tab and in link previews, so it must not read like an error.
+        title: 'Im Aufbau',
+        description: 'Diese Seite ist passwortgeschützt.',
         robots: { index: false, follow: false },
       };
     }
@@ -375,8 +377,10 @@ export async function generatePublishedSlugMetadata(slugPath: string, projectId:
     const protection = getPasswordProtection(data.page, folders, authCookie);
     if (!protection.isUnlocked) {
       return {
-        title: 'Password Protected',
-        description: 'This page is password protected.',
+        // German-facing Studio: the gate is what visitors see in the browser
+        // tab and in link previews, so it must not read like an error.
+        title: 'Im Aufbau',
+        description: 'Diese Seite ist passwortgeschützt.',
         robots: { index: false, follow: false },
       };
     }
