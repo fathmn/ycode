@@ -65,7 +65,13 @@ export default function PasswordForm({ pageId, folderId, redirectUrl, isPublishe
       const data = await response.json();
 
       if (!response.ok) {
-        const errorMessage = data.error || 'Passwort nicht korrekt';
+        // The API replies in English; map by status so a visitor on a German
+        // site never sees 'Incorrect password'.
+        const errorMessage = response.status === 429
+          ? 'Zu viele Versuche. Bitte in einer Minute erneut probieren.'
+          : response.status === 401
+            ? 'Passwort nicht korrekt.'
+            : data.error || 'Das hat nicht funktioniert. Bitte erneut versuchen.';
         setError(errorMessage);
         setIsRateLimited(response.status === 429);
         setIsLoading(false);
