@@ -405,24 +405,33 @@ export default function PublishPopover({
             <span className="block break-all text-xs text-popover-foreground">{previewDisplayUrl}</span>
           </div>
           <Button
+            asChild={!requiresProjectSelection}
             size="sm"
             variant="secondary"
             className="w-full"
-            onClick={() => {
-              // Open first: a blocked pop-up used to leave the render marker
-              // cleared and the approve button disabled forever, with no hint
-              // that anything went wrong.
-              const previewWindow = window.open(getProjectPreviewUrl(), '_blank');
-              if (!previewWindow) {
-                toast.error('Vorschau konnte nicht geöffnet werden — bitte Pop-ups für diese Seite erlauben.');
-                return;
-              }
-              window.localStorage?.removeItem('studio:last-rendered-preview-url');
-              setLastRenderedPreviewUrl(null);
-            }}
             disabled={requiresProjectSelection}
           >
-            Vorschau öffnen
+            {/*
+              A real link, not `window.open`: pop-up blockers and extensions can
+              make `window.open` return null even when pop-ups are allowed, which
+              left the preview unopenable with a misleading "allow pop-ups" hint.
+              A user-initiated anchor navigation is never blocked.
+            */}
+            {requiresProjectSelection ? (
+              <span>Vorschau öffnen</span>
+            ) : (
+              <a
+                href={getProjectPreviewUrl()}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => {
+                  window.localStorage?.removeItem('studio:last-rendered-preview-url');
+                  setLastRenderedPreviewUrl(null);
+                }}
+              >
+                Vorschau öffnen
+              </a>
+            )}
           </Button>
           <Button
             size="sm"
