@@ -136,6 +136,7 @@ export default function PasswordForm({ pageId, folderId, redirectUrl, isPublishe
           width: 100%;
           max-width: 340px;
           margin: 0 auto;
+          padding: 0 24px 72px;
           color: inherit;
         }
 
