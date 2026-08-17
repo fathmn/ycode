@@ -91,7 +91,11 @@ export async function getAllTokens(projectId?: string | null): Promise<McpToken[
   return (data || []) as McpToken[];
 }
 
-export async function createToken(name: string, projectId?: string | null): Promise<McpTokenWithPlainToken> {
+export async function createToken(
+  name: string,
+  projectId?: string | null,
+  userId?: string | null
+): Promise<McpTokenWithPlainToken> {
   const client = await getSupabaseAdmin();
 
   if (!client) {
@@ -115,6 +119,7 @@ export async function createToken(name: string, projectId?: string | null): Prom
       token,
       token_prefix: tokenPrefix,
       project_id: projectId,
+      ...(userId ? { user_id: userId } : {}),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })

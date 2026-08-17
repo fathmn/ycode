@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
       return noCache({ error: 'Name ist erforderlich.' }, 400);
     }
 
-    const token = await createToken(name.trim(), projectId);
+    const token = await createToken(name.trim(), projectId, roleCheck.context.actorUserId);
 
     const host = request.headers.get('host') || 'localhost:3000';
     const protocol = request.headers.get('x-forwarded-proto') || 'http';

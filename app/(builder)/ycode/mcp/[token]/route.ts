@@ -13,6 +13,7 @@ interface McpSession {
   server: McpServer;
   tokenId: string;
   projectId: string | null;
+  actorUserId: string | null;
   lastActivity: number;
 }
 
@@ -53,7 +54,11 @@ function addCorsHeaders(response: Response): Response {
 }
 
 function createSessionTransport(token: McpToken) {
-  const server = createMcpServer({ projectId: token.project_id || null });
+  const server = createMcpServer({
+    projectId: token.project_id || null,
+    tokenId: token.id,
+    actorUserId: token.user_id || null,
+  });
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     enableJsonResponse: true,
@@ -63,6 +68,7 @@ function createSessionTransport(token: McpToken) {
         server,
         tokenId: token.id,
         projectId: token.project_id || null,
+        actorUserId: token.user_id || null,
         lastActivity: Date.now(),
       });
     },
@@ -149,7 +155,11 @@ async function handleMcpRequest(request: Request, token: McpToken): Promise<Resp
 
   if (sessionId && sessions.has(sessionId)) {
     const session = sessions.get(sessionId)!;
-    if (session.tokenId !== token.id || session.projectId !== (token.project_id || null)) {
+    if (
+      session.tokenId !== token.id
+      || session.projectId !== (token.project_id || null)
+      || session.actorUserId !== (token.user_id || null)
+    ) {
       return new Response(JSON.stringify({
         jsonrpc: '2.0',
         error: { code: -32001, message: 'MCP session does not belong to this token.' },
@@ -262,7 +272,11 @@ export async function GET(
     }
 
     const session = sessions.get(sessionId)!;
-    if (session.tokenId !== mcpToken.id || session.projectId !== (mcpToken.project_id || null)) {
+    if (
+      session.tokenId !== mcpToken.id
+      || session.projectId !== (mcpToken.project_id || null)
+      || session.actorUserId !== (mcpToken.user_id || null)
+    ) {
       return addCorsHeaders(new Response(JSON.stringify({
         jsonrpc: '2.0',
         error: { code: -32001, message: 'MCP session does not belong to this token.' },

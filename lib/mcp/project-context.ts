@@ -2,6 +2,8 @@ import { resolveStudioProjectId } from '@/lib/project-scope';
 
 export type McpProjectContext = {
   projectId?: string | null;
+  tokenId?: string;
+  actorUserId?: string | null;
 };
 
 export async function resolveMcpProjectId(

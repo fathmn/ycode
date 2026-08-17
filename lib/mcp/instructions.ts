@@ -684,7 +684,7 @@ Multi-language support:
 
 **IMPORTANT — completion & publishing:**
 - Translations are marked complete by default (\`is_completed: true\`). Only pass \`is_completed: false\` for work-in-progress drafts — incomplete translations are saved but NEVER appear on the live site.
-- Translations are drafts until published. After translating, call \`publish\`. \`get_unpublished_changes\` reports pending translation/locale counts.
+- Translations are drafts until published. After translating, use \`get_publish_status\`, complete the required browser-preview approval, then call \`publish\`.
 
 **Finding what to translate (content_key formats):**
 - **Pages/components — layer text:** \`content_key = "layer:<layerId>:text"\`. Get layer IDs from get_layers. source_type "page" or "component", source_id = page/component ID.
@@ -735,8 +735,11 @@ Global site configuration:
 ### Publishing
 
 All changes are drafts until published:
-- Use get_unpublished_changes to see what needs publishing (pages, styles, components, collections, fonts, assets, translations, locales)
-- Use publish to make everything live (this also publishes locales and translations)
+- Use get_publish_status to inspect the current draft hash, preview state, blockers, and next human step
+- Use get_preview_url and ask the human to open that link in an already authenticated Studio browser
+- Only after the human explicitly confirms the preview looks correct, call approve_preview; it requires the browser-created render proof and never creates one itself
+- Call publish only after approve_preview succeeds; publish re-runs the complete Studio safety gate and also publishes locales and translations
+- get_unpublished_changes remains available only as a legacy compatibility alias
 
 ---
 

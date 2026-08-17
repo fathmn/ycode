@@ -1,12 +1,13 @@
 import crypto from 'crypto';
 import type { NextRequest } from 'next/server';
 import { noCache } from '@/lib/api-response';
+import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { extractSupabaseAccessToken } from '@/lib/supabase-cookie-token';
 import { STUDIO_PREVIEW_NONCE_COOKIE } from '@/lib/studio-preview-nonce';
 import { DRAFT_FINGERPRINT_EXCLUDED_SETTING_KEYS_FILTER } from '@/lib/studio-draft-fingerprint';
 import { getAuthUser } from '@/lib/supabase-auth';
-import { findStudioProjectPathMatches, isPreviewPathname } from '@/lib/studio-project-path';
+import { findStudioProjectPathMatches, isPreviewPathname, studioProjectPathSlug } from '@/lib/studio-project-path';
 import { findStudioProjectHostMatches } from '@/lib/studio-project-hostnames';
 import { getConfiguredSiteAdminRoleForUser } from '@/lib/studio-site-admin';
 import { STUDIO_READ_ROLES, type StudioRole, normalizeStudioRole } from '@/lib/studio-roles';
@@ -32,9 +33,10 @@ const DRAFT_FINGERPRINT_TABLES = [
 
 export type StudioProjectRole = StudioRole;
 
-type StudioProject = {
+export type StudioProject = {
   id: string;
   slug: string;
+  metadata?: Record<string, unknown> | null;
 };
 
 type StudioProductionDeploymentResult = {
@@ -49,11 +51,24 @@ type StudioProductionDeploymentResult = {
   error?: string;
 };
 
-type StudioProjectContext = {
+export type StudioProjectContext = {
   client: any;
   project: StudioProject;
-  actorUserId: string;
-  role: StudioProjectRole;
+  actorUserId: string | null;
+  role: StudioProjectRole | null;
+  tokenId?: string;
+  source?: string;
+  publishVerification?: {
+    draftHash: string;
+    customCode: CustomCodeScanResult;
+  };
+};
+
+export type VerifiedStudioPublishContext = StudioProjectContext & {
+  publishVerification: {
+    draftHash: string;
+    customCode: CustomCodeScanResult;
+  };
 };
 
 type AuditInput = {
@@ -62,6 +77,11 @@ type AuditInput = {
   entityType: string;
   entityId?: string;
   metadata?: Record<string, unknown>;
+};
+
+type ContextAuditInput = Omit<AuditInput, 'request'> & {
+  context: StudioProjectContext;
+  required?: boolean;
 };
 
 type CodeSnippet = {
@@ -220,6 +240,32 @@ export async function canAccessStudioProjectForUser(
   return !!role && allowedRoles.includes(role);
 }
 
+export async function resolveStudioMcpContext(input: {
+  projectId: string;
+  actorUserId?: string | null;
+  tokenId?: string;
+}): Promise<StudioProjectContext> {
+  const client = await getSupabaseAdmin();
+  if (!client) throw new Error('Supabase ist nicht konfiguriert.');
+
+  const project = await getProjectById(client, input.projectId);
+  if (!project) throw new Error('Das dem MCP-Token zugeordnete Studio-Projekt wurde nicht gefunden.');
+
+  const actorUserId = input.actorUserId || null;
+  const role = actorUserId
+    ? await getProjectRoleForUser(client, project.id, actorUserId)
+    : null;
+
+  return {
+    client,
+    project,
+    actorUserId,
+    role,
+    tokenId: input.tokenId,
+    source: 'mcp',
+  };
+}
+
 export async function writeStudioAuditLog(input: AuditInput): Promise<void> {
   try {
     const client = await getSupabaseAdmin();
@@ -231,16 +277,40 @@ export async function writeStudioAuditLog(input: AuditInput): Promise<void> {
       : null;
     if (!project) return;
 
-    await client.from('studio_audit_logs').insert({
-      project_id: project.id,
-      actor_user_id: actorUserId,
+    await writeStudioAuditLogForContext({
+      context: { client, project, actorUserId, role: null },
       action: input.action,
-      entity_type: input.entityType,
-      entity_id: input.entityId || project.slug,
-      metadata: input.metadata || {},
+      entityType: input.entityType,
+      entityId: input.entityId,
+      metadata: input.metadata,
     });
   } catch (error) {
     console.error('[studio] audit log failed:', error);
+  }
+}
+
+export async function writeStudioAuditLogForContext(input: ContextAuditInput): Promise<void> {
+  try {
+    const { context } = input;
+    const metadata = {
+      ...(input.metadata || {}),
+      ...(context.source ? { source: context.source } : {}),
+      ...(context.tokenId ? { tokenId: context.tokenId } : {}),
+      ...(context.source === 'mcp' && context.actorUserId ? { actorUserId: context.actorUserId } : {}),
+    };
+
+    const { error } = await context.client.from('studio_audit_logs').insert({
+      project_id: context.project.id,
+      actor_user_id: context.actorUserId,
+      action: input.action,
+      entity_type: input.entityType,
+      entity_id: input.entityId || context.project.slug,
+      metadata,
+    });
+    if (error) throw new Error(error.message || 'Studio audit log insert failed');
+  } catch (error) {
+    console.error('[studio] audit log failed:', error);
+    if (input.required) throw error;
   }
 }
 
@@ -300,7 +370,7 @@ export async function recordStudioCustomCodeMutation(
 }
 
 export async function verifyStudioPublishGate(request: NextRequest): Promise<
-  | { ok: true; context: StudioProjectContext; draftHash: string; customCode: CustomCodeScanResult }
+  | { ok: true; context: VerifiedStudioPublishContext; draftHash: string; customCode: CustomCodeScanResult }
   | { ok: false; response: Response }
 > {
   const roleCheck = await requireStudioProjectRole(request, [
@@ -310,11 +380,47 @@ export async function verifyStudioPublishGate(request: NextRequest): Promise<
   ]);
   if (!roleCheck.ok) return roleCheck;
 
-  const { context } = roleCheck;
+  return verifyStudioPublishGateForContext(roleCheck.context);
+}
+
+export async function verifyStudioPublishGateForContext(
+  context: StudioProjectContext,
+  opts: { source?: string } = {}
+): Promise<
+  | { ok: true; context: VerifiedStudioPublishContext; draftHash: string; customCode: CustomCodeScanResult }
+  | { ok: false; response: Response; code: string; message: string }
+> {
+  const auditContext: StudioProjectContext = {
+    ...context,
+    source: opts.source || context.source,
+  };
+
+  if (
+    !context.actorUserId
+    || !context.role
+    || !(['studio_admin', 'studio_developer', 'customer_owner'] as StudioProjectRole[]).includes(context.role)
+  ) {
+    const code = 'STUDIO_PUBLISH_ROLE_REQUIRED';
+    const message = 'Dieser MCP-Token ist keinem Benutzer mit Veröffentlichungsrecht zugeordnet. Erzeugen Sie ihn im Studio unter Integrationen → MCP neu und stellen Sie sicher, dass der Benutzer veröffentlichen darf.';
+    await writeStudioAuditLogForContext({
+      context: auditContext,
+      action: 'site.publish.blocked.insufficient_role',
+      entityType: 'site',
+      entityId: context.project.slug,
+      metadata: { projectId: context.project.id, actorRole: context.role },
+    });
+    return {
+      ok: false,
+      code,
+      message,
+      response: noCache({ error: message, code }, 403),
+    };
+  }
+
   const readiness = getStudioPublishReadiness();
   if (!readiness.livePublishAvailable) {
-    await writeStudioAuditLog({
-      request,
+    await writeStudioAuditLogForContext({
+      context: auditContext,
       action: 'site.publish.blocked.project_scoped_publish_required',
       entityType: 'site',
       entityId: context.project.slug,
@@ -324,12 +430,16 @@ export async function verifyStudioPublishGate(request: NextRequest): Promise<
         readiness,
       },
     });
+    const code = readiness.blockerCode || 'STUDIO_PROJECT_SCOPED_PUBLISH_REQUIRED';
+    const message = readiness.blockerMessage || 'Live-Schaltung ist derzeit nicht verfügbar.';
     return {
       ok: false,
+      code,
+      message,
       response: noCache(
         {
-          error: readiness.blockerMessage,
-          code: readiness.blockerCode,
+          error: message,
+          code,
           readiness,
         },
         409
@@ -340,19 +450,23 @@ export async function verifyStudioPublishGate(request: NextRequest): Promise<
   const draftHash = await getCurrentDraftHash(context.client, context.project.id);
   const previewOk = await hasValidPreviewApproval(context.client, context.project.id, draftHash);
   if (!previewOk) {
-    await writeStudioAuditLog({
-      request,
+    await writeStudioAuditLogForContext({
+      context: auditContext,
       action: 'site.publish.blocked.preview_required',
       entityType: 'site',
       entityId: context.project.slug,
       metadata: { draftHash, maxAgeHours: PREVIEW_MAX_AGE_HOURS },
     });
+    const code = 'STUDIO_PREVIEW_REQUIRED';
+    const message = 'Preview required before publishing';
     return {
       ok: false,
+      code,
+      message,
       response: noCache(
         {
-          error: 'Preview required before publishing',
-          code: 'STUDIO_PREVIEW_REQUIRED',
+          error: message,
+          code,
           draftHash,
         },
         409
@@ -363,8 +477,8 @@ export async function verifyStudioPublishGate(request: NextRequest): Promise<
   const customCode = await scanStudioCustomCode(context.client, context.project.id);
 
   if (customCode.secret_scan_status === 'blocked') {
-    await writeStudioAuditLog({
-      request,
+    await writeStudioAuditLogForContext({
+      context: auditContext,
       action: 'site.publish.blocked.custom_code_secret',
       entityType: 'site',
       entityId: context.project.slug,
@@ -374,12 +488,16 @@ export async function verifyStudioPublishGate(request: NextRequest): Promise<
         findings: customCode.secret_scan_findings,
       },
     });
+    const code = 'STUDIO_CUSTOM_CODE_SECRET_BLOCKED';
+    const message = 'Custom code contains possible secrets and cannot be published';
     return {
       ok: false,
+      code,
+      message,
       response: noCache(
         {
-          error: 'Custom code contains possible secrets and cannot be published',
-          code: 'STUDIO_CUSTOM_CODE_SECRET_BLOCKED',
+          error: message,
+          code,
           findings: customCode.secret_scan_findings,
         },
         409
@@ -387,7 +505,11 @@ export async function verifyStudioPublishGate(request: NextRequest): Promise<
     };
   }
 
-  return { ok: true, context, draftHash, customCode };
+  const verifiedContext: VerifiedStudioPublishContext = {
+    ...auditContext,
+    publishVerification: { draftHash, customCode },
+  };
+  return { ok: true, context: verifiedContext, draftHash, customCode };
 }
 
 export async function triggerStudioProductionDeployment(input: {
@@ -513,19 +635,27 @@ export async function triggerStudioProductionDeployment(input: {
   }
 }
 
+export class StudioPreviewApprovalError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly status: number,
+    public readonly details: Record<string, unknown> = {}
+  ) {
+    super(message);
+    this.name = 'StudioPreviewApprovalError';
+  }
+}
+
 export async function recordExplicitStudioPreviewApproval(request: NextRequest): Promise<Response> {
   const body = await request.json().catch(() => ({}));
   const previewUrl = normalizePreviewUrl(body.previewUrl || '/ycode/preview');
   if (!previewUrl) {
     return noCache(
-      {
-        error: 'Invalid preview URL',
-        code: 'STUDIO_PREVIEW_URL_INVALID',
-      },
+      { error: 'Invalid preview URL', code: 'STUDIO_PREVIEW_URL_INVALID' },
       400
     );
   }
-
   const roleCheck = await requireStudioProjectRole(request, [
     'studio_admin',
     'studio_developer',
@@ -534,7 +664,54 @@ export async function recordExplicitStudioPreviewApproval(request: NextRequest):
   ]);
   if (!roleCheck.ok) return roleCheck.response;
 
-  const { context } = roleCheck;
+  try {
+    const result = await recordStudioPreviewApprovalForContext(
+      roleCheck.context,
+      previewUrl
+    );
+    return noCache({ data: result.data });
+  } catch (error) {
+    if (error instanceof StudioPreviewApprovalError) {
+      return noCache(
+        { error: error.message, code: error.code, ...error.details },
+        error.status
+      );
+    }
+    return noCache(
+      { error: error instanceof Error ? error.message : 'Preview approval failed' },
+      500
+    );
+  }
+}
+
+export async function recordStudioPreviewApprovalForContext(
+  context: StudioProjectContext,
+  previewUrlInput: unknown
+): Promise<{
+  data: { id: string; preview_url: string; draft_hash: string; created_at: string };
+  draftHash: string;
+}> {
+  const previewUrl = normalizePreviewUrl(previewUrlInput);
+  if (!previewUrl) {
+    throw new StudioPreviewApprovalError(
+      'Invalid preview URL',
+      'STUDIO_PREVIEW_URL_INVALID',
+      400
+    );
+  }
+
+  if (
+    !context.actorUserId
+    || !context.role
+    || !(['studio_admin', 'studio_developer', 'customer_owner', 'customer_editor'] as StudioProjectRole[]).includes(context.role)
+  ) {
+    throw new StudioPreviewApprovalError(
+      'Dieser MCP-Token ist keinem Benutzer mit Vorschau-Freigaberecht zugeordnet. Erzeugen Sie ihn im Studio unter Integrationen → MCP neu; ältere Tokens sind keinem Benutzer zugeordnet.',
+      'STUDIO_PREVIEW_APPROVAL_ROLE_REQUIRED',
+      403
+    );
+  }
+
   const draftHash = await getCurrentDraftHash(context.client, context.project.id);
   const renderedPreview = await getRecentRenderedPreview(
     context.client,
@@ -545,17 +722,28 @@ export async function recordExplicitStudioPreviewApproval(request: NextRequest):
   );
 
   if (!renderedPreview) {
-    return noCache(
+    throw new StudioPreviewApprovalError(
+      'Open and verify this Studio preview before approving the draft for publish',
+      'STUDIO_PREVIEW_RENDER_REQUIRED',
+      409,
       {
-        error: 'Open and verify this Studio preview before approving the draft for publish',
-        code: 'STUDIO_PREVIEW_RENDER_REQUIRED',
         projectId: context.project.id,
         projectSlug: context.project.slug,
         previewUrl,
         draftHash,
         maxAgeHours: PREVIEW_MAX_AGE_HOURS,
-      },
-      409
+        maxNonceAgeMinutes: PREVIEW_NONCE_MAX_AGE_MINUTES,
+      }
+    );
+  }
+
+  const approvalActorUserId = context.actorUserId || renderedPreview.actor_user_id;
+  if (!approvalActorUserId) {
+    throw new StudioPreviewApprovalError(
+      'Die Vorschau muss von einem angemeldeten Studio-Benutzer geöffnet werden.',
+      'STUDIO_PREVIEW_RENDER_REQUIRED',
+      409,
+      { projectId: context.project.id, projectSlug: context.project.slug, previewUrl, draftHash }
     );
   }
 
@@ -565,14 +753,35 @@ export async function recordExplicitStudioPreviewApproval(request: NextRequest):
     previewUrl: renderedPreview.preview_url,
     role: context.role,
     maxAgeHours: PREVIEW_MAX_AGE_HOURS,
-    source: 'studio_preview_approval',
+    source: context.source || 'studio_preview_approval',
+    ...(context.tokenId ? { tokenId: context.tokenId } : {}),
+    ...(context.actorUserId ? { actorUserId: context.actorUserId } : {}),
   };
+
+  if (context.source === 'mcp') {
+    try {
+      await writeStudioAuditLogForContext({
+        context: { ...context, actorUserId: approvalActorUserId },
+        action: 'site.preview.approval.requested',
+        entityType: 'site',
+        entityId: context.project.slug,
+        metadata: { ...metadata, draftHash },
+        required: true,
+      });
+    } catch {
+      throw new StudioPreviewApprovalError(
+        'Die Vorschau-Freigabe wurde abgebrochen, weil der verpflichtende Audit-Eintrag nicht gespeichert werden konnte.',
+        'STUDIO_AUDIT_LOG_REQUIRED',
+        500
+      );
+    }
+  }
 
   const { data, error } = await context.client
     .from('studio_preview_runs')
     .insert({
       project_id: context.project.id,
-      actor_user_id: context.actorUserId,
+      actor_user_id: approvalActorUserId,
       source: 'ycode_preview',
       preview_url: renderedPreview.preview_url,
       draft_hash: draftHash,
@@ -582,22 +791,37 @@ export async function recordExplicitStudioPreviewApproval(request: NextRequest):
     .select('id, preview_url, draft_hash, created_at')
     .single();
 
-  if (error) return noCache({ error: error.message }, 500);
+  if (error) {
+    throw new StudioPreviewApprovalError(error.message, 'STUDIO_PREVIEW_APPROVAL_FAILED', 500);
+  }
 
-  await context.client.from('studio_audit_logs').insert({
-    project_id: context.project.id,
-    actor_user_id: context.actorUserId,
-    action: 'site.preview.approved',
-    entity_type: 'site',
-    entity_id: context.project.slug,
-    metadata: {
-      ...metadata,
-      approvalPreviewRunId: data.id,
-      draftHash,
-    },
-  });
+  try {
+    await writeStudioAuditLogForContext({
+      context: { ...context, actorUserId: approvalActorUserId },
+      action: 'site.preview.approved',
+      entityType: 'site',
+      entityId: context.project.slug,
+      metadata: {
+        ...metadata,
+        approvalPreviewRunId: data.id,
+        draftHash,
+      },
+      required: context.source === 'mcp',
+    });
+  } catch {
+    await context.client
+      .from('studio_preview_runs')
+      .delete()
+      .eq('id', data.id)
+      .eq('project_id', context.project.id);
+    throw new StudioPreviewApprovalError(
+      'Die Vorschau-Freigabe konnte nicht revisionssicher protokolliert werden und wurde deshalb verworfen.',
+      'STUDIO_AUDIT_LOG_REQUIRED',
+      500
+    );
+  }
 
-  return noCache({ data });
+  return { data, draftHash };
 }
 
 export async function recordStudioPreviewRendered(request: NextRequest): Promise<Response> {
@@ -786,6 +1010,14 @@ async function scanStudioCustomCode(client: any, projectId: string, isPublished 
   };
 }
 
+export async function getStudioCustomCodeStateForProject(
+  client: any,
+  projectId: string
+): Promise<CustomCodeScanResult> {
+  const { snippets: _snippets, ...scan } = await scanStudioCustomCode(client, projectId);
+  return scan;
+}
+
 export async function canRenderStudioCustomCode(
   projectId?: string | null,
   isPublished = false,
@@ -868,7 +1100,7 @@ async function getProjectById(client: any, projectId: string): Promise<StudioPro
 
   const { data, error } = await client
     .from('studio_projects')
-    .select('id, slug')
+    .select('id, slug, metadata')
     .eq('id', projectId)
     .eq('status', 'active')
     .maybeSingle();
@@ -1076,6 +1308,40 @@ export function getStudioPublishReadiness() {
 	  };
 }
 
+export function getStudioPreviewUrlPath(project: StudioProject | string): string {
+  const projectSlug = typeof project === 'string'
+    ? project
+    : studioProjectPathSlug(project) || project.slug;
+  const params = new URLSearchParams({ project: projectSlug });
+  return `${STUDIO_BASE_PATH}/preview?${params.toString()}`;
+}
+
+export async function getStudioPreviewStateForProject(client: any, projectId: string): Promise<{
+  draftHash: string;
+  previewApproved: boolean;
+  approvedAt: string | null;
+  renderedPreviewAvailable: boolean;
+  previewUrlPath: string;
+}> {
+  const project = await getProjectById(client, projectId);
+  if (!project) throw new Error('Studio project not found');
+
+  const draftHash = await getCurrentDraftHash(client, projectId);
+  const previewUrlPath = getStudioPreviewUrlPath(project);
+  const [approval, renderedPreview] = await Promise.all([
+    getValidPreviewApproval(client, projectId, draftHash),
+    getRecentRenderedPreview(client, projectId, null, draftHash, previewUrlPath),
+  ]);
+
+  return {
+    draftHash,
+    previewApproved: Boolean(approval),
+    approvedAt: approval?.created_at || null,
+    renderedPreviewAvailable: Boolean(renderedPreview),
+    previewUrlPath,
+  };
+}
+
 export function getStudioLiveMutationBlocker() {
   const readiness = getStudioPublishReadiness();
   if (readiness.livePublishAvailable) return null;
@@ -1097,8 +1363,8 @@ export async function getStudioPublishReadinessForRequest(request: NextRequest):
 
   const { context } = roleCheck;
   const readiness = getStudioPublishReadiness();
-  const draftHash = await getCurrentDraftHash(context.client, context.project.id);
-  const previewApproved = await hasValidPreviewApproval(context.client, context.project.id, draftHash);
+  const previewState = await getStudioPreviewStateForProject(context.client, context.project.id);
+  const { draftHash, previewApproved } = previewState;
   const customCode = await scanStudioCustomCode(context.client, context.project.id);
   const customCodeBlocked = customCode.secret_scan_status === 'blocked';
 
@@ -1109,6 +1375,9 @@ export async function getStudioPublishReadinessForRequest(request: NextRequest):
       projectSlug: context.project.slug,
       draftHash,
       previewApproved,
+      previewApprovedAt: previewState.approvedAt,
+      renderedPreviewAvailable: previewState.renderedPreviewAvailable,
+      previewUrlPath: previewState.previewUrlPath,
       customCodeBlocked,
       customCodeSnippetsCount: customCode.snippets_count,
       livePublishAvailable: readiness.livePublishAvailable && previewApproved && !customCodeBlocked,
@@ -1390,11 +1659,15 @@ async function draftChangedAfter(client: any, projectId: string, issuedAt: numbe
   return checks.some(Boolean);
 }
 
-async function hasValidPreviewApproval(client: any, projectId: string, draftHash: string): Promise<boolean> {
+async function getValidPreviewApproval(
+  client: any,
+  projectId: string,
+  draftHash: string
+): Promise<{ id: string; created_at: string } | null> {
   const cutoff = new Date(Date.now() - PREVIEW_MAX_AGE_HOURS * 60 * 60 * 1000).toISOString();
   const { data, error } = await client
     .from('studio_preview_runs')
-    .select('id, actor_user_id, metadata')
+    .select('id, actor_user_id, created_at, metadata')
     .eq('project_id', projectId)
     .eq('draft_hash', draftHash)
     .eq('status', 'created')
@@ -1403,9 +1676,14 @@ async function hasValidPreviewApproval(client: any, projectId: string, draftHash
     .order('created_at', { ascending: false })
     .limit(50);
 
-  if (error || !Array.isArray(data)) return false;
+  if (error || !Array.isArray(data)) return null;
 
-  for (const approval of data as Array<{ actor_user_id?: string; metadata?: Record<string, unknown> }>) {
+  for (const approval of data as Array<{
+    id: string;
+    actor_user_id?: string;
+    created_at: string;
+    metadata?: Record<string, unknown>;
+  }>) {
     if (approval.metadata?.explicitApproval !== true) continue;
     if (typeof approval.metadata.renderedPreviewRunId !== 'string') continue;
     if (!approval.actor_user_id) continue;
@@ -1422,11 +1700,15 @@ async function hasValidPreviewApproval(client: any, projectId: string, draftHash
       .maybeSingle();
 
     if (!renderedPreviewError && hasPreviewRenderProof(renderedPreview?.metadata)) {
-      return true;
+      return { id: approval.id, created_at: approval.created_at };
     }
   }
 
-  return false;
+  return null;
+}
+
+async function hasValidPreviewApproval(client: any, projectId: string, draftHash: string): Promise<boolean> {
+  return Boolean(await getValidPreviewApproval(client, projectId, draftHash));
 }
 
 function normalizePreviewUrl(value: unknown): string | null {
@@ -1568,27 +1850,38 @@ async function verifyStudioPreviewServerRender(
 async function getRecentRenderedPreview(
   client: any,
   projectId: string,
-  actorUserId: string,
+  actorUserId: string | null,
   draftHash: string,
   previewUrl: string
-): Promise<{ id: string; preview_url: string } | null> {
-  const cutoff = new Date(Date.now() - PREVIEW_MAX_AGE_HOURS * 60 * 60 * 1000).toISOString();
-  const { data, error } = await client
+): Promise<{ id: string; preview_url: string; actor_user_id: string | null } | null> {
+  const maxAgeMs = Math.min(
+    PREVIEW_MAX_AGE_HOURS * 60 * 60 * 1000,
+    PREVIEW_NONCE_MAX_AGE_MINUTES * 60 * 1000
+  );
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  let query = client
     .from('studio_preview_runs')
-    .select('id, preview_url, metadata')
+    .select('id, preview_url, actor_user_id, created_at, metadata')
     .eq('project_id', projectId)
-    .eq('actor_user_id', actorUserId)
     .eq('draft_hash', draftHash)
     .eq('preview_url', previewUrl)
     .eq('source', 'ycode_preview')
     .eq('status', 'created')
-    .gte('created_at', cutoff)
+    .gte('created_at', cutoff);
+  if (actorUserId) query = query.eq('actor_user_id', actorUserId);
+
+  const { data, error } = await query
     .order('created_at', { ascending: false })
     .limit(10);
 
   if (error || !Array.isArray(data) || data.length === 0) return null;
-  return data.find((row: { id: string; preview_url: string; metadata?: Record<string, unknown> }) => (
-    hasPreviewRenderProof(row.metadata)
+  return data.find((row: {
+    id: string;
+    preview_url: string;
+    actor_user_id: string | null;
+    metadata?: Record<string, unknown>;
+  }) => (
+    Boolean(row.actor_user_id) && hasPreviewRenderProof(row.metadata)
   )) || null;
 }
 
