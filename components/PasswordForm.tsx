@@ -65,7 +65,7 @@ export default function PasswordForm({ pageId, folderId, redirectUrl, isPublishe
       const data = await response.json();
 
       if (!response.ok) {
-        const errorMessage = data.error || 'Incorrect password';
+        const errorMessage = data.error || 'Passwort nicht korrekt';
         setError(errorMessage);
         setIsRateLimited(response.status === 429);
         setIsLoading(false);
@@ -91,7 +91,7 @@ export default function PasswordForm({ pageId, folderId, redirectUrl, isPublishe
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          placeholder="Enter password"
+          placeholder="Passwort eingeben"
           className="ycode-password-input"
           disabled={isLoading}
           autoFocus
@@ -119,7 +119,7 @@ export default function PasswordForm({ pageId, folderId, redirectUrl, isPublishe
         disabled={isLoading || !password}
         className="ycode-password-submit"
       >
-        {isLoading ? 'Verifying...' : 'Submit'}
+        {isLoading ? 'Wird geprüft …' : 'Weiter'}
       </button>
 
       <style jsx>{`
