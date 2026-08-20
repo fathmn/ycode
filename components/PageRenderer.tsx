@@ -11,7 +11,7 @@ import YcodeBadge from '@/components/YcodeBadge';
 import { unstable_cache } from 'next/cache';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
-import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
+import { extractAnimationLayers, generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
 import { buildCustomFontsCss, buildFontClassesCss, filterGoogleFontLinksAgainstHeadHtml, getGoogleFontLinks, removeDuplicateGoogleFontLinksFromHeadHtml } from '@/lib/font-utils';
 import { buildImageSizes, collectLayerAssetIds, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
 import { getInlinedGoogleFontsCss } from '@/lib/server/googleFontsInline';
@@ -181,19 +181,6 @@ function stripSSROnlyData(layers: Layer[]): Layer[] {
 
     return stripped;
   });
-}
-
-/** Extract minimal animation data from the layer tree for AnimationInitializer */
-function extractAnimationLayers(layers: Layer[]): Layer[] {
-  return layers
-    .filter(layer => layer.interactions?.length || layer.children?.length)
-    .map(layer => ({
-      id: layer.id,
-      name: layer.name,
-      classes: '',
-      interactions: layer.interactions,
-      children: layer.children ? extractAnimationLayers(layer.children) : undefined,
-    }));
 }
 
 /** Scan a Tiptap JSON node for richTextComponent nodes and test their pre-resolved

@@ -12,6 +12,23 @@ import { BREAKPOINTS } from '@/lib/breakpoint-utils';
 const IMPLICIT_ON_LOAD_TRIGGERS: ReadonlyArray<LayerInteraction['trigger']> = ['load', 'scroll-into-view'];
 
 /**
+ * Strip a layer tree down to the fields AnimationInitializer reads. Keeping
+ * this extraction shared prevents published pages from serializing the full
+ * resolved layer payload across the Server/Client Component boundary.
+ */
+export function extractAnimationLayers(layers: Layer[]): Layer[] {
+  return layers
+    .filter(layer => layer.interactions?.length || layer.children?.length)
+    .map(layer => ({
+      id: layer.id,
+      name: layer.name,
+      classes: '',
+      interactions: layer.interactions,
+      children: layer.children ? extractAnimationLayers(layer.children) : undefined,
+    }));
+}
+
+/**
  * Returns the effective apply mode for a tween property. Honors an explicit
  * `apply_styles` choice; otherwise falls back to `on-load` for intro
  * triggers (load, scroll-into-view) so new intro animations stay
