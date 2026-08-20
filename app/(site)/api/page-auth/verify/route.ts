@@ -3,6 +3,13 @@ import { timingSafeEqual } from 'crypto';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { noCache } from '@/lib/api-response';
 import { parseAuthCookie, buildAuthCookieValue, PAGE_AUTH_COOKIE_NAME } from '@/lib/page-auth';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
+
+const MAX_AUTH_CANDIDATES_PER_TYPE = 100;
+// Keeps one successful verification from growing the cookie without bound.
+// 32 additional UUIDs comfortably covers the known 8-13-page use case while
+// keeping the group expansion itself well below common per-cookie size limits.
+const MAX_AUTO_UNLOCK_ITEMS = 32;
 
 /**
  * Constant-time string comparison to prevent timing attacks
@@ -15,6 +22,93 @@ function safeCompare(a: string, b: string): boolean {
     return timingSafeEqual(bufA, bufA) && false;
   }
   return timingSafeEqual(bufA, bufB);
+}
+
+interface AuthCookiePayload {
+  pages: string[];
+  folders: string[];
+}
+
+interface AuthCandidate {
+  id: string;
+  settings: unknown;
+}
+
+function getEnabledAuthPassword(settingsValue: unknown): string | null {
+  try {
+    const settings = typeof settingsValue === 'string'
+      ? JSON.parse(settingsValue)
+      : settingsValue;
+    const auth = (settings as { auth?: { enabled?: unknown; password?: unknown } } | null)?.auth;
+    return auth?.enabled === true && typeof auth.password === 'string' && auth.password
+      ? auth.password
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Add same-project pages and folders protected by the verified password.
+ * Candidate scans and additions are deliberately bounded to protect cookie size.
+ * Failure here must not invalidate the successful verification of the requested item.
+ */
+async function addMatchingProjectUnlocks(
+  supabase: any,
+  projectId: string | null,
+  isPublished: boolean,
+  password: string,
+  payload: AuthCookiePayload,
+): Promise<void> {
+  if (!projectId) return;
+
+  try {
+    let pagesQuery = supabase
+      .from('pages')
+      .select('id, settings')
+      .eq('is_published', isPublished)
+      .is('deleted_at', null)
+      .limit(MAX_AUTH_CANDIDATES_PER_TYPE);
+    pagesQuery = (await applyProjectScopeToQuery(pagesQuery, supabase, 'pages', projectId)).query;
+
+    let foldersQuery = supabase
+      .from('page_folders')
+      .select('id, settings')
+      .eq('is_published', isPublished)
+      .is('deleted_at', null)
+      .limit(MAX_AUTH_CANDIDATES_PER_TYPE);
+    foldersQuery = (await applyProjectScopeToQuery(foldersQuery, supabase, 'page_folders', projectId)).query;
+
+    const [pagesResult, foldersResult] = await Promise.all([pagesQuery, foldersQuery]);
+    const candidates: Array<{ records: AuthCandidate[]; unlockedIds: string[] }> = [
+      {
+        records: pagesResult.error ? [] : (pagesResult.data as AuthCandidate[] | null) || [],
+        unlockedIds: payload.pages,
+      },
+      {
+        records: foldersResult.error ? [] : (foldersResult.data as AuthCandidate[] | null) || [],
+        unlockedIds: payload.folders,
+      },
+    ];
+
+    let additions = 0;
+    for (const { records, unlockedIds } of candidates) {
+      for (const record of records) {
+        if (additions >= MAX_AUTO_UNLOCK_ITEMS) return;
+        const candidatePassword = getEnabledAuthPassword(record.settings);
+        if (
+          candidatePassword
+          && safeCompare(password, candidatePassword)
+          && !unlockedIds.includes(record.id)
+        ) {
+          unlockedIds.push(record.id);
+          additions++;
+        }
+      }
+    }
+  } catch {
+    // The requested item remains unlocked; group expansion is best-effort.
+  }
 }
 
 export const dynamic = 'force-dynamic';
@@ -120,12 +214,13 @@ export async function POST(request: NextRequest) {
     let expectedPassword: string | null = null;
     let unlockType: 'page' | 'folder' = 'page';
     let unlockId: string = '';
+    let unlockProjectId: string | null = null;
 
     if (pageId) {
       // Fetch the page to get its password
       const { data: pages, error } = await supabase
         .from('pages')
-        .select('id, settings')
+        .select('id, settings, project_id')
         .eq('id', pageId)
         .eq('is_published', isPublished)
         .is('deleted_at', null)
@@ -149,6 +244,7 @@ export async function POST(request: NextRequest) {
         expectedPassword = settings.auth.password;
         unlockType = 'page';
         unlockId = pageId;
+        unlockProjectId = typeof page.project_id === 'string' ? page.project_id : null;
       }
     }
 
@@ -156,7 +252,7 @@ export async function POST(request: NextRequest) {
       // Fetch the folder to get its password
       const { data: folders, error } = await supabase
         .from('page_folders')
-        .select('id, settings')
+        .select('id, settings, project_id')
         .eq('id', folderId)
         .eq('is_published', isPublished)
         .is('deleted_at', null)
@@ -180,6 +276,7 @@ export async function POST(request: NextRequest) {
         expectedPassword = settings.auth.password;
         unlockType = 'folder';
         unlockId = folderId;
+        unlockProjectId = typeof folder.project_id === 'string' ? folder.project_id : null;
       }
     }
 
@@ -205,6 +302,14 @@ export async function POST(request: NextRequest) {
         payload.folders.push(unlockId);
       }
     }
+
+    await addMatchingProjectUnlocks(
+      supabase,
+      unlockProjectId,
+      isPublished,
+      password,
+      payload,
+    );
 
     // Build the signed cookie value
     const cookieValue = buildAuthCookieValue(payload);
