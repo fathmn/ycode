@@ -2,9 +2,9 @@ import type { Layer } from '@/types';
 
 type ImageLayerLike = Pick<Layer, 'id' | 'name' | 'customName' | 'attributes' | 'classes'>;
 
-const BRAND_IMAGE_SRCSET_WIDTHS = [64, 80, 96, 128, 160];
-const CONTENT_IMAGE_SRCSET_WIDTHS = [240, 320, 480, 640, 768, 960, 1280];
-const PRIORITY_IMAGE_SRCSET_WIDTHS = [320, 640, 960, 1280, 1600];
+const BRAND_IMAGE_SRCSET_WIDTHS = [92, 112, 184, 224, 336];
+const CONTENT_IMAGE_SRCSET_WIDTHS = [320, 480, 640, 960, 1280, 1600, 1920, 2560];
+const PRIORITY_IMAGE_SRCSET_WIDTHS = [640, 960, 1280, 1600, 1920, 2560, 3840];
 
 function getAttribute(layer: ImageLayerLike, name: string): unknown {
   return layer.attributes?.[name];
@@ -73,7 +73,8 @@ export function getImageSizesForLayer(layer: ImageLayerLike): string {
     return '100vw';
   }
   if (isFramedContentImageLayer(layer)) {
-    return '(max-width: 809px) 100vw, (max-width: 1199px) 50vw, (max-width: 1599px) 20vw, 24vw';
+    // Prefer overestimating sizes (some extra bandwidth) to underestimating them (visible softness).
+    return '(max-width: 809px) 100vw, 50vw';
   }
   return '(max-width: 809px) 100vw, 50vw';
 }
@@ -85,14 +86,14 @@ export function getImageSrcsetWidthsForLayer(layer: ImageLayerLike): number[] {
 }
 
 export function getFallbackImageWidthForLayer(layer: ImageLayerLike): number {
-  if (isSmallBrandImageLayer(layer)) return 96;
-  if (isPriorityImageLayer(layer)) return 1280;
-  return isFramedContentImageLayer(layer) ? 320 : 768;
+  if (isSmallBrandImageLayer(layer)) return 224;
+  if (isPriorityImageLayer(layer)) return 1920;
+  return 960;
 }
 
 export function getImageTransformQualityForLayer(layer: ImageLayerLike): number {
-  if (isPriorityImageLayer(layer)) return 72;
-  if (isSmallBrandImageLayer(layer)) return 68;
-  if (isFramedContentImageLayer(layer)) return 70;
-  return 76;
+  if (isPriorityImageLayer(layer)) return 78;
+  if (isSmallBrandImageLayer(layer)) return 82;
+  if (isFramedContentImageLayer(layer)) return 80;
+  return 80;
 }
