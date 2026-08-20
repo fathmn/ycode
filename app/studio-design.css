@@ -524,10 +524,14 @@
     }
   }
 
-  /* Source site-header logo: w-auto h-8 md:h-9 (32px mobile / 36px desktop). */
+  /* Customer header logo sizing: 36px mobile / 44px desktop. */
+  [data-studio-header-logo] {
+    height: 36px !important;
+  }
+
   @media (min-width: 810px) {
     [data-studio-header-logo] {
-      height: 36px !important;
+      height: 44px !important;
     }
   }
 

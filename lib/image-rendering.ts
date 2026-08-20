@@ -67,7 +67,7 @@ export function getImageFetchPriority(layer: ImageLayerLike): 'high' | 'auto' | 
 
 export function getImageSizesForLayer(layer: ImageLayerLike): string {
   if (isSmallBrandImageLayer(layer)) {
-    return '(max-width: 809px) 80px, 96px';
+    return '(max-width: 809px) 92px, 112px';
   }
   if (isPriorityImageLayer(layer)) {
     return '100vw';
