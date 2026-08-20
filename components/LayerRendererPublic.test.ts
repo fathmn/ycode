@@ -62,10 +62,10 @@ test('published non-autoplay video keeps the browser preload default', () => {
 });
 
 test('form reset keeps unsized checkbox and radio controls visible', () => {
-  assert.match(FORM_RESET_CSS, /@layer base\{/);
+  assert.match(FORM_RESET_CSS, /@layer components\{/);
   assert.match(
     FORM_RESET_CSS,
-    /:where\(input\[type="checkbox"\],input\[type="radio"\]\)\{width:18px;height:18px;flex:none;border:1px solid #a3a3a3;background:#fff;cursor:pointer;display:inline-block;vertical-align:middle\}/,
+    /:where\(input\[type="checkbox"\],input\[type="radio"\]\)\{width:18px;height:18px;flex:none;border-width:1px;border-style:solid;border-color:#9ca3af;background:#fff;cursor:pointer;display:inline-block;vertical-align:middle\}/,
   );
   assert.match(FORM_RESET_CSS, /:where\(input\[type="checkbox"\]\)\{border-radius:4px\}/);
   assert.match(FORM_RESET_CSS, /:where\(input\[type="radio"\]\)\{border-radius:50%\}/);

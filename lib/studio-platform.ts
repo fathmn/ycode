@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import type { NextRequest } from 'next/server';
+import { unstable_cache } from 'next/cache';
 import { noCache } from '@/lib/api-response';
 import { STUDIO_BASE_PATH } from '@/lib/brand';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
@@ -986,6 +987,8 @@ type CustomCodeScanResult = {
   snippets_count: number;
 };
 
+const PUBLISHED_CUSTOM_CODE_SCAN_CACHE_VERSION = 'published-custom-code-scan-v1';
+
 async function scanStudioCustomCode(client: any, projectId: string, isPublished = false): Promise<CustomCodeScanResult & { snippets: CodeSnippet[] }> {
   const snippets = await collectCustomCodeSnippets(client, projectId, isPublished);
   const combined = snippets.map((item) => `${item.scope}:${item.targetId || ''}:${item.content}`).join('\n---\n');
@@ -1010,6 +1013,23 @@ async function scanStudioCustomCode(client: any, projectId: string, isPublished 
   };
 }
 
+async function getCachedPublishedCustomCodeScan(projectId: string): Promise<CustomCodeScanResult> {
+  return unstable_cache(
+    async () => {
+      const client = await getSupabaseAdmin();
+      if (!client) throw new Error('Supabase not configured');
+
+      const { snippets: _snippets, ...scan } = await scanStudioCustomCode(client, projectId, true);
+      return scan;
+    },
+    [PUBLISHED_CUSTOM_CODE_SCAN_CACHE_VERSION, `project:${projectId}`, 'state:published'],
+    {
+      tags: ['all-pages', `project-${projectId}`],
+      revalidate: false,
+    },
+  )();
+}
+
 export async function getStudioCustomCodeStateForProject(
   client: any,
   projectId: string
@@ -1029,7 +1049,11 @@ export async function canRenderStudioCustomCode(
   if (!client) return false;
 
   try {
-    const scan = await scanStudioCustomCode(client, projectId, isPublished);
+    // Published content is immutable between publish/settings invalidations, so
+    // cache only the compact scan result. Draft/preview scans must stay fresh.
+    const scan = isPublished
+      ? await getCachedPublishedCustomCodeScan(projectId)
+      : await scanStudioCustomCode(client, projectId, false);
     return scan.secret_scan_status === 'clean';
   } catch {
     return false;

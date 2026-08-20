@@ -11,14 +11,28 @@ import {
   slimPageData,
   splitPageData,
   type PageData,
+  type PageDataCore,
 } from '@/lib/page-fetcher';
 import { fetchFoldersForAuth } from '@/lib/page-auth';
 import { getAllLocales } from '@/lib/repositories/localeRepository';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
-import type { Redirect as RedirectType } from '@/types';
+import type { Layer, Redirect as RedirectType } from '@/types';
 
-const PUBLISHED_CACHE_VERSION = 'published-data-v1';
+const PUBLISHED_CACHE_VERSION = 'published-data-v2';
 const PUBLISHED_STATE = 'published';
+// Keep every encoded data entry comfortably below Vercel's 2 MB Data Cache
+// limit. Base64 makes the serialized entry size predictable even when rich
+// text contains many quotes or escape sequences.
+const PUBLISHED_DATA_CHUNK_CHARACTERS = 768 * 1024;
+
+type PublishedDataPart = 'core' | 'layers';
+
+type PublishedDataManifest = {
+  found: boolean;
+  chunkCount: number;
+  encodedCharacters: number;
+  firstChunk?: string;
+};
 
 function projectCacheKey(projectId: string | null): string {
   return projectId || 'global';
@@ -113,33 +127,86 @@ async function fetchSplitPublishedPageData(
     scope: 'page-data',
   };
 
+  const getEncodedPartForRequest = cache(async (part: PublishedDataPart): Promise<string | null> => {
+    const data = await fetchData();
+    if (!data) return null;
+    return Buffer.from(JSON.stringify(splitPageData(data)[part]), 'utf8').toString('base64');
+  });
+
+  async function fetchCachedPart<T>(part: PublishedDataPart): Promise<T | null> {
+    const manifest = await unstable_cache(
+      async () => {
+        const encoded = await getEncodedPartForRequest(part);
+        if (encoded === null) {
+          return {
+            found: false,
+            chunkCount: 0,
+            encodedCharacters: 0,
+          } satisfies PublishedDataManifest;
+        }
+
+        return {
+          found: true,
+          chunkCount: Math.max(1, Math.ceil(encoded.length / PUBLISHED_DATA_CHUNK_CHARACTERS)),
+          encodedCharacters: encoded.length,
+          firstChunk: encoded.slice(0, PUBLISHED_DATA_CHUNK_CHARACTERS),
+        } satisfies PublishedDataManifest;
+      },
+      buildPublishedDataCacheKey({ ...commonKey, part: `${part}-manifest` }),
+      { tags, revalidate: false },
+    )();
+
+    if (!manifest.found || !manifest.firstChunk) return null;
+
+    const remainingChunks = await Promise.all(
+      Array.from({ length: manifest.chunkCount - 1 }, (_, offset) => {
+        const chunkIndex = offset + 1;
+        return unstable_cache(
+          async () => {
+            const encoded = await getEncodedPartForRequest(part);
+            if (encoded === null) {
+              throw new Error(`Published ${part} disappeared while populating cache chunks`);
+            }
+            const start = chunkIndex * PUBLISHED_DATA_CHUNK_CHARACTERS;
+            return encoded.slice(start, start + PUBLISHED_DATA_CHUNK_CHARACTERS);
+          },
+          buildPublishedDataCacheKey({ ...commonKey, part: `${part}-chunk-${chunkIndex}` }),
+          { tags, revalidate: false },
+        )();
+      }),
+    );
+    const encoded = [manifest.firstChunk, ...remainingChunks].join('');
+    if (encoded.length !== manifest.encodedCharacters) {
+      throw new Error(
+        `Published ${part} cache was incomplete (${encoded.length}/${manifest.encodedCharacters} encoded characters)`,
+      );
+    }
+    return JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) as T;
+  }
+
   try {
     const [core, layers] = await Promise.all([
-      unstable_cache(
-        async () => {
-          const data = await fetchData();
-          return data ? splitPageData(data).core : null;
-        },
-        buildPublishedDataCacheKey({ ...commonKey, part: 'core' }),
-        { tags, revalidate: false },
-      )(),
-      unstable_cache(
-        async () => {
-          const data = await fetchData();
-          return data ? splitPageData(data).layers : null;
-        },
-        buildPublishedDataCacheKey({ ...commonKey, part: 'layers' }),
-        { tags, revalidate: false },
-      )(),
+      fetchCachedPart<PageDataCore>('core'),
+      fetchCachedPart<Layer[]>('layers'),
     ]);
 
     if (!core) return null;
     return reassemblePageData(core, layers || []);
-  } catch {
-    // Keep rendering if either half still exceeds Next's 2 MB per-entry limit.
-    // The request-level React cache prevents this fallback from repeating the DB work.
+  } catch (error) {
+    // Keep rendering if a cache entry fails, but make the miss observable. The
+    // route and split sizes are safe diagnostics; no page content is logged.
     const data = await fetchData();
-    return data ? slimPageData(data) : null;
+    if (!data) return null;
+    const slimmed = slimPageData(data);
+    const split = splitPageData(slimmed);
+    console.warn('[published-page-cache] Falling back to fresh PageData', {
+      route: normalizePublishedRoutePath(routePath),
+      projectId: projectCacheKey(projectId),
+      coreBytes: Buffer.byteLength(JSON.stringify(split.core), 'utf8'),
+      layersBytes: Buffer.byteLength(JSON.stringify(split.layers), 'utf8'),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return slimmed;
   }
 }
 

@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getAllSettings, getSettingByKey, setSetting, setSettings } from '@/lib/repositories/settingsRepository';
+import { clearAllCache } from '@/lib/services/cacheService';
 import type { McpProjectContext } from '@/lib/mcp/project-context';
+
+// Keep this aligned with the HTTP settings routes. These values cannot affect
+// published rendering or the published custom-code security scan.
+const DRAFT_ONLY_SETTING_KEYS = new Set(['draft_css', 'email']);
 
 export function registerSettingsTools(server: McpServer, projectContext: McpProjectContext = {}) {
   server.tool(
@@ -43,6 +48,9 @@ export function registerSettingsTools(server: McpServer, projectContext: McpProj
     },
     async ({ key, value }) => {
       const setting = await setSetting(key, value, projectContext.projectId);
+      if (!DRAFT_ONLY_SETTING_KEYS.has(key)) {
+        await clearAllCache();
+      }
       return {
         content: [{
           type: 'text' as const,
@@ -60,6 +68,9 @@ export function registerSettingsTools(server: McpServer, projectContext: McpProj
     },
     async ({ settings }) => {
       const count = await setSettings(settings, projectContext.projectId);
+      if (Object.keys(settings).some((key) => !DRAFT_ONLY_SETTING_KEYS.has(key))) {
+        await clearAllCache();
+      }
       return {
         content: [{
           type: 'text' as const,
