@@ -155,6 +155,34 @@ export async function saveCachedLayers(pageId: string, layers: Layer[], projectI
 
   cache.set(key, { pageLayers: saved, expiresAt: Date.now() + CACHE_TTL_MS });
   broadcastLayersChanged(pageId, layers).catch(() => {});
+  try {
+    // Every MCP operation persists once at its end. batch_operations therefore
+    // compiles once for the affected page, not once per item in the batch.
+    const { generateCSSForPage } = await import('@/lib/server/cssGenerator');
+    const generatedCss = await generateCSSForPage(pageId, projectId);
+    if (generatedCss !== null) {
+      const { generatePageLayersHash } = await import('@/lib/hash-utils');
+      saved = {
+        ...saved,
+        generated_css: generatedCss,
+        content_hash: generatePageLayersHash({
+          layers,
+          generated_css: generatedCss,
+        }),
+      };
+      // Keep the burst cache consistent with the CSS write performed above;
+      // otherwise the next MCP call would hash against the pre-generation CSS.
+      cache.set(key, { pageLayers: saved, expiresAt: Date.now() + CACHE_TTL_MS });
+    }
+  } catch (error) {
+    // Publishing performs the same regeneration synchronously before taking
+    // the live snapshot, so a preview-only CSS failure must not lose the edit.
+    console.warn('[MCP] Failed to regenerate page CSS after saving layers; continuing', {
+      pageId,
+      projectId,
+      error,
+    });
+  }
   scheduleDraftCssRegen(projectId);
   return saved;
 }

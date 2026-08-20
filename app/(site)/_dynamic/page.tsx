@@ -81,7 +81,7 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
             page={errorPage}
             layers={errorPageLayers.layers || []}
             components={errorComponents}
-            generatedCss={publishedCSS}
+            generatedCss={errorPageData.generatedCss || publishedCSS || undefined}
             renderProjectId={projectId}
             customCodeProjectId={projectId}
             passwordProtection={{
@@ -119,7 +119,7 @@ export default async function DynamicHome({ searchParams }: DynamicHomeProps) {
       page={data.page}
       layers={data.pageLayers.layers || []}
       components={[]}
-      generatedCss={globalSettings.publishedCss || undefined}
+      generatedCss={data.generatedCss || globalSettings.publishedCss || undefined}
       colorVariablesCss={globalSettings.colorVariablesCss || undefined}
       locale={data.locale}
       availableLocales={data.availableLocales}

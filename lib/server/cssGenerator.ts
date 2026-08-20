@@ -20,6 +20,7 @@ import { getAllDraftLayers, getDraftLayers } from '@/lib/repositories/pageLayers
 import { getAllComponents } from '@/lib/repositories/componentRepository';
 import { setSetting } from '@/lib/repositories/settingsRepository';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { applyProjectScopeToQuery } from '@/lib/project-scope';
 
 /**
  * Extract all Tailwind classes from a layer tree.
@@ -186,7 +187,7 @@ export async function generateCSSForPage(pageId: string, projectId?: string | nu
   const classes = extractClassesFromLayers(layersForCss);
   const css = await compileCss(Array.from(classes));
 
-  await updatePageGeneratedCss(pageId, pageLayers, css);
+  await updatePageGeneratedCss(pageId, pageLayers, css, projectId);
 
   return css;
 }
@@ -209,7 +210,7 @@ export async function generateCSSForPages(pageIds: string[], projectId?: string 
     const classes = extractClassesFromLayers(layersForCss);
     const css = await compileCss(Array.from(classes));
 
-    await updatePageGeneratedCss(pageId, pageLayers, css);
+    await updatePageGeneratedCss(pageId, pageLayers, css, projectId);
     updated++;
   }
 
@@ -263,6 +264,7 @@ async function updatePageGeneratedCss(
   pageId: string,
   pageLayers: { id: string; layers: Layer[] },
   css: string,
+  projectId?: string | null,
 ): Promise<void> {
   const { generatePageLayersHash } = await import('@/lib/hash-utils');
   const client = await getSupabaseAdmin();
@@ -273,7 +275,7 @@ async function updatePageGeneratedCss(
     generated_css: css,
   });
 
-  await client
+  let updateQuery = client
     .from('page_layers')
     .update({
       generated_css: css,
@@ -282,4 +284,15 @@ async function updatePageGeneratedCss(
     })
     .eq('id', pageLayers.id)
     .eq('is_published', false);
+  updateQuery = (await applyProjectScopeToQuery(
+    updateQuery,
+    client,
+    'page_layers',
+    projectId,
+  )).query;
+
+  const { error } = await updateQuery;
+  if (error) {
+    throw new Error(`Failed to persist generated CSS for page ${pageId}: ${error.message}`);
+  }
 }

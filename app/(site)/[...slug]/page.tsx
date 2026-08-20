@@ -151,7 +151,7 @@ export default async function Page({ params }: PageProps) {
           page={errorPage}
           layers={errorPageLayers.layers || []}
           components={errorComponents}
-          generatedCss={globalSettings.publishedCss || undefined}
+          generatedCss={errorPageData.generatedCss || globalSettings.publishedCss || undefined}
           globalCustomCodeHead={globalSettings.globalCustomCodeHead}
           globalCustomCodeBody={globalSettings.globalCustomCodeBody}
           renderProjectId={projectId}
@@ -188,7 +188,7 @@ export default async function Page({ params }: PageProps) {
             page={errorPage}
             layers={errorPageLayers.layers || []}
             components={errorComponents}
-            generatedCss={globalSettings.publishedCss || undefined}
+            generatedCss={errorPageData.generatedCss || globalSettings.publishedCss || undefined}
             globalCustomCodeHead={globalSettings.globalCustomCodeHead}
             globalCustomCodeBody={globalSettings.globalCustomCodeBody}
             renderProjectId={projectId}
@@ -227,7 +227,7 @@ export default async function Page({ params }: PageProps) {
       page={page}
       layers={pageLayers.layers || []}
       components={components}
-      generatedCss={globalSettings.publishedCss || undefined}
+      generatedCss={data.generatedCss || globalSettings.publishedCss || undefined}
       colorVariablesCss={globalSettings.colorVariablesCss || undefined}
       collectionItem={collectionItem}
       collectionFields={collectionFields}

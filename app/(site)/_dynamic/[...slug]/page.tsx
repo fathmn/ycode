@@ -71,7 +71,7 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
           page={page}
           layers={pageLayers.layers || []}
           components={components}
-          generatedCss={publishedCSS}
+          generatedCss={errorPageData.generatedCss || publishedCSS || undefined}
           renderProjectId={projectId}
           customCodeProjectId={projectId}
         />
@@ -102,7 +102,7 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
             page={errorPage}
             layers={errorPageLayers.layers || []}
             components={errorComponents}
-            generatedCss={publishedCSS}
+            generatedCss={errorPageData.generatedCss || publishedCSS || undefined}
             renderProjectId={projectId}
             customCodeProjectId={projectId}
             passwordProtection={{
@@ -140,7 +140,7 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
       page={page}
       layers={pageLayers.layers || []}
       components={components}
-      generatedCss={globalSettings.publishedCss || undefined}
+      generatedCss={data.generatedCss || globalSettings.publishedCss || undefined}
       colorVariablesCss={globalSettings.colorVariablesCss || undefined}
       collectionItem={collectionItem}
       collectionFields={collectionFields}

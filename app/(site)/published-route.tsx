@@ -172,7 +172,7 @@ async function renderProtectedErrorPage(projectId: string | null, globalSettings
         page={errorPage}
         layers={errorPageLayers.layers || []}
         components={errorComponents}
-        generatedCss={globalSettings.publishedCss || undefined}
+        generatedCss={errorPageData.generatedCss || globalSettings.publishedCss || undefined}
         globalCustomCodeHead={globalSettings.globalCustomCodeHead}
         globalCustomCodeBody={globalSettings.globalCustomCodeBody}
         renderProjectId={projectId}
@@ -215,7 +215,7 @@ export async function renderPublishedHome(projectId: string | null) {
       page={data.page}
       layers={data.pageLayers.layers || []}
       components={data.components}
-      generatedCss={globalSettings.publishedCss || undefined}
+      generatedCss={data.generatedCss || globalSettings.publishedCss || undefined}
       colorVariablesCss={globalSettings.colorVariablesCss || undefined}
       locale={data.locale}
       availableLocales={data.availableLocales}
@@ -258,7 +258,7 @@ export async function renderPublishedSlug(slugPath: string, projectId: string | 
           page={errorPage}
           layers={errorPageLayers.layers || []}
           components={errorComponents}
-          generatedCss={globalSettings.publishedCss || undefined}
+          generatedCss={errorPageData.generatedCss || globalSettings.publishedCss || undefined}
           globalCustomCodeHead={globalSettings.globalCustomCodeHead}
           globalCustomCodeBody={globalSettings.globalCustomCodeBody}
           renderProjectId={projectId}
@@ -288,7 +288,7 @@ export async function renderPublishedSlug(slugPath: string, projectId: string | 
       page={page}
       layers={pageLayers.layers || []}
       components={components}
-      generatedCss={globalSettings.publishedCss || undefined}
+      generatedCss={data.generatedCss || globalSettings.publishedCss || undefined}
       colorVariablesCss={globalSettings.colorVariablesCss || undefined}
       collectionItem={collectionItem}
       collectionFields={collectionFields}

@@ -83,6 +83,27 @@ export interface PublishResult {
   stats: PublishStats;
 }
 
+/**
+ * Compile and persist page-scoped CSS before page_layers are snapshotted.
+ * A successful publish may never copy layers whose generated_css is stale.
+ */
+export async function regeneratePageCssBeforePublish(
+  pageIds: string[],
+  projectId: string,
+): Promise<number> {
+  const uniquePageIds = [...new Set(pageIds)];
+  if (uniquePageIds.length === 0) return 0;
+
+  const { generateCSSForPages } = await import('@/lib/server/cssGenerator');
+  const updated = await generateCSSForPages(uniquePageIds, projectId);
+  if (updated !== uniquePageIds.length) {
+    throw new Error(
+      `Failed to regenerate page CSS before publish: updated ${updated}/${uniquePageIds.length} page(s)`,
+    );
+  }
+  return updated;
+}
+
 /** Creates an empty table stats object */
 function emptyTableStats(): PublishTableStats {
   return { durationMs: 0, added: 0, updated: 0, deleted: 0 };
@@ -225,10 +246,24 @@ export async function executeStudioPublish(input: {
     stats.tables.page_folders.added = foldersResult.count;
   }
 
+  // Resolve the page set once so page-scoped CSS can be regenerated before
+  // publishPages snapshots draft page_layers into their live counterparts.
+  let pageIdsToPublish: string[] = [];
+  if (pageIds && pageIds.length > 0) {
+    pageIdsToPublish = [...new Set(pageIds)];
+  } else if (isPublishingAll) {
+    const draftPages = await getAllDraftPages(false, projectId);
+    pageIdsToPublish = [...new Set(draftPages.map(page => page.id))];
+  }
+
+  if (pageIdsToPublish.length > 0) {
+    await regeneratePageCssBeforePublish(pageIdsToPublish, projectId);
+  }
+
   // Publish pages
   {
-    if (pageIds && pageIds.length > 0) {
-      const pagesResult = await publishPages(pageIds, projectId);
+    if (pageIdsToPublish.length > 0) {
+      const pagesResult = await publishPages(pageIdsToPublish, projectId);
       publishedPageIds.push(...pagesResult.changedPageIds);
       renamedPageOldRoutes.push(...pagesResult.renamedPageOldRoutes);
       unpublishedPageRoutes.push(...pagesResult.unpublishedPageRoutes);
@@ -237,20 +272,6 @@ export async function executeStudioPublish(input: {
       stats.tables.pages.durationMs = pagesResult.timing.pagesDurationMs;
       stats.tables.page_layers.added = pagesResult.timing.layersCount;
       stats.tables.page_layers.durationMs = pagesResult.timing.layersDurationMs;
-    } else if (isPublishingAll) {
-      const unpublishedPages = await getAllDraftPages(false, projectId);
-      if (unpublishedPages.length > 0) {
-        const allPageIds = unpublishedPages.map(p => p.id);
-        const pagesResult = await publishPages(allPageIds, projectId);
-        publishedPageIds.push(...pagesResult.changedPageIds);
-        renamedPageOldRoutes.push(...pagesResult.renamedPageOldRoutes);
-        unpublishedPageRoutes.push(...pagesResult.unpublishedPageRoutes);
-        result.changes.pages = pagesResult.count;
-        stats.tables.pages.added = pagesResult.count;
-        stats.tables.pages.durationMs = pagesResult.timing.pagesDurationMs;
-        stats.tables.page_layers.added = pagesResult.timing.layersCount;
-        stats.tables.page_layers.durationMs = pagesResult.timing.layersDurationMs;
-      }
     }
   }
 
@@ -710,23 +731,18 @@ export async function executeStudioPublish(input: {
     // not a cache operation. Skipping it when a global resource changed
     // would leave those pages' published layers stale.
     if (cssAffectedPageIds.length > 0) {
-      try {
-        const { generateCSSForPages } = await import('@/lib/server/cssGenerator');
-        await generateCSSForPages(cssAffectedPageIds, projectId);
+      await regeneratePageCssBeforePublish(cssAffectedPageIds, projectId);
 
-        // Re-publish layers for these pages so published version has fresh CSS.
-        // force=true: the draft layers' JSONB still references the changed
-        // component/style by ID, so content_hash is unchanged even though
-        // the resolved/rendered output differs. Without force, downstream
-        // consumers (static export, GitHub writer) see stale data.
-        const { batchPublishPageLayers } = await import('@/lib/repositories/pageLayersRepository');
-        const relayerResult = await batchPublishPageLayers(cssAffectedPageIds, projectId, { force: true });
-        if (relayerResult.changedPageIds.length > 0) {
-          publishedPageIds.push(...relayerResult.changedPageIds);
-          console.log(`[Cache] CSS catch-up: republished ${relayerResult.changedPageIds.length} page layer(s)`);
-        }
-      } catch {
-        // Non-fatal: CSS catch-up failure doesn't block publish
+      // Re-publish layers for these pages so published version has fresh CSS.
+      // force=true: the draft layers' JSONB still references the changed
+      // component/style by ID, so content_hash is unchanged even though
+      // the resolved/rendered output differs. Without force, downstream
+      // consumers (static export, GitHub writer) see stale data.
+      const { batchPublishPageLayers } = await import('@/lib/repositories/pageLayersRepository');
+      const relayerResult = await batchPublishPageLayers(cssAffectedPageIds, projectId, { force: true });
+      if (relayerResult.changedPageIds.length > 0) {
+        publishedPageIds.push(...relayerResult.changedPageIds);
+        console.log(`[Cache] CSS catch-up: republished ${relayerResult.changedPageIds.length} page layer(s)`);
       }
     }
 
