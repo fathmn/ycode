@@ -1919,20 +1919,39 @@ async function collectCustomCodeSnippets(client: any, projectId: string, isPubli
     .from('settings')
     .select('key, value')
     .in('key', ['custom_code_head', 'custom_code_body']);
-  const { data: settings } = await applyOptionalProjectScope(settingsQuery, client, 'settings', projectId);
+  const pagesQuery = client
+    .from('pages')
+    .select('id, settings')
+    .eq('is_published', isPublished)
+    .is('deleted_at', null);
+  const pageLayersQuery = client
+    .from('page_layers')
+    .select('page_id, layers')
+    .eq('is_published', isPublished)
+    .is('deleted_at', null);
+  const componentsQuery = client
+    .from('components')
+    .select('id, layers')
+    .eq('is_published', isPublished)
+    .is('deleted_at', null);
+
+  const [
+    { data: settings },
+    { data: pages },
+    { data: pageLayers },
+    { data: components },
+  ] = await Promise.all([
+    applyOptionalProjectScope(settingsQuery, client, 'settings', projectId),
+    applyOptionalProjectScope(pagesQuery, client, 'pages', projectId),
+    applyOptionalProjectScope(pageLayersQuery, client, 'page_layers', projectId),
+    applyOptionalProjectScope(componentsQuery, client, 'components', projectId),
+  ]);
 
   for (const setting of settings || []) {
     if (typeof setting.value === 'string' && setting.value.trim()) {
       snippets.push({ scope: 'global', targetId: setting.key, content: setting.value });
     }
   }
-
-  const pagesQuery = client
-    .from('pages')
-    .select('id, settings')
-    .eq('is_published', isPublished)
-    .is('deleted_at', null);
-  const { data: pages } = await applyOptionalProjectScope(pagesQuery, client, 'pages', projectId);
 
   for (const page of pages || []) {
     const head = page.settings?.custom_code?.head;
@@ -1945,13 +1964,6 @@ async function collectCustomCodeSnippets(client: any, projectId: string, isPubli
     }
   }
 
-  const pageLayersQuery = client
-    .from('page_layers')
-    .select('page_id, layers')
-    .eq('is_published', isPublished)
-    .is('deleted_at', null);
-  const { data: pageLayers } = await applyOptionalProjectScope(pageLayersQuery, client, 'page_layers', projectId);
-
   for (const row of pageLayers || []) {
     walkLayers(row.layers, (layer) => {
       const code = layer?.settings?.htmlEmbed?.code;
@@ -1960,13 +1972,6 @@ async function collectCustomCodeSnippets(client: any, projectId: string, isPubli
       }
     });
   }
-
-  const componentsQuery = client
-    .from('components')
-    .select('id, layers')
-    .eq('is_published', isPublished)
-    .is('deleted_at', null);
-  const { data: components } = await applyOptionalProjectScope(componentsQuery, client, 'components', projectId);
 
   for (const component of components || []) {
     walkLayers(component.layers, (layer) => {

@@ -2,122 +2,23 @@ import { unstable_cache } from 'next/cache';
 import Link from 'next/link';
 import { notFound, redirect, permanentRedirect } from 'next/navigation';
 import type { Metadata } from 'next';
-import { generatePageMetadata, fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
-import { fetchHomepage, fetchPageByPath, fetchErrorPage } from '@/lib/page-fetcher';
+import { generatePageMetadata } from '@/lib/generate-page-metadata';
 import PublishedPageRenderer from '@/components/PublishedPageRenderer';
 import PasswordForm from '@/components/PasswordForm';
-import { getSettingByKey } from '@/lib/repositories/settingsRepository';
-import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
+import { parseAuthCookie, getPasswordProtection } from '@/lib/page-auth';
+import {
+  buildPublishedDataCacheKey,
+  buildPublishedDataCacheTags,
+  fetchCachedPublishedErrorPage,
+  fetchCachedPublishedFoldersForAuth,
+  fetchCachedPublishedGlobalSettings,
+  fetchCachedPublishedHomepage,
+  fetchCachedPublishedPage,
+  fetchCachedPublishedRedirects,
+  getPublishedPageDataLocale,
+} from '@/lib/server/publishedPageDataCache';
 import { getSiteBaseUrl } from '@/lib/url-utils';
 import { STUDIO_BASE_PATH } from '@/lib/brand';
-import type { Redirect as RedirectType } from '@/types';
-
-function defaultGlobalSettings() {
-  return {
-    googleSiteVerification: null,
-    globalCanonicalUrl: null,
-    gaMeasurementId: null,
-    publishedCss: null,
-    colorVariablesCss: null,
-    globalCustomCodeHead: null,
-    globalCustomCodeBody: null,
-    ycodeBadge: false,
-    faviconUrl: null,
-    webClipUrl: null,
-  };
-}
-
-async function fetchPublishedHomepage(projectId: string | null) {
-  const projectCacheKey = projectId || 'global';
-  try {
-    return await unstable_cache(
-      async () => fetchHomepage(true, undefined, undefined, undefined, undefined, projectId),
-      [`data-for-project-${projectCacheKey}-route-/`],
-      {
-        tags: ['all-pages', `project-${projectCacheKey}`, 'route-/'],
-        revalidate: false,
-      }
-    )();
-  } catch {
-    try {
-      return await fetchHomepage(true, undefined, undefined, undefined, undefined, projectId);
-    } catch {
-      return null;
-    }
-  }
-}
-
-async function fetchPublishedPageWithLayers(slugPath: string, projectId: string | null) {
-  const projectCacheKey = projectId || 'global';
-  try {
-    return await unstable_cache(
-      async () => fetchPageByPath(slugPath, true, undefined, undefined, projectId),
-      [`data-for-project-${projectCacheKey}-route-/${slugPath}`],
-      {
-        tags: ['all-pages', `project-${projectCacheKey}`, `route-/${slugPath}`],
-        revalidate: false,
-      }
-    )();
-  } catch {
-    try {
-      return await fetchPageByPath(slugPath, true, undefined, undefined, projectId);
-    } catch {
-      return null;
-    }
-  }
-}
-
-async function fetchCachedRedirects(projectId: string | null): Promise<RedirectType[] | null> {
-  const projectCacheKey = projectId || 'global';
-  try {
-    return await unstable_cache(
-      async () => getSettingByKey('redirects', projectId) as Promise<RedirectType[] | null>,
-      [`data-for-project-${projectCacheKey}-redirects`],
-      { tags: ['all-pages', `project-${projectCacheKey}`], revalidate: false }
-    )();
-  } catch {
-    return null;
-  }
-}
-
-async function fetchCachedGlobalSettings(projectId: string | null) {
-  const projectCacheKey = projectId || 'global';
-  try {
-    return await unstable_cache(
-      async () => fetchGlobalPageSettings(false, projectId),
-      [`data-for-project-${projectCacheKey}-global-settings`],
-      { tags: ['all-pages', `project-${projectCacheKey}`], revalidate: false }
-    )();
-  } catch {
-    return defaultGlobalSettings();
-  }
-}
-
-async function fetchCachedFoldersForAuth(projectId: string | null) {
-  const projectCacheKey = projectId || 'global';
-  try {
-    return await unstable_cache(
-      async () => fetchFoldersForAuth(true, projectId),
-      [`data-for-project-${projectCacheKey}-auth-folders`],
-      { tags: ['all-pages', `project-${projectCacheKey}`], revalidate: false }
-    )();
-  } catch {
-    return [];
-  }
-}
-
-async function fetchCachedErrorPage(errorCode: 401 | 404, projectId: string | null) {
-  const projectCacheKey = projectId || 'global';
-  try {
-    return await unstable_cache(
-      async () => fetchErrorPage(errorCode, true, undefined, projectId),
-      [`data-for-project-${projectCacheKey}-error-page-${errorCode}`],
-      { tags: ['all-pages', `project-${projectCacheKey}`], revalidate: false }
-    )();
-  } catch {
-    return null;
-  }
-}
 
 function renderPasswordFallback(protection: {
   protectedBy?: 'page' | 'folder';
@@ -158,11 +59,11 @@ function renderDefaultLanding() {
   );
 }
 
-async function renderProtectedErrorPage(projectId: string | null, globalSettings: Awaited<ReturnType<typeof fetchCachedGlobalSettings>>, currentPath: string, protection: {
+async function renderProtectedErrorPage(projectId: string | null, globalSettings: Awaited<ReturnType<typeof fetchCachedPublishedGlobalSettings>>, currentPath: string, protection: {
   protectedBy?: 'page' | 'folder';
   protectedById?: string;
 }) {
-  const errorPageData = await fetchCachedErrorPage(401, projectId);
+  const errorPageData = await fetchCachedPublishedErrorPage(401, projectId);
 
   if (errorPageData) {
     const { page: errorPage, pageLayers: errorPageLayers, components: errorComponents } = errorPageData;
@@ -177,6 +78,7 @@ async function renderProtectedErrorPage(projectId: string | null, globalSettings
         globalCustomCodeBody={globalSettings.globalCustomCodeBody}
         renderProjectId={projectId}
         customCodeProjectId={projectId}
+        publishedRoutePath={currentPath}
         passwordProtection={{
           pageId: protection.protectedBy === 'page' ? protection.protectedById : undefined,
           folderId: protection.protectedBy === 'folder' ? protection.protectedById : undefined,
@@ -191,18 +93,18 @@ async function renderProtectedErrorPage(projectId: string | null, globalSettings
 }
 
 export async function renderPublishedHome(projectId: string | null) {
-  const data = await fetchPublishedHomepage(projectId);
+  const authCookie = await parseAuthCookie();
+  const data = await fetchCachedPublishedHomepage(projectId);
 
   if (!data || !data.pageLayers) {
     return renderDefaultLanding();
   }
 
-  const globalSettings = await fetchCachedGlobalSettings(projectId);
-  const folders = await fetchCachedFoldersForAuth(projectId);
+  const globalSettings = await fetchCachedPublishedGlobalSettings(projectId);
+  const folders = await fetchCachedPublishedFoldersForAuth(projectId);
   const protectionCheck = getPasswordProtection(data.page, folders, null);
 
   if (protectionCheck.isProtected) {
-    const authCookie = await parseAuthCookie();
     const protection = getPasswordProtection(data.page, folders, authCookie);
 
     if (!protection.isUnlocked) {
@@ -226,13 +128,15 @@ export async function renderPublishedHome(projectId: string | null) {
       ycodeBadge={globalSettings.ycodeBadge}
       renderProjectId={projectId}
       customCodeProjectId={projectId}
+      publishedRoutePath="/"
     />
   );
 }
 
 export async function renderPublishedSlug(slugPath: string, projectId: string | null) {
   const currentPath = `/${slugPath}`;
-  const redirects = await fetchCachedRedirects(projectId);
+  const authCookie = await parseAuthCookie();
+  const redirects = await fetchCachedPublishedRedirects(projectId);
   if (redirects && Array.isArray(redirects)) {
     const matchedRedirect = redirects.find((r) => r.oldUrl === currentPath);
     if (matchedRedirect) {
@@ -244,11 +148,11 @@ export async function renderPublishedSlug(slugPath: string, projectId: string | 
     }
   }
 
-  const data = await fetchPublishedPageWithLayers(slugPath, projectId);
-  const globalSettings = await fetchCachedGlobalSettings(projectId);
+  const data = await fetchCachedPublishedPage(slugPath, projectId);
+  const globalSettings = await fetchCachedPublishedGlobalSettings(projectId);
 
   if (!data) {
-    const errorPageData = await fetchCachedErrorPage(404, projectId);
+    const errorPageData = await fetchCachedPublishedErrorPage(404, projectId);
 
     if (errorPageData) {
       const { page: errorPage, pageLayers: errorPageLayers, components: errorComponents } = errorPageData;
@@ -263,6 +167,7 @@ export async function renderPublishedSlug(slugPath: string, projectId: string | 
           globalCustomCodeBody={globalSettings.globalCustomCodeBody}
           renderProjectId={projectId}
           customCodeProjectId={projectId}
+          publishedRoutePath={currentPath}
         />
       );
     }
@@ -271,11 +176,10 @@ export async function renderPublishedSlug(slugPath: string, projectId: string | 
   }
 
   const { page, pageLayers, components, collectionItem, collectionFields, pageCollectionSortedItemIds, pageCollectionSortedItemSlugs, locale, availableLocales, translations } = data;
-  const folders = await fetchCachedFoldersForAuth(projectId);
+  const folders = await fetchCachedPublishedFoldersForAuth(projectId);
   const protectionCheck = getPasswordProtection(page, folders, null);
 
   if (protectionCheck.isProtected) {
-    const authCookie = await parseAuthCookie();
     const protection = getPasswordProtection(page, folders, authCookie);
 
     if (!protection.isUnlocked) {
@@ -303,14 +207,16 @@ export async function renderPublishedSlug(slugPath: string, projectId: string | 
       ycodeBadge={globalSettings.ycodeBadge}
       renderProjectId={projectId}
       customCodeProjectId={projectId}
+      publishedRoutePath={currentPath}
     />
   );
 }
 
 export async function generatePublishedHomeMetadata(projectId: string | null): Promise<Metadata> {
+  const authCookie = await parseAuthCookie();
   const [data, globalSettings] = await Promise.all([
-    fetchPublishedHomepage(projectId),
-    fetchCachedGlobalSettings(projectId),
+    fetchCachedPublishedHomepage(projectId),
+    fetchCachedPublishedGlobalSettings(projectId),
   ]);
 
   if (!data) {
@@ -320,11 +226,10 @@ export async function generatePublishedHomeMetadata(projectId: string | null): P
     };
   }
 
-  const folders = await fetchCachedFoldersForAuth(projectId);
+  const folders = await fetchCachedPublishedFoldersForAuth(projectId);
   const protectionCheck = getPasswordProtection(data.page, folders, null);
 
   if (protectionCheck.isProtected) {
-    const authCookie = await parseAuthCookie();
     const protection = getPasswordProtection(data.page, folders, authCookie);
     if (!protection.isUnlocked) {
       return {
@@ -346,8 +251,14 @@ export async function generatePublishedHomeMetadata(projectId: string | null): P
       }),
       baseUrl: getSiteBaseUrl({ globalCanonicalUrl: globalSettings.globalCanonicalUrl }),
     }),
-    [`data-for-project-${projectId || 'global'}-route-/-meta`],
-    { tags: ['all-pages', `project-${projectId || 'global'}`, 'route-/'], revalidate: false }
+    buildPublishedDataCacheKey({
+      projectId,
+      routePath: '/',
+      pageId: data.page.id,
+      locale: getPublishedPageDataLocale(data),
+      scope: 'metadata',
+    }),
+    { tags: buildPublishedDataCacheTags(projectId, '/'), revalidate: false }
   )();
 
   if (baseUrl) {
@@ -358,9 +269,10 @@ export async function generatePublishedHomeMetadata(projectId: string | null): P
 }
 
 export async function generatePublishedSlugMetadata(slugPath: string, projectId: string | null): Promise<Metadata> {
+  const authCookie = await parseAuthCookie();
   const [data, globalSettings] = await Promise.all([
-    fetchPublishedPageWithLayers(slugPath, projectId),
-    fetchCachedGlobalSettings(projectId),
+    fetchCachedPublishedPage(slugPath, projectId),
+    fetchCachedPublishedGlobalSettings(projectId),
   ]);
 
   if (!data) {
@@ -369,11 +281,10 @@ export async function generatePublishedSlugMetadata(slugPath: string, projectId:
     };
   }
 
-  const folders = await fetchCachedFoldersForAuth(projectId);
+  const folders = await fetchCachedPublishedFoldersForAuth(projectId);
   const protectionCheck = getPasswordProtection(data.page, folders, null);
 
   if (protectionCheck.isProtected) {
-    const authCookie = await parseAuthCookie();
     const protection = getPasswordProtection(data.page, folders, authCookie);
     if (!protection.isUnlocked) {
       return {
@@ -396,8 +307,14 @@ export async function generatePublishedSlugMetadata(slugPath: string, projectId:
       }),
       baseUrl: getSiteBaseUrl({ globalCanonicalUrl: globalSettings.globalCanonicalUrl }),
     }),
-    [`data-for-project-${projectId || 'global'}-route-/${slugPath}-meta`],
-    { tags: ['all-pages', `project-${projectId || 'global'}`, `route-/${slugPath}`], revalidate: false }
+    buildPublishedDataCacheKey({
+      projectId,
+      routePath: `/${slugPath}`,
+      pageId: data.page.id,
+      locale: getPublishedPageDataLocale(data),
+      scope: 'metadata',
+    }),
+    { tags: buildPublishedDataCacheTags(projectId, `/${slugPath}`), revalidate: false }
   )();
 
   if (baseUrl) {

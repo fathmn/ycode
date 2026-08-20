@@ -1,5 +1,6 @@
 import { Fragment } from 'react';
 import { preload } from 'react-dom';
+import { unstable_cache } from 'next/cache';
 import CustomCodeInjector from '@/components/CustomCodeInjector';
 import LightboxInitializer from '@/components/LightboxInitializer';
 import PasswordForm from '@/components/PasswordForm';
@@ -7,6 +8,7 @@ import PublishedGsapInitializer from '@/components/PublishedGsapInitializer';
 import SliderInitializer from '@/components/SliderInitializer';
 import StudioRevealInitializer from '@/components/StudioRevealInitializer';
 import DeferredStudioRuntimeInitializer from '@/components/DeferredStudioRuntimeInitializer';
+import { FORM_RESET_CSS } from '@/components/form-reset-css';
 import { collectLayerAssetIds, getAssetProxyUrl } from '@/lib/asset-utils';
 import { generateInitialAnimationCSS } from '@/lib/animation-utils';
 import { parseSafeBodyStyle } from '@/lib/body-style';
@@ -21,6 +23,10 @@ import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { extractPriorityImagePreload } from '@/lib/published-image-preload';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { getInlinedGoogleFontsCss } from '@/lib/server/googleFontsInline';
+import {
+  buildPublishedDataCacheKey,
+  buildPublishedDataCacheTags,
+} from '@/lib/server/publishedPageDataCache';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
 import { getAllPages } from '@/lib/repositories/pageRepository';
@@ -60,6 +66,8 @@ interface PublishedPageRendererProps {
   availableLocales?: Locale[];
   renderProjectId?: string | null;
   customCodeProjectId?: string | null;
+  /** Enables cross-request caching only for non-pagination published routes. */
+  publishedRoutePath?: string;
   translations?: Record<string, any> | null;
   gaMeasurementId?: string | null;
   globalCustomCodeHead?: string | null;
@@ -72,8 +80,6 @@ interface PageLinkRef {
   collection_item_id: string;
   page_id: string;
 }
-
-const FORM_RESET_CSS = 'input,select,textarea{appearance:none;-webkit-appearance:none}select{background-image:url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23737373\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3E%3Cpath d=\'m6 9 6 6 6-6\'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px 16px}input[type="checkbox"]:checked,input[type="radio"]:checked{background-color:currentColor;border-color:transparent;background-size:100% 100%;background-position:center;background-repeat:no-repeat}input[type="checkbox"]:checked{background-image:url("data:image/svg+xml,%3csvg viewBox=\'0 0 16 16\' fill=\'white\' xmlns=\'http://www.w3.org/2000/svg\'%3e%3cpath d=\'M12.207 4.793a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0l-2-2a1 1 0 011.414-1.414L6.5 9.086l4.293-4.293a1 1 0 011.414 0z\'/%3e%3c/svg%3e")}input[type="radio"]:checked{background-image:url("data:image/svg+xml,%3csvg viewBox=\'0 0 16 16\' fill=\'white\' xmlns=\'http://www.w3.org/2000/svg\'%3e%3ccircle cx=\'8\' cy=\'8\' r=\'3\'/%3e%3c/svg%3e")}';
 
 const PAGE_TRANSITION_CSS = [
   '@keyframes ycode-studio-page-transition{from{transform:translateY(12px)}to{transform:translateY(0)}}',
@@ -409,6 +415,38 @@ async function getRenderAssetsByIds(ids: string[], projectId: string | null): Pr
   return assets;
 }
 
+async function loadPublishedRendererData<T>(
+  load: () => Promise<T>,
+  input: {
+    projectId: string | null;
+    pageId: string;
+    routePath?: string;
+    locale: string;
+    scope: string;
+  },
+): Promise<T> {
+  if (!input.routePath) return load();
+
+  try {
+    return await unstable_cache(
+      async () => load(),
+      buildPublishedDataCacheKey({
+        projectId: input.projectId,
+        routePath: input.routePath,
+        pageId: input.pageId,
+        locale: input.locale,
+        scope: `renderer-${input.scope}`,
+      }),
+      {
+        tags: buildPublishedDataCacheTags(input.projectId, input.routePath),
+        revalidate: false,
+      },
+    )();
+  } catch {
+    return load();
+  }
+}
+
 export default async function PublishedPageRenderer({
   page,
   layers,
@@ -423,6 +461,7 @@ export default async function PublishedPageRenderer({
   availableLocales = [],
   renderProjectId: explicitRenderProjectId = null,
   customCodeProjectId: explicitCustomCodeProjectId = null,
+  publishedRoutePath,
   translations,
   gaMeasurementId,
   globalCustomCodeHead,
@@ -432,6 +471,15 @@ export default async function PublishedPageRenderer({
 }: PublishedPageRendererProps) {
   const pageRenderProjectId = getRenderProjectId(page);
   const renderProjectId = explicitRenderProjectId || pageRenderProjectId;
+  const publishedCacheLocale = locale?.code
+    || availableLocales.find((availableLocale) => availableLocale.is_default)?.code
+    || 'default';
+  const publishedRendererCacheInput = {
+    projectId: renderProjectId,
+    pageId: page.id,
+    routePath: publishedRoutePath,
+    locale: publishedCacheLocale,
+  };
   const resolvedLayers = layers || [];
   const { hasBodyLayer, bodyClasses, bodyStyle, bodyAttributes, childLayers } = extractBodyLayer(resolvedLayers);
   const appliedBodyClasses = bodyClasses || 'bg-white';
@@ -464,52 +512,61 @@ export default async function PublishedPageRenderer({
   let pages: Page[] = [];
   let folders: PageFolder[] = [];
   try {
-    [pages, folders] = await Promise.all([
-      (renderProjectId || isProjectScopeRequired()) ? getRenderPages(renderProjectId, renderIsPublished) : getAllPages(),
-      (renderProjectId || isProjectScopeRequired()) ? getRenderPageFolders(renderProjectId, renderIsPublished) : getAllPageFolders(),
-    ]);
+    const linkResolutionData = await loadPublishedRendererData(async () => {
+      const [loadedPages, loadedFolders] = await Promise.all([
+        (renderProjectId || isProjectScopeRequired()) ? getRenderPages(renderProjectId, renderIsPublished) : getAllPages(),
+        (renderProjectId || isProjectScopeRequired()) ? getRenderPageFolders(renderProjectId, renderIsPublished) : getAllPageFolders(),
+      ]);
+      const supplementalSlugs: Record<string, string> = {};
 
-    if (referencedItemIds.size > 0) {
-      const itemsWithValues = await Promise.all(
-        Array.from(referencedItemIds).map(itemId => (
-          (renderProjectId || isProjectScopeRequired())
-            ? getRenderItemWithValues(itemId, renderIsPublished, renderProjectId)
-            : getItemWithValues(itemId, renderIsPublished)
-        ))
+      if (referencedItemIds.size > 0) {
+        const itemsWithValues = await Promise.all(
+          Array.from(referencedItemIds).map(itemId => (
+            (renderProjectId || isProjectScopeRequired())
+              ? getRenderItemWithValues(itemId, renderIsPublished, renderProjectId)
+              : getItemWithValues(itemId, renderIsPublished)
+          ))
+        );
+        for (const item of itemsWithValues) {
+          if (!item) continue;
+          const fields = (renderProjectId || isProjectScopeRequired())
+            ? await getRenderFieldsByCollectionId(item.collection_id, renderIsPublished, renderProjectId)
+            : await getFieldsByCollectionId(item.collection_id, renderIsPublished);
+          const slugField = fields.find(f => f.key === 'slug');
+          if (slugField && item.values[slugField.id]) {
+            supplementalSlugs[item.id] = item.values[slugField.id];
+          }
+        }
+      }
+
+      const refTargetCollectionIds = new Set(
+        allPageLinks
+          .filter(l => l.collection_item_id.startsWith(REF_PAGE_PREFIX) || l.collection_item_id.startsWith(REF_COLLECTION_PREFIX))
+          .map(l => loadedPages.find(p => p.id === l.page_id)?.settings?.cms?.collection_id)
+          .filter((id): id is string => Boolean(id))
       );
-      for (const item of itemsWithValues) {
-        if (!item) continue;
+      for (const collectionId of refTargetCollectionIds) {
         const fields = (renderProjectId || isProjectScopeRequired())
-          ? await getRenderFieldsByCollectionId(item.collection_id, renderIsPublished, renderProjectId)
-          : await getFieldsByCollectionId(item.collection_id, renderIsPublished);
+          ? await getRenderFieldsByCollectionId(collectionId, renderIsPublished, renderProjectId)
+          : await getFieldsByCollectionId(collectionId, renderIsPublished);
         const slugField = fields.find(f => f.key === 'slug');
-        if (slugField && item.values[slugField.id]) {
-          collectionItemSlugs[item.id] = item.values[slugField.id];
+        if (!slugField) continue;
+        const { items } = (renderProjectId || isProjectScopeRequired())
+          ? await getRenderItemsWithValues(collectionId, renderIsPublished, renderProjectId)
+          : await getItemsWithValues(collectionId, renderIsPublished);
+        for (const item of items) {
+          if (item.values[slugField.id]) {
+            supplementalSlugs[item.id] = item.values[slugField.id];
+          }
         }
       }
-    }
 
-    const refTargetCollectionIds = new Set(
-      allPageLinks
-        .filter(l => l.collection_item_id.startsWith(REF_PAGE_PREFIX) || l.collection_item_id.startsWith(REF_COLLECTION_PREFIX))
-        .map(l => pages.find(p => p.id === l.page_id)?.settings?.cms?.collection_id)
-        .filter((id): id is string => Boolean(id))
-    );
-    for (const collectionId of refTargetCollectionIds) {
-      const fields = (renderProjectId || isProjectScopeRequired())
-        ? await getRenderFieldsByCollectionId(collectionId, renderIsPublished, renderProjectId)
-        : await getFieldsByCollectionId(collectionId, renderIsPublished);
-      const slugField = fields.find(f => f.key === 'slug');
-      if (!slugField) continue;
-      const { items } = (renderProjectId || isProjectScopeRequired())
-        ? await getRenderItemsWithValues(collectionId, renderIsPublished, renderProjectId)
-        : await getItemsWithValues(collectionId, renderIsPublished);
-      for (const item of items) {
-        if (item.values[slugField.id]) {
-          collectionItemSlugs[item.id] = item.values[slugField.id];
-        }
-      }
-    }
+      return { pages: loadedPages, folders: loadedFolders, supplementalSlugs };
+    }, { ...publishedRendererCacheInput, scope: 'link-data' });
+
+    pages = linkResolutionData.pages;
+    folders = linkResolutionData.folders;
+    Object.assign(collectionItemSlugs, linkResolutionData.supplementalSlugs);
   } catch (error) {
     console.error('[PublishedPageRenderer] Error fetching link resolution data:', error);
     if (isProjectScopeRequired()) throw error;
@@ -539,9 +596,12 @@ export default async function PublishedPageRenderer({
   let googleFontLinkUrls: string[] = [];
   try {
     const { getPublishedFonts } = await import('@/lib/repositories/fontRepository');
-    const fonts = (renderProjectId || isProjectScopeRequired())
-      ? await getRenderFonts(renderProjectId)
-      : await getPublishedFonts();
+    const fonts = await loadPublishedRendererData(
+      async () => (renderProjectId || isProjectScopeRequired())
+        ? getRenderFonts(renderProjectId)
+        : getPublishedFonts(),
+      { ...publishedRendererCacheInput, scope: 'fonts' },
+    );
     fontsCss = buildCustomFontsCss(fonts) + buildFontClassesCss(fonts);
     googleFontLinkUrls = filterGoogleFontLinksAgainstHeadHtml(
       getGoogleFontLinks(fonts),
@@ -566,9 +626,12 @@ export default async function PublishedPageRenderer({
   if (layerAssetIds.size > 0) {
     try {
       const { getAssetsByIds } = await import('@/lib/repositories/assetRepository');
-      assetMap = (renderProjectId || isProjectScopeRequired())
-        ? await getRenderAssetsByIds(Array.from(layerAssetIds), renderProjectId)
-        : await getAssetsByIds(Array.from(layerAssetIds), true);
+      assetMap = await loadPublishedRendererData(
+        async () => (renderProjectId || isProjectScopeRequired())
+          ? getRenderAssetsByIds(Array.from(layerAssetIds), renderProjectId)
+          : getAssetsByIds(Array.from(layerAssetIds), true),
+        { ...publishedRendererCacheInput, scope: 'assets' },
+      );
       for (const [id, asset] of Object.entries(assetMap)) {
         const proxyUrl = getAssetProxyUrl(asset);
         if (proxyUrl) {
