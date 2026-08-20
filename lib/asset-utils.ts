@@ -441,6 +441,38 @@ function isProxyUrl(url: string): boolean {
   return url.startsWith('/a/');
 }
 
+const SUPABASE_PUBLIC_OBJECT_PATH = '/storage/v1/object/public/';
+const SUPABASE_PUBLIC_RENDER_PATH = '/storage/v1/render/image/public/';
+
+function isSupabasePublicImagePath(pathname: string): boolean {
+  return (
+    pathname.includes(SUPABASE_PUBLIC_OBJECT_PATH) ||
+    pathname.includes(SUPABASE_PUBLIC_RENDER_PATH)
+  );
+}
+
+/**
+ * Route a public Supabase Storage object through the image-render endpoint and
+ * apply transformations without discarding unrelated query parameters.
+ */
+function getSupabaseImageTransformUrl(url: string, width: number, quality: number): string | null {
+  try {
+    const urlObj = new URL(url);
+    if (!isSupabasePublicImagePath(urlObj.pathname)) return null;
+
+    urlObj.pathname = urlObj.pathname.replace(
+      SUPABASE_PUBLIC_OBJECT_PATH,
+      SUPABASE_PUBLIC_RENDER_PATH
+    );
+    urlObj.searchParams.set('width', width.toString());
+    urlObj.searchParams.set('quality', quality.toString());
+    urlObj.searchParams.set('resize', 'contain');
+    return urlObj.toString();
+  } catch {
+    return null;
+  }
+}
+
 function isTransformUnsupportedImage(url: string): boolean {
   try {
     const pathname = isProxyUrl(url) ? url.split('?')[0] : new URL(url).pathname;
@@ -458,7 +490,7 @@ function isTransformableUrl(url: string): boolean {
   if (isProxyUrl(url)) return true;
   try {
     const urlObj = new URL(url);
-    return urlObj.hostname.includes('supabase') || urlObj.pathname.includes('/storage/v1/object/public/');
+    return isSupabasePublicImagePath(urlObj.pathname);
   } catch {
     return false;
   }
@@ -491,10 +523,7 @@ export function getOptimizedImageUrl(
       return `${proxyUrl.pathname}${proxyUrl.search}`;
     }
 
-    const urlObj = new URL(url);
-    urlObj.searchParams.set('width', width.toString());
-    urlObj.searchParams.set('quality', quality.toString());
-    return urlObj.toString();
+    return getSupabaseImageTransformUrl(url, width, quality) ?? url;
   } catch {
     return url;
   }
@@ -507,14 +536,13 @@ export function getOptimizedImageUrl(
  * @param sizes - Array of widths in pixels (default: see below)
  * @param quality - Image quality 0-100 (default: 85)
  * @param intrinsicWidth - Source image natural width. When provided, caps
- *   variants to it so descriptors match the file the proxy returns (Sharp
- *   runs with `withoutEnlargement: true`). Without this, a 1512px source
- *   with a `?width=1920 1920w` descriptor sends a 1512px file: browsers
- *   then compute `intrinsic = 1512 / (1920/1512) = 1190px` and render the
- *   image ~21% smaller than intended.
+ *   variants to it so descriptors match the file returned by either Sharp or
+ *   Supabase (neither enlarges beyond the source). Without this, a 2400px
+ *   source with a `?width=3840 3840w` descriptor still sends a 2400px file,
+ *   causing browsers to calculate the wrong intrinsic display size.
  * @returns Srcset string with multiple size options
  *
- * Default ladder: 320, 480, 640, 750, 828, 1080, 1280, 1536, 1920.
+ * Default ladder: 320, 480, 640, 750, 828, 1080, 1280, 1536, 1920, 2560, 3840.
  * Picked to land within ~10% of the natural rendered size for every common
  * viewport × DPR combination — coarser ladders (e.g. 640 → 960 → 1280) made
  * mid-range phones download the next-bigger variant and wasted 20–30% of
@@ -528,16 +556,17 @@ export function getOptimizedImageUrl(
  *  1080 — Pixel / Galaxy at 3x DPR (360 × 3)
  *  1280 — iPhone 12–15 at ~3x DPR (390–430 × 3)
  *  1536 — tablets at 2x DPR
- *  1920 — full-width desktop hero (cap — bigger variants get picked on
- *         retina laptops even when the rendered size is much smaller).
+ *  1920 — full-width desktop hero at 1x DPR
+ *  2560 — wide desktop and smaller retina hero images
+ *  3840 — full-width desktop hero at 2x DPR
  *
  * @example
  * generateImageSrcset('https://supabase.co/storage/v1/object/public/assets/image.jpg')
- * // Returns: 'https://.../image.jpg?width=320&quality=85 320w, https://.../image.jpg?width=480&quality=85 480w, ...'
+ * // Returns: 'https://.../render/image/public/assets/image.jpg?width=320&quality=85&resize=contain 320w, ...'
  */
 export function generateImageSrcset(
   url: string,
-  sizes: number[] = [320, 480, 640, 750, 828, 1080, 1280, 1536, 1920],
+  sizes: number[] = [320, 480, 640, 750, 828, 1080, 1280, 1536, 1920, 2560, 3840],
   quality: number = 85,
   intrinsicWidth?: number | null
 ): string {
@@ -564,11 +593,9 @@ export function generateImageSrcset(
     }
 
     const srcsetEntries = effectiveSizes.map((width) => {
-      const sizeUrl = new URL(url);
-      sizeUrl.searchParams.set('width', width.toString());
-      sizeUrl.searchParams.set('quality', quality.toString());
-      sizeUrl.searchParams.set('resize', 'cover');
-      return `${sizeUrl.toString()} ${width}w`;
+      const sizeUrl = getSupabaseImageTransformUrl(url, width, quality);
+      if (!sizeUrl) throw new Error('Invalid Supabase image URL');
+      return `${sizeUrl} ${width}w`;
     });
 
     return srcsetEntries.join(', ');
