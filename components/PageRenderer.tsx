@@ -8,6 +8,7 @@ import SliderInitializer from '@/components/SliderInitializer';
 import LightboxInitializer from '@/components/LightboxInitializer';
 import PasswordForm from '@/components/PasswordForm';
 import YcodeBadge from '@/components/YcodeBadge';
+import { FORM_RESET_CSS } from '@/components/form-reset-css';
 import { unstable_cache } from 'next/cache';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
@@ -1050,7 +1051,7 @@ export default async function PageRenderer({
       {/* Strip native browser appearance from form elements so Tailwind classes apply */}
       <style
         id="ycode-form-reset"
-        dangerouslySetInnerHTML={{ __html: 'input,select,textarea{appearance:none;-webkit-appearance:none}select{background-image:url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%23737373\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'%3E%3Cpath d=\'m6 9 6 6 6-6\'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px 16px}input[type="checkbox"]:checked,input[type="radio"]:checked{background-color:currentColor;border-color:transparent;background-size:100% 100%;background-position:center;background-repeat:no-repeat}input[type="checkbox"]:checked{background-image:url("data:image/svg+xml,%3csvg viewBox=\'0 0 16 16\' fill=\'white\' xmlns=\'http://www.w3.org/2000/svg\'%3e%3cpath d=\'M12.207 4.793a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0l-2-2a1 1 0 011.414-1.414L6.5 9.086l4.293-4.293a1 1 0 011.414 0z\'/%3e%3c/svg%3e")}input[type="radio"]:checked{background-image:url("data:image/svg+xml,%3csvg viewBox=\'0 0 16 16\' fill=\'white\' xmlns=\'http://www.w3.org/2000/svg\'%3e%3ccircle cx=\'8\' cy=\'8\' r=\'3\'/%3e%3c/svg%3e")}' }}
+        dangerouslySetInnerHTML={{ __html: FORM_RESET_CSS }}
       />
 
       {/* Inject CSS directly — React 19 hoists <style> with precedence to <head> */}
