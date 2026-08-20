@@ -30,6 +30,7 @@ import { combineBgValues, mergeStaticBgVars } from '@/lib/tailwind-class-mapper'
 import { clsx } from 'clsx';
 import type { HiddenLayerInfo } from '@/lib/animation-utils';
 import { transformLayerIdsForInstance } from '@/lib/resolve-components';
+import { isEnabledHtmlBooleanAttribute } from '@/lib/html-attribute-utils';
 
 /**
  * Per-layer-type code splitting.
@@ -1625,21 +1626,24 @@ const LayerItem: React.FC<{
         ...normalizedAttributes,
       };
 
-      // React treats autoPlay as a DOM property, not an HTML attribute,
-      // so it won't survive SSR or hydration. Remove from props and
-      // apply via ref to avoid both the warning and the rendering issue.
-      const shouldAutoPlay = mediaProps.autoplay === true;
+      // Layer attributes use the HTML spelling (`autoplay`), while React needs
+      // the JSX spelling (`autoPlay`) to serialize it into the SSR markup.
+      const shouldAutoPlay = isEnabledHtmlBooleanAttribute(mediaProps.autoplay);
       delete mediaProps.autoplay;
 
-      // React doesn't reliably reflect `muted` to the DOM during SSR/hydration,
-      // so apply it via ref. Mobile browsers reject autoplay unless the element
-      // is actually muted at play() time.
+      // React 19 serializes `muted` during SSR. Keep it in the props so the
+      // browser sees the autoplay policy signal while parsing the HTML; the ref
+      // below still enforces the DOM property after hydration as a fallback.
       const shouldMute = mediaProps.muted === true;
 
       // Mobile (iOS/Android) only autoplays videos rendered inline. Without
       // playsInline it forces fullscreen and blocks autoplay.
       if (htmlTag === 'video') {
         mediaProps.playsInline = true;
+        if (shouldAutoPlay) {
+          mediaProps.autoPlay = true;
+          mediaProps.preload = 'auto';
+        }
       }
 
       if (mediaSrc) {
@@ -1650,8 +1654,8 @@ const LayerItem: React.FC<{
         mediaProps.poster = posterUrl;
       }
 
-      // Handle special attributes that need to be set on the DOM element
-      // (autoplay, muted, and volume must be set via JavaScript on the DOM element)
+      // Re-apply autoplay/muted after hydration as a fallback for browsers that
+      // reject or delay declarative playback. Volume remains property-only.
       if (htmlTag === 'audio' || htmlTag === 'video') {
         const originalRef = mediaProps.ref;
         const volumeValue = normalizedAttributes?.volume

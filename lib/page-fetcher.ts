@@ -50,6 +50,7 @@ import { getMapboxAccessToken, getGoogleMapsEmbedApiKey } from '@/lib/map-server
 import { getAssetsByIds } from '@/lib/repositories/assetRepository';
 import { isVirtualAssetField, findDisplayField, hasDynamicDateRule, isDynamicDateCondition } from '@/lib/collection-field-utils';
 import { resolveFormLayerId } from '@/lib/form-layer';
+import { isEnabledHtmlBooleanAttribute } from '@/lib/html-attribute-utils';
 import type { DynamicVisibilityCondition, FieldVariable, AssetVariable, DynamicTextVariable, LinkSettings } from '@/types';
 import type { DesignColorVariable } from '@/types';
 
@@ -4414,6 +4415,9 @@ export function layerToHtml(
     tag = 'a';
   }
 
+  const isAutoplayVideo = tag === 'video'
+    && isEnabledHtmlBooleanAttribute(layer.attributes?.autoplay);
+
   // Build classes string
   let classesStr = '';
   if (Array.isArray(layer.classes)) {
@@ -4765,6 +4769,12 @@ export function layerToHtml(
       }
     }
     attrs.push('data-layer-type="video"');
+    attrs.push('playsinline');
+    if (isAutoplayVideo) {
+      attrs.push('autoplay');
+      attrs.push('muted');
+      attrs.push('preload="auto"');
+    }
   }
 
   // Handle audio (variables structure)
@@ -4916,11 +4926,18 @@ export function layerToHtml(
     const managedImageAttributes = tag === 'img'
       ? new Set(['src', 'srcSet', 'srcset', 'sizes', 'alt', 'width', 'height', 'loading', 'fetchPriority', 'fetchpriority', 'decoding'])
       : null;
+    const managedVideoAttributes = tag === 'video'
+      ? new Set([
+        'playsinline',
+        ...(isAutoplayVideo ? ['autoplay', 'muted', 'preload'] : []),
+      ])
+      : null;
     for (const [key, value] of Object.entries(layer.attributes)) {
       // Skip type attribute for elements converted to <a>
       if ((isButtonWithLink || isDivWithLink) && key === 'type') continue;
       if (managedAttributes.has(key)) continue;
       if (managedImageAttributes?.has(key)) continue;
+      if (managedVideoAttributes?.has(key.toLowerCase())) continue;
       if (value !== undefined && value !== null) {
         const htmlKey = jsxToHtmlAttrMap[key] || key;
         // Boolean HTML attributes should be rendered without a value
