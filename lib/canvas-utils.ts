@@ -16,7 +16,7 @@ export const CANVAS_PADDING = CANVAS_BORDER * 2;
 
 const VIEWPORT_HEIGHT_UNITS = ['vh', 'svh', 'dvh', 'lvh'] as const;
 // Bump whenever canvas.css changes so editor iframes do not reuse stale CSS.
-const CANVAS_CSS_VERSION = '0.2.2.2';
+const CANVAS_CSS_VERSION = '0.2.2.3';
 
 /**
  * Maps a Tailwind utility prefix to the CSS properties it sets.

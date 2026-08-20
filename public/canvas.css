@@ -238,6 +238,15 @@
   color: #080808 !important;
 }
 
+/* Keep mobile menu lines legible across header surfaces. */
+[data-studio-site-header][data-surface="light"] [data-studio-mobile-drawer-trigger] [data-layer-id^="studio-import-header-menu-line"] {
+  background-color: #7a6a3f !important;
+}
+
+[data-studio-site-header][data-surface="dark"] [data-studio-mobile-drawer-trigger] [data-layer-id^="studio-import-header-menu-line"] {
+  background-color: #ffffff !important;
+}
+
 [data-studio-header-nav-link] {
   position: relative;
   opacity: 0.85;
